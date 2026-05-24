@@ -956,7 +956,6 @@ function makeCrowdTexture() {
 {
   const bldgMat = new THREE.MeshStandardMaterial({ color: 0xd0c4a8, roughness: 0.85 });
   const roofMat = new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.8 });
-  // A few support buildings spread around the infield (medical, garage, comm)
   const positions = [
     { x: -160, z: 40, w: 18, d: 10, h: 5 },
     { x: 160, z: 40, w: 18, d: 10, h: 5 },
@@ -972,6 +971,155 @@ function makeCrowdTexture() {
     const r = new THREE.Mesh(new THREE.BoxGeometry(p.w + 0.4, 0.3, p.d + 0.4), roofMat);
     r.position.set(p.x, p.h + 0.15, p.z);
     scene.add(r);
+  }
+}
+
+// ============================================================
+// GROUND DIMENSIONAL VARIATIONS (G-9)
+// ============================================================
+
+// ---- Garage row (Gasoline Alley analogue, lined up behind pit lane) ----
+{
+  const garageWhite = new THREE.MeshStandardMaterial({ color: 0xeae4d4, roughness: 0.8 });
+  const garageRoof = new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.5, metalness: 0.4 });
+  const doorMat   = new THREE.MeshStandardMaterial({ color: 0x4a4a55, roughness: 0.7 });
+  const garageGroup = new THREE.Group();
+  // 16 connected garages forming a long building
+  const stalls = 16;
+  const stallW = 7;
+  const totalW = stalls * stallW;
+  const startX = -totalW / 2 + stallW / 2;
+  const rowZ = INNER_R - TRACK.PIT_OFFSET - 20;
+
+  // Single big building base
+  const building = new THREE.Mesh(
+    new THREE.BoxGeometry(totalW + 4, 5.5, 11),
+    garageWhite
+  );
+  building.position.set(0, 2.75, rowZ);
+  building.castShadow = true;
+  building.receiveShadow = true;
+  garageGroup.add(building);
+
+  // Flat roof slab
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(totalW + 5, 0.4, 12),
+    garageRoof
+  );
+  roof.position.set(0, 5.7, rowZ);
+  garageGroup.add(roof);
+
+  // Stall doors facing the pit lane (toward +Z)
+  for (let i = 0; i < stalls; i++) {
+    const x = startX + i * stallW;
+    const door = new THREE.Mesh(
+      new THREE.BoxGeometry(stallW - 1, 4.5, 0.2),
+      doorMat
+    );
+    door.position.set(x, 2.5, rowZ + 5.6);
+    garageGroup.add(door);
+    // Door number panel (white with the slot index)
+    if (i % 2 === 0) {
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.4, 0.8),
+        new THREE.MeshStandardMaterial({ color: 0xf5d76e })
+      );
+      sign.position.set(x, 5.0, rowZ + 5.71);
+      garageGroup.add(sign);
+    }
+  }
+  scene.add(garageGroup);
+}
+
+// ---- Corner curbing — red/white stripes on the inside of each turn ----
+{
+  const stripeRed = new THREE.MeshStandardMaterial({ color: 0xc62828, roughness: 0.7 });
+  const stripeWhite = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.7 });
+  const curbSegments = 28; // per turn
+
+  function placeCurbAlongArc(centerX, centerZ, startAngle, endAngle, radius) {
+    const totalAng = endAngle - startAngle;
+    const stepAng = totalAng / curbSegments;
+    for (let i = 0; i < curbSegments; i++) {
+      const a0 = startAngle + i * stepAng;
+      const a1 = startAngle + (i + 1) * stepAng;
+      const aMid = (a0 + a1) / 2;
+      const x = centerX + Math.cos(aMid) * radius;
+      const z = centerZ + Math.sin(aMid) * radius;
+      // Segment length along arc
+      const segLen = Math.hypot(
+        Math.cos(a0) * radius - Math.cos(a1) * radius,
+        Math.sin(a0) * radius - Math.sin(a1) * radius
+      ) * 1.04;
+      const tangentAngle = aMid + Math.PI / 2; // perpendicular to radial direction
+      const mat = i % 2 === 0 ? stripeRed : stripeWhite;
+      const curb = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.18, 1.2), mat);
+      curb.position.set(x, 0.06, z);
+      curb.rotation.y = -tangentAngle + Math.PI / 2;
+      scene.add(curb);
+    }
+  }
+
+  // Turn 1/2 (right side, inside edge): center at (+STRAIGHT_HALF, 0), inner radius = INNER_R - 0.6
+  placeCurbAlongArc(TRACK.STRAIGHT_HALF, 0, -Math.PI / 2, Math.PI / 2, INNER_R - 0.6);
+  // Turn 3/4 (left side, inside edge): center at (-STRAIGHT_HALF, 0)
+  placeCurbAlongArc(-TRACK.STRAIGHT_HALF, 0, Math.PI / 2, 3 * Math.PI / 2, INNER_R - 0.6);
+}
+
+// ---- Infield road (paved loop inside the oval, for service vehicles) ----
+{
+  const roadMat = new THREE.MeshStandardMaterial({ color: 0x4a4a50, roughness: 0.85 });
+  const loop = new THREE.Shape();
+  buildStadiumPath(loop, TRACK.STRAIGHT_HALF * 0.55, INNER_R * 0.55);
+  const hole = new THREE.Path();
+  buildStadiumPath(hole, TRACK.STRAIGHT_HALF * 0.55, INNER_R * 0.55 - 4);
+  loop.holes.push(hole);
+  const geom = new THREE.ShapeGeometry(loop, 48);
+  const mesh = new THREE.Mesh(geom, roadMat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.01;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+
+// ---- Grass tone variations (overlay patches of slightly different greens) ----
+{
+  const tones = [0x5a9a4a, 0x3e7a3a, 0x6aa64a, 0x4a8a3a];
+  for (let i = 0; i < 40; i++) {
+    const tone = tones[i % tones.length];
+    const mat = new THREE.MeshStandardMaterial({
+      color: tone, roughness: 0.98, transparent: true, opacity: 0.45
+    });
+    const r = 14 + Math.random() * 28;
+    const geom = new THREE.CircleGeometry(r, 18);
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    // Place inside the oval (small radius variance from center)
+    const ang = Math.random() * Math.PI * 2;
+    const dist = Math.random() * (INNER_R - 30);
+    mesh.position.set(Math.cos(ang) * dist, 0.005, Math.sin(ang) * dist);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+}
+
+// ---- Sand traps / dirt patches at corner runoff areas (outside curbing) ----
+{
+  const sandMat = new THREE.MeshStandardMaterial({ color: 0xc6a87a, roughness: 0.98 });
+  for (const cx of [-TRACK.STRAIGHT_HALF, TRACK.STRAIGHT_HALF]) {
+    for (let a = 0; a < 4; a++) {
+      const ang = (a / 3 - 0.5) * Math.PI * 0.8 + (cx > 0 ? 0 : Math.PI);
+      const r = INNER_R - 8 - Math.random() * 6;
+      const x = cx + Math.cos(ang) * r;
+      const z = Math.sin(ang) * r;
+      const mesh = new THREE.Mesh(
+        new THREE.CircleGeometry(3 + Math.random() * 4, 12),
+        sandMat
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(x, 0.012, z);
+      scene.add(mesh);
+    }
   }
 }
 
