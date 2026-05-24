@@ -644,7 +644,9 @@
     } else if (type === 'cone') {
       o.w = 24; o.h = 36; o.y = GROUND_Y - o.h + 8;
     } else if (type === 'sign') {
-      o.w = 18; o.h = 110; o.y = GROUND_Y - 132;
+      // Panel sits at standing-driver head height — must duck to pass under.
+      // Hitbox = panel only; the visible post below is decorative.
+      o.w = 78; o.h = 30; o.y = GROUND_Y - 60;
     }
     return o;
   }
@@ -1428,24 +1430,24 @@
         ctx.fillRect(o.x - 2, o.y + o.h - 14, o.w + 4, 4);
         ctx.fillRect(o.x + 2, o.y + o.h - 22, o.w - 4, 3);
       } else if (o.type === 'sign') {
-        // Post
+        // Vertical post (decorative — extends from panel bottom to the ground)
         ctx.fillStyle = '#6a6a70';
-        ctx.fillRect(o.x + o.w / 2 - 2, o.y + 44, 4, o.h - 44);
-        // Sign panel
+        ctx.fillRect(o.x + o.w / 2 - 2, o.y + o.h, 4, GROUND_Y - (o.y + o.h));
+        // Sign panel — hitbox-aligned (o.x..o.x+o.w, o.y..o.y+o.h)
         ctx.fillStyle = '#d63a3a';
-        roundRect(ctx, o.x - 30, o.y, 78, 42, 4);
+        roundRect(ctx, o.x, o.y, o.w, o.h, 4);
         ctx.fill();
-        // Border ring
+        // White inner border
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 2;
-        roundRect(ctx, o.x - 28, o.y + 2, 74, 38, 3);
+        roundRect(ctx, o.x + 3, o.y + 3, o.w - 6, o.h - 6, 3);
         ctx.stroke();
         // STOP text
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('STOP', o.x + 9, o.y + 21);
+        ctx.fillText('STOP', o.x + o.w / 2, o.y + o.h / 2);
       }
     }
   }
