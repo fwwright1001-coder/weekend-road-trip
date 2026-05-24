@@ -110,7 +110,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.95;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xd8d0b8, 420, 1500);
@@ -159,24 +159,30 @@ camera.lookAt(120, 6, 105);
 const ambient = new THREE.HemisphereLight(0xe8dfc8, 0x3a4858, 0.7);
 scene.add(ambient);
 
-const SUN_DIRECTION = new THREE.Vector3(0.45, 0.65, 0.35).normalize();
-const sun = new THREE.DirectionalLight(0xfff0d0, 1.6);
-sun.position.copy(SUN_DIRECTION).multiplyScalar(220);
+const SUN_DIRECTION = new THREE.Vector3(0.42, 0.68, 0.38).normalize();
+const sun = new THREE.DirectionalLight(0xfff0c8, 1.8);
+sun.position.copy(SUN_DIRECTION).multiplyScalar(260);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -240;
-sun.shadow.camera.right = 240;
-sun.shadow.camera.top = 240;
-sun.shadow.camera.bottom = -240;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.camera.left = -260;
+sun.shadow.camera.right = 260;
+sun.shadow.camera.top = 260;
+sun.shadow.camera.bottom = -260;
 sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 600;
-sun.shadow.bias = -0.0005;
+sun.shadow.camera.far = 700;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.04;
+sun.shadow.radius = 4;
 scene.add(sun);
 
-// Gentle rim fill from the opposite side so shadowed surfaces still read.
-const rimLight = new THREE.DirectionalLight(0xb8c8e0, 0.25);
-rimLight.position.set(-100, 60, -80);
+// Cool rim fill from the opposite side — keeps shadowed surfaces from going dead.
+const rimLight = new THREE.DirectionalLight(0xa8c0e0, 0.35);
+rimLight.position.set(-120, 80, -90);
 scene.add(rimLight);
+
+// Small subtle sky fill for surfaces facing straight up (extra hemisphere lift).
+const skyFill = new THREE.HemisphereLight(0xe6efff, 0x2c2a26, 0.18);
+scene.add(skyFill);
 
 // ============================================================
 // SKY (G-1)
