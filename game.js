@@ -653,35 +653,119 @@ function makeCrowdTexture() {
 // ---- Pagoda tower (signature IMS structure, inside front straight) ----
 {
   const pagoda = new THREE.Group();
-  const tower = new THREE.Mesh(
-    new THREE.BoxGeometry(8, 36, 8),
-    new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.55, metalness: 0.1 })
-  );
-  tower.position.y = 18;
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.55, metalness: 0.1 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x2a6a98, roughness: 0.15, metalness: 0.7, emissive: 0x081020, emissiveIntensity: 0.4
+  });
+  const accentRed = new THREE.MeshStandardMaterial({ color: 0xd63a3a, roughness: 0.5 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.7 });
+
+  // --- Wider base structure (architectural plinth) ---
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(14, 4, 14), whiteMat);
+  plinth.position.y = 2;
+  plinth.castShadow = true;
+  plinth.receiveShadow = true;
+  pagoda.add(plinth);
+
+  // --- Main vertical shaft (slightly narrower than before so glass tiers stand out) ---
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(7, 34, 7), whiteMat);
+  tower.position.y = 4 + 17;
   tower.castShadow = true;
   pagoda.add(tower);
 
-  // Tiered glass sections
-  for (let i = 0; i < 4; i++) {
-    const tier = new THREE.Mesh(
-      new THREE.BoxGeometry(10 - i * 1.2, 1.2, 10 - i * 1.2),
-      new THREE.MeshStandardMaterial({ color: 0x3a8ec8, roughness: 0.2, metalness: 0.5 })
+  // --- Vertical window strips on the shaft, 4 sides ---
+  for (const side of [0, 1, 2, 3]) {
+    const strip = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4, 30),
+      glassMat
     );
-    tier.position.y = 8 + i * 7;
-    pagoda.add(tier);
+    strip.position.y = 4 + 17;
+    strip.position.x = side === 0 ? 3.52 : side === 2 ? -3.52 : 0;
+    strip.position.z = side === 1 ? 3.52 : side === 3 ? -3.52 : 0;
+    strip.rotation.y = side === 0 ? Math.PI / 2 : side === 2 ? -Math.PI / 2 : side === 1 ? 0 : Math.PI;
+    pagoda.add(strip);
   }
 
-  // Roof spike
-  const spike = new THREE.Mesh(
-    new THREE.ConeGeometry(2, 8, 6),
-    new THREE.MeshStandardMaterial({ color: 0xd63a3a, roughness: 0.5 })
+  // --- Stepped observation tiers (the layered "pagoda" look) ---
+  for (let i = 0; i < 5; i++) {
+    const size = 11 - i * 1.5;
+    const tier = new THREE.Mesh(
+      new THREE.BoxGeometry(size, 1.4, size),
+      i === 4 ? accentRed : whiteMat
+    );
+    tier.position.y = 28 + i * 2.2;
+    tier.castShadow = true;
+    pagoda.add(tier);
+
+    // Glass band on each tier
+    if (i < 4) {
+      const band = new THREE.Mesh(
+        new THREE.BoxGeometry(size + 0.1, 0.7, size + 0.1),
+        glassMat
+      );
+      band.position.y = 28 + i * 2.2 + 0.5;
+      pagoda.add(band);
+    }
+  }
+
+  // --- Spire base and tall thin antenna spike ---
+  const spireBase = new THREE.Mesh(
+    new THREE.ConeGeometry(1.6, 4, 8),
+    accentRed
   );
-  spike.position.y = 40;
-  pagoda.add(spike);
+  spireBase.position.y = 42;
+  pagoda.add(spireBase);
+
+  const antenna = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.15, 14, 6),
+    darkMat
+  );
+  antenna.position.y = 51;
+  pagoda.add(antenna);
+
+  // Tiny warning light on the antenna
+  const beacon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.25, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 1.2 })
+  );
+  beacon.position.y = 58;
+  pagoda.add(beacon);
 
   // Place on the infield, in front of start/finish
-  pagoda.position.set(0, 0, INNER_R - 20);
+  pagoda.position.set(0, 0, INNER_R - 22);
   scene.add(pagoda);
+}
+
+// ---- Scoring pylon (smaller tower beside the Pagoda, classic IMS) ----
+{
+  const pylon = new THREE.Group();
+  const black = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.6 });
+  const yellow = new THREE.MeshStandardMaterial({
+    color: 0xffd54a, emissive: 0xffaa00, emissiveIntensity: 0.5, roughness: 0.4
+  });
+
+  // Black slab body
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 22, 1.2), black);
+  body.position.y = 11;
+  body.castShadow = true;
+  pylon.add(body);
+
+  // Yellow "33" panels stacked vertically (suggest positions)
+  for (let i = 0; i < 7; i++) {
+    const panel = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 2.2),
+      yellow
+    );
+    panel.position.set(0, 4 + i * 2.7, 0.61);
+    pylon.add(panel);
+    const back = panel.clone();
+    back.rotation.y = Math.PI;
+    back.position.z = -0.61;
+    pylon.add(back);
+  }
+
+  pylon.position.set(-22, 0, INNER_R - 22);
+  scene.add(pylon);
 }
 
 // ---- Pit lane wall (small wall paralleling the front straight, on the infield side) ----
