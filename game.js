@@ -527,23 +527,40 @@ function makeAsphaltTexture() {
   scene.add(fenceGroup);
 }
 
-// ---- Grandstands (continuous tiered ribbon) ----
+// ---- Grandstands (multi-deck: lower bowl + suite level + upper deck + roof) ----
 {
   const standsGroup = new THREE.Group();
-  const concrete = new THREE.MeshStandardMaterial({ color: 0xb8b8c2, roughness: 0.85 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x4a4a58, roughness: 0.6, metalness: 0.2 });
+  const concrete = new THREE.MeshStandardMaterial({ color: 0xc4c0b4, roughness: 0.88 });
+  const concreteDark = new THREE.MeshStandardMaterial({ color: 0x7c7a78, roughness: 0.85 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x3e424a, roughness: 0.55, metalness: 0.25 });
+  const trussMat = new THREE.MeshStandardMaterial({ color: 0xd4d4d4, roughness: 0.6, metalness: 0.5 });
+  const suiteGlass = new THREE.MeshStandardMaterial({
+    color: 0x223044, roughness: 0.18, metalness: 0.8,
+    emissive: 0x0a1018, emissiveIntensity: 0.25
+  });
   const crowdTex = makeCrowdTexture();
   const crowdMat = new THREE.MeshStandardMaterial({
-    map: crowdTex,
-    roughness: 0.95,
-    side: THREE.DoubleSide
+    map: crowdTex, roughness: 0.95, side: THREE.DoubleSide
   });
 
-  const standOffset = 12;
-  const tierDepth = 3.0;
-  const tierHeight = 1.6;
-  const tiers = 6;
-  const segments = 192; // higher count for smoothness
+  const standOffset = 12;       // distance from outer wall outward to stand base
+  const segments = 192;
+
+  // Geometry constants for the three decks ---------------------------------------
+  // Lower bowl (main grandstand seating)
+  const lower = { tiers: 7, tierH: 1.7, tierD: 2.8 };
+  // Suite mezzanine (glass-front boxes)
+  const suite = { height: 4.6, depth: 3.4 };
+  // Upper deck (smaller capacity, set back)
+  const upper = { tiers: 9, tierH: 1.5, tierD: 2.2, recess: 1.5 };
+  // Roof
+  const roof = { thickness: 1.0, overhang: 6 };
+
+  const lowerH = lower.tiers * lower.tierH;       // 11.9
+  const lowerD = lower.tiers * lower.tierD;       // 19.6
+  const upperH = upper.tiers * upper.tierH;       // 13.5
+  const upperD = upper.tiers * upper.tierD;       // 19.8
+  const totalH = 1.2 + lowerH + suite.height + upperH + roof.thickness; // ~32m
 
   for (let i = 0; i < segments; i++) {
     const t = i / segments;
@@ -552,58 +569,110 @@ function makeAsphaltTexture() {
     const pNext = pointOnOuterPath(tNext, standOffset);
     const dx = pNext.x - p.x;
     const dz = pNext.z - p.z;
-    const segLen = Math.hypot(dx, dz) * 1.04; // slight overlap to close gaps
+    const segLen = Math.hypot(dx, dz) * 1.05;
     const cx = (p.x + pNext.x) / 2;
     const cz = (p.z + pNext.z) / 2;
     const angle = Math.atan2(dz, dx);
+    const yawRot = -angle + Math.PI / 2;
+    const outX = Math.cos(angle - Math.PI / 2);
+    const outZ = Math.sin(angle - Math.PI / 2);
 
-    // Crowd panel — single tall sloped panel using the crowd texture
-    const panelHeight = tiers * tierHeight;
-    const panelDepth = tiers * tierDepth;
-    const slope = Math.atan2(panelHeight, panelDepth);
+    const placeOutward = (mesh, outward, height) => {
+      mesh.position.set(cx + outX * outward, height, cz + outZ * outward);
+      mesh.rotation.y = yawRot;
+    };
 
-    // Concrete base (a low solid wall right against the SAFER wall)
-    const base = new THREE.Mesh(
-      new THREE.BoxGeometry(segLen, 1.2, 1.0),
-      concrete
-    );
-    base.position.set(cx, 0.6, cz);
-    base.rotation.y = -angle + Math.PI / 2;
-    base.castShadow = true;
-    base.receiveShadow = true;
+    // --- Concrete base wall (under the lower bowl) ---
+    const base = new THREE.Mesh(new THREE.BoxGeometry(segLen, 1.2, 1.0), concrete);
+    placeOutward(base, 0, 0.6);
+    base.castShadow = true; base.receiveShadow = true;
     standsGroup.add(base);
 
-    // Crowd slope (tilted plane with crowd texture)
-    const crowdPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(segLen, Math.hypot(panelHeight, panelDepth)),
+    // --- Lower bowl crowd slope ---
+    const lowerSlope = Math.atan2(lowerH, lowerD);
+    const lowerPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(segLen, Math.hypot(lowerH, lowerD)),
       crowdMat
     );
-    // position center of the slope
-    const slopeMidOut = panelDepth / 2;
-    const slopeMidY = 1.2 + panelHeight / 2;
-    const outwardX = Math.cos(angle - Math.PI / 2) * slopeMidOut;
-    const outwardZ = Math.sin(angle - Math.PI / 2) * slopeMidOut;
-    crowdPlane.position.set(cx + outwardX, slopeMidY, cz + outwardZ);
-    // rotate to face inward+up
-    crowdPlane.rotation.y = -angle + Math.PI / 2;
-    crowdPlane.rotation.x = -(Math.PI / 2 - slope);
-    crowdPlane.receiveShadow = true;
-    standsGroup.add(crowdPlane);
+    placeOutward(lowerPanel, lowerD / 2, 1.2 + lowerH / 2);
+    lowerPanel.rotation.x = -(Math.PI / 2 - lowerSlope);
+    lowerPanel.receiveShadow = true;
+    standsGroup.add(lowerPanel);
 
-    // Roof beam — just above the slope, closes the top edge without dominating
-    const beam = new THREE.Mesh(
-      new THREE.BoxGeometry(segLen, 0.8, 1.6),
+    // --- Mezzanine concrete deck (between lower & suite level) ---
+    const mezz = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.9, 4.5), concreteDark);
+    placeOutward(mezz, lowerD + 1.5, 1.2 + lowerH + 0.45);
+    mezz.castShadow = true; mezz.receiveShadow = true;
+    standsGroup.add(mezz);
+
+    // --- Suite level box: dark frame with glass front ---
+    const suiteY = 1.2 + lowerH + 0.9 + suite.height / 2;
+    // Glass front (face the track)
+    const suiteGlassMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(segLen, suite.height),
+      suiteGlass
+    );
+    placeOutward(suiteGlassMesh, lowerD - 0.5, suiteY);
+    standsGroup.add(suiteGlassMesh);
+    // Top + bottom suite frame (concrete)
+    const frameTop = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.5, suite.depth), concreteDark);
+    placeOutward(frameTop, lowerD + suite.depth / 2 - 1, suiteY + suite.height / 2 + 0.25);
+    standsGroup.add(frameTop);
+    const frameBot = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.35, suite.depth), concreteDark);
+    placeOutward(frameBot, lowerD + suite.depth / 2 - 1, suiteY - suite.height / 2 - 0.18);
+    standsGroup.add(frameBot);
+    // Suite back wall
+    const suiteBack = new THREE.Mesh(new THREE.BoxGeometry(segLen, suite.height, 0.3), concrete);
+    placeOutward(suiteBack, lowerD + suite.depth - 1, suiteY);
+    standsGroup.add(suiteBack);
+
+    // --- Upper deck crowd slope (set back from suite by recess) ---
+    const upperBaseY = 1.2 + lowerH + suite.height + 0.9;
+    const upperOutBase = lowerD + suite.depth + upper.recess - 1;
+    const upperSlope = Math.atan2(upperH, upperD);
+    const upperPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(segLen, Math.hypot(upperH, upperD)),
+      crowdMat
+    );
+    placeOutward(upperPanel, upperOutBase + upperD / 2, upperBaseY + upperH / 2);
+    upperPanel.rotation.x = -(Math.PI / 2 - upperSlope);
+    upperPanel.receiveShadow = true;
+    standsGroup.add(upperPanel);
+
+    // --- Cantilever roof slab, extends FORWARD over the upper deck and partly over the suite ---
+    const roofY = upperBaseY + upperH + roof.thickness / 2 + 0.4;
+    const roofForward = upperOutBase + upperD - roof.overhang;
+    const roofSlab = new THREE.Mesh(
+      new THREE.BoxGeometry(segLen, roof.thickness, upperD + roof.overhang + 2),
       roofMat
     );
-    const beamOut = panelDepth - 0.2;
-    beam.position.set(
-      cx + Math.cos(angle - Math.PI / 2) * beamOut,
-      panelHeight + 1.6,
-      cz + Math.sin(angle - Math.PI / 2) * beamOut
-    );
-    beam.rotation.y = -angle + Math.PI / 2;
-    beam.castShadow = true;
-    standsGroup.add(beam);
+    placeOutward(roofSlab, roofForward + (upperD + roof.overhang + 2) / 2 - upperD - 1, roofY);
+    roofSlab.castShadow = true;
+    standsGroup.add(roofSlab);
+
+    // --- Roof support trusses every few segments (vertical white pillars + diagonal struts) ---
+    if (i % 6 === 0) {
+      const pillarOut = upperOutBase + upperD + 0.5;
+      const pillar = new THREE.Mesh(
+        new THREE.BoxGeometry(0.4, totalH - 1, 0.4),
+        trussMat
+      );
+      placeOutward(pillar, pillarOut, (totalH - 1) / 2);
+      pillar.castShadow = true;
+      standsGroup.add(pillar);
+
+      // Diagonal strut from pillar top toward upper deck back
+      const strutLen = Math.hypot(upperD * 0.4, upperH * 0.5);
+      const strut = new THREE.Mesh(
+        new THREE.BoxGeometry(0.25, strutLen, 0.25),
+        trussMat
+      );
+      placeOutward(strut, pillarOut - upperD * 0.2, totalH - strutLen / 2 - 1);
+      const strutAngle = Math.atan2(upperH * 0.5, upperD * 0.4);
+      strut.rotation.z = strutAngle;
+      // Adjust position to align
+      standsGroup.add(strut);
+    }
   }
   scene.add(standsGroup);
 }
