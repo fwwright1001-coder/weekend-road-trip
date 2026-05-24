@@ -52,7 +52,7 @@
       name: 'CITY',
       end: 1500,
       timeOfDay: 'dawn',
-      sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],    // sunrise → soft blue at zenith
+      sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],
       sunColor: '#fff0c0',
       sunY: 130,
       mountainColor: '#5a5670',
@@ -60,7 +60,8 @@
       grass: '#3a5a3a',
       road: '#222226',
       dashColor: '#ffea88',
-      fogTint: 'rgba(248, 220, 180, 0.18)'
+      spawnMul: 1.0,    // baseline difficulty
+      birdColor: '#222222'
     },
     {
       name: 'FOREST',
@@ -74,7 +75,8 @@
       grass: '#456f3a',
       road: '#222226',
       dashColor: '#ffea88',
-      fogTint: 'rgba(180, 220, 200, 0.12)'
+      spawnMul: 0.85,   // slightly tighter
+      birdColor: '#5a3a1f'  // hawks
     },
     {
       name: 'DESERT',
@@ -88,7 +90,8 @@
       grass: '#b88a5a',
       road: '#3a3338',
       dashColor: '#ffea88',
-      fogTint: 'rgba(248, 200, 140, 0.22)'
+      spawnMul: 0.7,    // tougher
+      birdColor: '#3a3a3a'  // vultures
     },
     {
       name: 'COAST',
@@ -102,7 +105,8 @@
       grass: '#c8a880',
       road: '#2a2a30',
       dashColor: '#ffea88',
-      fogTint: 'rgba(255, 180, 120, 0.25)'
+      spawnMul: 0.55,   // final-biome chaos
+      birdColor: '#eeeeee'  // seagulls
     }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
@@ -166,6 +170,9 @@
     semis: [],
     nextSemiAt: 8,
     nextPitstopAt: 1400,
+    // birds
+    birds: [],
+    nextBirdAt: 3,
     // scores
     scores: []
   };
@@ -511,6 +518,8 @@
     state.semis = [];
     state.nextSemiAt = 8;
     state.nextPitstopAt = 1400;
+    state.birds = [];
+    state.nextBirdAt = 3;
     audio.init();
     audio.startEngine();
     show(SCREEN.PLAYING);
@@ -649,12 +658,49 @@
     };
   }
   function makeSemi() {
-    // Spawns off-screen right, overtakes player going right→left
     return {
       x: W + 240,
       vx: -(state.speed + 2 + Math.random() * 1.5),
       color: ['#3a6aa8', '#aa3a3a', '#3aa83a', '#d4a040'][Math.floor(Math.random() * 4)]
     };
+  }
+  function spawnBirdFlock() {
+    const fromLeft = Math.random() < 0.5;
+    const size = 3 + Math.floor(Math.random() * 4); // 3..6 birds
+    const baseY = 60 + Math.random() * 120;
+    const speed = 0.6 + Math.random() * 0.8;
+    const color = currentBiome().birdColor || '#222';
+    const vx = fromLeft ? speed : -speed;
+    for (let i = 0; i < size; i++) {
+      state.birds.push({
+        x: fromLeft ? -20 - i * 18 : W + 20 + i * 18,
+        y: baseY + (i % 2 === 0 ? 0 : 6) + Math.random() * 4,
+        vx,
+        flap: Math.random() * Math.PI * 2,
+        color
+      });
+    }
+  }
+  function updateBirds(dt) {
+    for (const b of state.birds) {
+      b.x += b.vx;
+      b.flap += dt * 9;
+    }
+    state.birds = state.birds.filter((b) => b.x > -40 && b.x < W + 40);
+  }
+  function drawBirds() {
+    ctx.save();
+    for (const b of state.birds) {
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 1.6;
+      const wing = Math.sin(b.flap) * 4 + 5;
+      ctx.beginPath();
+      ctx.moveTo(b.x - 6, b.y + wing);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(b.x + 6, b.y + wing);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function updateWorld(dt) {
@@ -663,8 +709,10 @@
     state.spawnTimer -= dt;
     if (state.spawnTimer <= 0) {
       spawn();
-      // Faster spawns as speed climbs
-      state.spawnTimer = Math.max(0.42, 0.85 + Math.random() * 0.7 - state.speed * 0.045);
+      // Faster spawns as speed climbs + per-biome difficulty multiplier
+      const mul = currentBiome().spawnMul || 1;
+      state.spawnTimer = Math.max(0.32,
+        (0.85 + Math.random() * 0.7 - state.speed * 0.045) * mul);
     }
 
     // Pit stop spawns at distance milestones
@@ -679,6 +727,14 @@
       state.semis.push(makeSemi());
       state.nextSemiAt = 9 + Math.random() * 8;
     }
+
+    // Bird flocks
+    state.nextBirdAt -= dt;
+    if (state.nextBirdAt <= 0) {
+      spawnBirdFlock();
+      state.nextBirdAt = 7 + Math.random() * 8;
+    }
+    updateBirds(dt);
 
     for (const o of state.obstacles) o.x -= move;
     for (const c of state.collectibles) { c.x -= move; c.bob += dt * 4; }
@@ -1694,6 +1750,7 @@
     drawSky(b);
     drawSun(b);
     drawClouds(b);
+    drawBirds();
     drawFarMountains(b);
     drawMidScenery(b);
     drawGround(b);
