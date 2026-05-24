@@ -12,6 +12,7 @@
  */
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ============================================================
 // CONFIG
@@ -104,10 +105,16 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 1.05;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xd8d0b8, 380, 1400);
+scene.fog = new THREE.Fog(0xd8d0b8, 420, 1500);
+
+// IBL — RoomEnvironment gives every MeshStandardMaterial plausible indirect
+// lighting + cube reflections without us authoring HDRIs.
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+pmremGenerator.dispose();
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 3000);
 // Establishing shot: broadcast-style — west end of front straight, slightly inside
