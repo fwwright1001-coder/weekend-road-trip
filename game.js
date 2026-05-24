@@ -13,6 +13,11 @@
 
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ============================================================
 // CONFIG
@@ -105,7 +110,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.95;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xd8d0b8, 420, 1500);
@@ -116,7 +121,34 @@ const pmremGenerator = new THREE.PMREMGenerator(renderer);
 scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 pmremGenerator.dispose();
 
+// ============================================================
+// POST-PROCESSING PIPELINE (G-13)
+// ============================================================
+// RenderPass → UnrealBloomPass (subtle, only highlights) → SMAA → Output
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+composer.setSize(window.innerWidth, window.innerHeight);
+
+const renderPass = new RenderPass(scene, /* camera assigned after init */ null);
+composer.addPass(renderPass);
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.18,  // strength — subtle glow, not a wash
+  0.55,  // radius
+  0.94   // threshold — only the brightest pixels (sun, beacon) bloom
+);
+composer.addPass(bloomPass);
+
+const smaaPass = new SMAAPass(window.innerWidth, window.innerHeight);
+composer.addPass(smaaPass);
+
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
+
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 3000);
+// Wire the camera into the deferred RenderPass.
+renderPass.camera = camera;
 // Establishing shot: broadcast-style — west end of front straight, slightly inside
 // the track, elevated, looking east down the straight toward turn 1.
 // Chase cam takes over in 3D-3.
@@ -2187,7 +2219,7 @@ function tick() {
   }
   updateParticles(dt);
 
-  renderer.render(scene, camera);
+  composer.render();
   requestAnimationFrame(tick);
 }
 
@@ -2204,7 +2236,7 @@ window.__dbg = { camera, car, state, CAR_STATE, chaseAnchor, lookAnchor, SCREEN,
       updateTitleCamera(performance.now() / 1000);
     }
     updateParticles(dt);
-    renderer.render(scene, camera);
+    composer.render();
   }
 };
 
@@ -2240,6 +2272,9 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  bloomPass.setSize(window.innerWidth, window.innerHeight);
+  smaaPass.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ============================================================
