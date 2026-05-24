@@ -1215,26 +1215,34 @@ function randomCrowdColor() {
 // under `car` so it moves/rotates as one unit. Local +Z is the front of the car.
 
 const car = new THREE.Group();
-const carPaint = new THREE.MeshStandardMaterial({
-  color: 0xd63a3a, metalness: 0.4, roughness: 0.35
+// Showroom paint: pigment + clearcoat layer. With scene.environment set,
+// the clearcoat catches sky reflections like a real paint job.
+const carPaint = new THREE.MeshPhysicalMaterial({
+  color: 0xc81e28, metalness: 0.05, roughness: 0.42,
+  clearcoat: 1.0, clearcoatRoughness: 0.05
 });
-const carDark = new THREE.MeshStandardMaterial({
-  color: 0x1a1a1a, metalness: 0.5, roughness: 0.5
+const carDark = new THREE.MeshPhysicalMaterial({
+  color: 0x141416, metalness: 0.2, roughness: 0.4,
+  clearcoat: 0.5, clearcoatRoughness: 0.15
 });
 const carCarbon = new THREE.MeshStandardMaterial({
-  color: 0x2a2a2a, metalness: 0.2, roughness: 0.6
+  color: 0x18181c, metalness: 0.15, roughness: 0.55
 });
-const carChrome = new THREE.MeshStandardMaterial({
-  color: 0xcccccc, metalness: 0.9, roughness: 0.2
+const carChrome = new THREE.MeshPhysicalMaterial({
+  color: 0xe8e8e8, metalness: 1.0, roughness: 0.08,
+  clearcoat: 1.0, clearcoatRoughness: 0.02
 });
-const carWindow = new THREE.MeshStandardMaterial({
-  color: 0x223344, metalness: 0.8, roughness: 0.15
+const carWindow = new THREE.MeshPhysicalMaterial({
+  color: 0x141a26, metalness: 0.0, roughness: 0.06,
+  transmission: 0.0, ior: 1.5,
+  clearcoat: 1.0, clearcoatRoughness: 0.02
 });
 const carTire = new THREE.MeshStandardMaterial({
-  color: 0x0a0a0a, roughness: 0.95
+  color: 0x0a0a0a, roughness: 0.92
 });
-const carWingAccent = new THREE.MeshStandardMaterial({
-  color: 0xffffff, metalness: 0.1, roughness: 0.5
+const carWingAccent = new THREE.MeshPhysicalMaterial({
+  color: 0xf0f0f0, metalness: 0.05, roughness: 0.4,
+  clearcoat: 0.8, clearcoatRoughness: 0.1
 });
 
 // --- Main chassis (low, narrow tub) ---
