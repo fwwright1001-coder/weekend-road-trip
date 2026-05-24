@@ -590,6 +590,321 @@ function randomCrowdColor() {
   return palette[Math.floor(Math.random() * palette.length)];
 }
 
+// ============================================================
+// INDYCAR (3D-3)
+// ============================================================
+// Open-wheel, single-seat racer. Procedural geometry built as a hierarchy
+// under `car` so it moves/rotates as one unit. Local +Z is the front of the car.
+
+const car = new THREE.Group();
+const carPaint = new THREE.MeshStandardMaterial({
+  color: 0xd63a3a, metalness: 0.4, roughness: 0.35
+});
+const carDark = new THREE.MeshStandardMaterial({
+  color: 0x1a1a1a, metalness: 0.5, roughness: 0.5
+});
+const carCarbon = new THREE.MeshStandardMaterial({
+  color: 0x2a2a2a, metalness: 0.2, roughness: 0.6
+});
+const carChrome = new THREE.MeshStandardMaterial({
+  color: 0xcccccc, metalness: 0.9, roughness: 0.2
+});
+const carWindow = new THREE.MeshStandardMaterial({
+  color: 0x223344, metalness: 0.8, roughness: 0.15
+});
+const carTire = new THREE.MeshStandardMaterial({
+  color: 0x0a0a0a, roughness: 0.95
+});
+const carWingAccent = new THREE.MeshStandardMaterial({
+  color: 0xffffff, metalness: 0.1, roughness: 0.5
+});
+
+// --- Main chassis (low, narrow tub) ---
+{
+  const main = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.55, 4.2), carPaint);
+  main.position.set(0, 0.55, 0);
+  main.castShadow = true;
+  car.add(main);
+
+  // White stripe on top of chassis (livery accent)
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 4.0), carWingAccent);
+  stripe.position.set(0, 0.84, 0);
+  car.add(stripe);
+}
+
+// --- Nose cone (tapered) ---
+{
+  const nose = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.45, 1.4, 8),
+    carPaint
+  );
+  nose.position.set(0, 0.55, 2.7);
+  nose.rotation.x = Math.PI / 2;
+  nose.castShadow = true;
+  car.add(nose);
+}
+
+// --- Sidepods (wider mid-section with air intakes) ---
+for (const sign of [-1, 1]) {
+  const pod = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 2.0), carPaint);
+  pod.position.set(sign * 0.7, 0.5, -0.2);
+  pod.castShadow = true;
+  car.add(pod);
+
+  // Intake mouth
+  const intake = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.3, 0.05), carDark);
+  intake.position.set(sign * 0.72, 0.55, 0.8);
+  car.add(intake);
+}
+
+// --- Cockpit + driver halo ---
+{
+  // Cockpit opening (dark)
+  const cockpit = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.9), carDark);
+  cockpit.position.set(0, 0.95, 0.5);
+  car.add(cockpit);
+
+  // Driver helmet (dome)
+  const helmet = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0x222266, metalness: 0.2, roughness: 0.4 })
+  );
+  helmet.position.set(0, 1.0, 0.55);
+  helmet.castShadow = true;
+  car.add(helmet);
+
+  // Helmet visor
+  const visor = new THREE.Mesh(
+    new THREE.BoxGeometry(0.36, 0.08, 0.04),
+    carWindow
+  );
+  visor.position.set(0, 1.1, 0.76);
+  car.add(visor);
+
+  // Halo (driver protection ring — characteristic of modern IndyCar/F1)
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.42, 0.05, 8, 24, Math.PI),
+    carDark
+  );
+  halo.position.set(0, 1.3, 0.55);
+  halo.rotation.x = Math.PI / 2;
+  halo.rotation.y = Math.PI;
+  car.add(halo);
+
+  // Halo front pillar
+  const pillar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.5, 0.06),
+    carDark
+  );
+  pillar.position.set(0, 1.05, 0.97);
+  car.add(pillar);
+}
+
+// --- Engine air scoop above driver ---
+{
+  const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 1.2), carPaint);
+  scoop.position.set(0, 1.15, -0.4);
+  scoop.castShadow = true;
+  car.add(scoop);
+
+  // Roll hoop (dark)
+  const hoop = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.06, 0.5, 6),
+    carDark
+  );
+  hoop.position.set(0, 1.35, -0.05);
+  car.add(hoop);
+}
+
+// --- Front wing ---
+{
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.06, 0.5), carDark);
+  wing.position.set(0, 0.3, 3.2);
+  wing.castShadow = true;
+  car.add(wing);
+
+  // Endplates
+  for (const sign of [-1, 1]) {
+    const ep = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.3, 0.5), carWingAccent);
+    ep.position.set(sign * 1.0, 0.4, 3.2);
+    car.add(ep);
+  }
+
+  // Wing flap
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.05, 0.2), carPaint);
+  flap.position.set(0, 0.4, 3.45);
+  flap.rotation.x = -0.15;
+  car.add(flap);
+}
+
+// --- Rear wing ---
+{
+  // Vertical endplates
+  for (const sign of [-1, 1]) {
+    const ep = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.6), carDark);
+    ep.position.set(sign * 0.85, 1.1, -2.6);
+    car.add(ep);
+  }
+
+  // Main plane (high)
+  const main = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.08, 0.45), carDark);
+  main.position.set(0, 1.45, -2.6);
+  main.castShadow = true;
+  car.add(main);
+
+  // Flap (angled)
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.3), carPaint);
+  flap.position.set(0, 1.32, -2.45);
+  flap.rotation.x = -0.5;
+  car.add(flap);
+
+  // Lower beam wing
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.05, 0.2), carDark);
+  beam.position.set(0, 0.55, -2.6);
+  car.add(beam);
+}
+
+// --- Exhaust pipes ---
+for (const sign of [-1, 1]) {
+  const exhaust = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 0.4, 6),
+    carChrome
+  );
+  exhaust.position.set(sign * 0.15, 0.95, -2.0);
+  exhaust.rotation.x = Math.PI / 2;
+  car.add(exhaust);
+}
+
+// --- 4 exposed wheels ---
+{
+  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 20);
+  const rimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.34, 8);
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.7, roughness: 0.3 });
+
+  const wheelPositions = [
+    [-0.85, 0.42, 1.5, 'front'],  // FL
+    [ 0.85, 0.42, 1.5, 'front'],  // FR
+    [-0.85, 0.42, -1.6, 'rear'], // RL
+    [ 0.85, 0.42, -1.6, 'rear']  // RR
+  ];
+
+  for (const [x, y, z, kind] of wheelPositions) {
+    const wheelGroup = new THREE.Group();
+    const tire = new THREE.Mesh(wheelGeo, carTire);
+    tire.rotation.z = Math.PI / 2;
+    tire.castShadow = true;
+    wheelGroup.add(tire);
+    const rim = new THREE.Mesh(rimGeo, rimMat);
+    rim.rotation.z = Math.PI / 2;
+    wheelGroup.add(rim);
+    wheelGroup.position.set(x, y, z);
+    wheelGroup.userData = { kind, baseZ: z };
+    car.add(wheelGroup);
+  }
+}
+
+// --- Floor / underbody (helps the car not look like it's floating) ---
+{
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.05, 4.0), carCarbon);
+  floor.position.set(0, 0.21, 0);
+  car.add(floor);
+}
+
+scene.add(car);
+
+// Chase camera anchor — child of car for trivial position tracking.
+const chaseAnchor = new THREE.Object3D();
+chaseAnchor.position.set(0, 2.6, -8.5);
+car.add(chaseAnchor);
+
+const lookAnchor = new THREE.Object3D();
+lookAnchor.position.set(0, 1.4, 4);
+car.add(lookAnchor);
+
+// ============================================================
+// CAR / TRACK PLACEMENT
+// ============================================================
+// Rail-based motion: car position is parameterized by progress `u` around the
+// centerline (0..1 per lap). Lateral offset `lane` puts the car off-center.
+const CAR_STATE = {
+  u: 0,           // [0, 1) progress around the lap
+  lane: 0,        // lateral offset from centerline, in meters (positive = outside)
+  speed: 0,       // forward speed, m/s
+  facing: 0       // world-space heading (radians, 0 = +X direction)
+};
+
+// Compute the centerline radius and lap perimeter for converting speed → u/sec.
+const CENTERLINE_R = (OUTER_R + INNER_R) / 2;
+const LAP_PERIMETER = (TRACK.STRAIGHT_HALF * 2) * 2 + Math.PI * CENTERLINE_R * 2;
+
+// Returns world (x, z) and tangent heading for a given lap-parameter u in [0,1).
+// u increases COUNTER-CLOCKWISE viewed from above (true IMS race direction).
+function pointAndHeadingAtU(u) {
+  const norm = ((u % 1) + 1) % 1;
+  // Counter-clockwise from front straight, heading west.
+  // Segment plan:
+  //   [0..s1]: front straight, x: 0 → -STRAIGHT_HALF, z = +CENTERLINE_R, heading = -X (PI)
+  //   [s1..s2]: turn 3+4 (left arc), centered at -STRAIGHT_HALF
+  //   [s2..s3]: back straight, x: -STRAIGHT_HALF → +STRAIGHT_HALF, z = -CENTERLINE_R, heading = +X (0)
+  //   [s3..1]: turn 1+2 (right arc), centered at +STRAIGHT_HALF
+  const straight = TRACK.STRAIGHT_HALF;
+  const arc = Math.PI * CENTERLINE_R;
+  const total = straight * 2 + arc * 2;
+  const s1 = straight / total;
+  const s2 = (straight + arc) / total;
+  const s3 = (straight + arc + straight * 2) / total;
+
+  let x, z, heading;
+  if (norm < s1) {
+    const v = norm / s1;
+    x = -v * straight;
+    z = CENTERLINE_R;
+    heading = Math.PI; // moving -X
+  } else if (norm < s2) {
+    const v = (norm - s1) / (s2 - s1);
+    const ang = Math.PI / 2 + v * Math.PI; // arc from top-left to bottom-left
+    x = -straight + Math.cos(ang) * CENTERLINE_R;
+    z = Math.sin(ang) * CENTERLINE_R;
+    heading = ang + Math.PI / 2; // tangent direction along arc, CCW
+  } else if (norm < s3) {
+    const v = (norm - s2) / (s3 - s2);
+    x = -straight + v * straight * 2;
+    z = -CENTERLINE_R;
+    heading = 0; // moving +X
+  } else {
+    const v = (norm - s3) / (1 - s3);
+    const ang = -Math.PI / 2 + v * Math.PI; // arc from bottom-right to top-right
+    x = straight + Math.cos(ang) * CENTERLINE_R;
+    z = Math.sin(ang) * CENTERLINE_R;
+    heading = ang + Math.PI / 2;
+  }
+  return { x, z, heading };
+}
+
+// Place the car at the start/finish line, ready to race.
+function placeCarAtStart() {
+  CAR_STATE.u = 0;
+  CAR_STATE.lane = 0;
+  CAR_STATE.speed = 0;
+  applyCarTransform();
+}
+
+function applyCarTransform() {
+  const p = pointAndHeadingAtU(CAR_STATE.u);
+  // Lateral offset: perpendicular to heading
+  const perpX = Math.cos(p.heading - Math.PI / 2);
+  const perpZ = Math.sin(p.heading - Math.PI / 2);
+  car.position.set(p.x + perpX * CAR_STATE.lane, 0, p.z + perpZ * CAR_STATE.lane);
+  // Three.js: object's local +Z is "forward". Heading is angle in XZ plane from +X.
+  // To align local +Z with the heading direction, rotation.y must be the angle
+  // such that R_y(theta) * (0,0,1) = (cos(heading), 0, sin(heading)).
+  // Solving: theta = -heading + PI/2  (working with right-handed coords)
+  car.rotation.y = -p.heading + Math.PI / 2;
+  CAR_STATE.facing = p.heading;
+}
+
+placeCarAtStart();
+
 state.clock = new THREE.Clock();
 
 // ============================================================
@@ -817,15 +1132,43 @@ function pad(n, w) {
 // ============================================================
 // MAIN LOOP
 // ============================================================
+const TITLE_CAM_POS = new THREE.Vector3(-160, 26, 70);
+const TITLE_CAM_LOOK = new THREE.Vector3(120, 6, 105);
+const tmpVec = new THREE.Vector3();
+const tmpLook = new THREE.Vector3();
+
 function tick() {
   const dt = Math.min(0.05, state.clock.getDelta());
+  const elapsed = state.clock.getElapsedTime();
 
   if (state.screen === SCREEN.PLAYING) {
-    // Driving update will go here in 3D-4
+    updateChaseCamera(dt);
+  } else {
+    updateTitleCamera(elapsed);
   }
 
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
+}
+
+function updateTitleCamera(t) {
+  // Slow orbital drift around the establishing position for a cinematic title shot.
+  const wobble = Math.sin(t * 0.15) * 12;
+  camera.position.set(
+    TITLE_CAM_POS.x + wobble,
+    TITLE_CAM_POS.y,
+    TITLE_CAM_POS.z + Math.cos(t * 0.15) * 6
+  );
+  camera.lookAt(TITLE_CAM_LOOK);
+}
+
+function updateChaseCamera(dt) {
+  // Smoothly interpolate to the chase anchor's world position.
+  chaseAnchor.getWorldPosition(tmpVec);
+  lookAnchor.getWorldPosition(tmpLook);
+  // Lerp toward target — feels less twitchy than snapping
+  camera.position.lerp(tmpVec, 1 - Math.pow(0.001, dt));
+  camera.lookAt(tmpLook);
 }
 
 // Window resize
