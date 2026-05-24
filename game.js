@@ -1500,6 +1500,138 @@ function pad(n, w) {
 }
 
 // ============================================================
+// PARTICLES (G-6) — tire smoke + spark puffs
+// ============================================================
+const PARTICLE_COUNT = 100;
+const _particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+const _particleColors = new Float32Array(PARTICLE_COUNT * 3);
+const _particleSizes = new Float32Array(PARTICLE_COUNT);
+const _particleState = [];
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  _particleState.push({ vx: 0, vy: 0, vz: 0, life: 0, max: 1 });
+  _particlePositions[i * 3 + 1] = -1000; // start hidden far underground
+}
+
+function makeSmokeTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const cx = c.getContext('2d');
+  const grad = cx.createRadialGradient(32, 32, 0, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.6)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  cx.fillStyle = grad;
+  cx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const _particleGeo = new THREE.BufferGeometry();
+_particleGeo.setAttribute('position', new THREE.BufferAttribute(_particlePositions, 3));
+_particleGeo.setAttribute('color', new THREE.BufferAttribute(_particleColors, 3));
+_particleGeo.setAttribute('aSize', new THREE.BufferAttribute(_particleSizes, 1));
+
+const _particleMat = new THREE.PointsMaterial({
+  size: 1.8,
+  sizeAttenuation: true,
+  vertexColors: true,
+  map: makeSmokeTexture(),
+  transparent: true,
+  opacity: 0.7,
+  depthWrite: false,
+  blending: THREE.NormalBlending
+});
+const _particleSystem = new THREE.Points(_particleGeo, _particleMat);
+scene.add(_particleSystem);
+
+function emitParticle(x, y, z, color, lifeRange, velRange, sizeBoost = 1) {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const s = _particleState[i];
+    if (s.life <= 0) {
+      s.max = lifeRange[0] + Math.random() * (lifeRange[1] - lifeRange[0]);
+      s.life = s.max;
+      s.vx = (Math.random() - 0.5) * velRange;
+      s.vy = 0.6 + Math.random() * 1.6;
+      s.vz = (Math.random() - 0.5) * velRange;
+      _particlePositions[i * 3] = x;
+      _particlePositions[i * 3 + 1] = y;
+      _particlePositions[i * 3 + 2] = z;
+      _particleColors[i * 3]     = color[0];
+      _particleColors[i * 3 + 1] = color[1];
+      _particleColors[i * 3 + 2] = color[2];
+      _particleSizes[i] = sizeBoost;
+      return;
+    }
+  }
+}
+
+function updateParticles(dt) {
+  let anyAlive = false;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const s = _particleState[i];
+    if (s.life <= 0) {
+      _particlePositions[i * 3 + 1] = -1000;
+      continue;
+    }
+    anyAlive = true;
+    _particlePositions[i * 3]     += s.vx * dt;
+    _particlePositions[i * 3 + 1] += s.vy * dt;
+    _particlePositions[i * 3 + 2] += s.vz * dt;
+    s.vy -= 1.2 * dt; // mild gravity
+    s.vx *= (1 - 0.6 * dt);
+    s.vz *= (1 - 0.6 * dt);
+    s.life -= dt;
+    const fade = Math.max(0, s.life / s.max);
+    // fade color toward darker as smoke ages
+    _particleColors[i * 3]     *= 0.995;
+    _particleColors[i * 3 + 1] *= 0.995;
+    _particleColors[i * 3 + 2] *= 0.995;
+    // Implicit alpha-like effect via color * fade (since we use vertex colors)
+    _particleColors[i * 3]     = Math.min(_particleColors[i * 3],     fade);
+    _particleColors[i * 3 + 1] = Math.min(_particleColors[i * 3 + 1], fade);
+    _particleColors[i * 3 + 2] = Math.min(_particleColors[i * 3 + 2], fade);
+  }
+  _particleGeo.attributes.position.needsUpdate = true;
+  _particleGeo.attributes.color.needsUpdate = true;
+}
+
+// Helper: rear-wheel world positions for emitter origin.
+const _rearLocalL = new THREE.Vector3(-0.85, 0.4, -1.6);
+const _rearLocalR = new THREE.Vector3(0.85, 0.4, -1.6);
+const _tmpWheel = new THREE.Vector3();
+function emitTireSmoke(intensity) {
+  for (const local of [_rearLocalL, _rearLocalR]) {
+    _tmpWheel.copy(local).applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y).add(car.position);
+    const puffs = Math.ceil(intensity);
+    for (let p = 0; p < puffs; p++) {
+      emitParticle(
+        _tmpWheel.x + (Math.random() - 0.5) * 0.4,
+        _tmpWheel.y + 0.1,
+        _tmpWheel.z + (Math.random() - 0.5) * 0.4,
+        [0.95, 0.95, 0.97],
+        [0.6, 1.1],
+        1.5
+      );
+    }
+  }
+}
+
+function emitSparkBurst(x, y, z) {
+  for (let i = 0; i < 12; i++) {
+    emitParticle(
+      x + (Math.random() - 0.5) * 0.4,
+      y + 0.5,
+      z + (Math.random() - 0.5) * 0.4,
+      [1.0, 0.6 + Math.random() * 0.3, 0.2],
+      [0.3, 0.6],
+      4.0,
+      1
+    );
+  }
+}
+
+// ============================================================
 // DRIVING PHYSICS (3D-4)
 // ============================================================
 const PHYS = {
@@ -1563,6 +1695,7 @@ function updateDriving(dt) {
     state.fuel -= PHYS.WALL_FUEL_PENALTY;
     wallCooldown = 0.5;
     flashHud();
+    emitSparkBurst(car.position.x, car.position.y, car.position.z);
   }
   wallCooldown = Math.max(0, wallCooldown - dt);
 
@@ -1586,6 +1719,16 @@ function updateDriving(dt) {
       child.rotation.x -= wheelOmega * dt;
     }
   });
+
+  // ---- Tire smoke (G-6) ----
+  // Emit lightly when accelerating at low speeds (wheelspin) and continuously when boosting.
+  if (wantBoost) {
+    emitTireSmoke(1.4);
+  } else if (wantThrottle && CAR_STATE.speed < 25 && CAR_STATE.speed > 1) {
+    emitTireSmoke(0.6);
+  } else if (offTrack && CAR_STATE.speed > 15) {
+    emitTireSmoke(0.8);
+  }
 
   // ---- Fuel + score ----
   const speedFrac = CAR_STATE.speed / PHYS.MAX_SPEED;
@@ -1675,6 +1818,7 @@ function tick() {
   } else {
     updateTitleCamera(elapsed);
   }
+  updateParticles(dt);
 
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
@@ -1692,6 +1836,7 @@ window.__dbg = { camera, car, state, CAR_STATE, chaseAnchor, lookAnchor, SCREEN,
     } else {
       updateTitleCamera(performance.now() / 1000);
     }
+    updateParticles(dt);
     renderer.render(scene, camera);
   }
 };
