@@ -112,7 +112,11 @@
   }
 
   function insertScore(initials, score) {
-    const entry = { initials: initials.join(''), score, date: new Date().toISOString().slice(0, 10) };
+    const entry = {
+      initials: initials.join(''),
+      score: Math.floor(score),
+      date: new Date().toISOString().slice(0, 10)
+    };
     state.scores.push(entry);
     state.scores.sort((a, b) => b.score - a.score);
     state.scores = state.scores.slice(0, MAX_SCORES);
@@ -810,12 +814,12 @@
   }
 
   function drawScores() {
-    drawCenterPanel(560, 380);
+    drawCenterPanel(560, 420);
     ctx.fillStyle = '#f5d76e';
     ctx.font = 'bold 32px "Courier New", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('HIGH SCORES', W / 2, 140);
+    ctx.fillText('HIGH SCORES', W / 2, 120);
 
     ctx.font = '18px "Courier New", monospace';
     if (state.scores.length === 0) {
@@ -825,7 +829,7 @@
       ctx.textAlign = 'left';
       for (let i = 0; i < state.scores.length; i++) {
         const s = state.scores[i];
-        const y = 200 + i * 36;
+        const y = 180 + i * 36;
         ctx.fillStyle = '#e8e8e8';
         ctx.fillText(`${i + 1}.`, W / 2 - 180, y);
         ctx.fillStyle = '#f5d76e';
@@ -841,20 +845,20 @@
     ctx.textAlign = 'center';
     ctx.fillStyle = '#7ec3e8';
     ctx.font = 'bold 16px "Courier New", monospace';
-    ctx.fillText('PRESS ENTER TO RETURN', W / 2, 460);
+    ctx.fillText('PRESS ENTER TO RETURN', W / 2, 440);
   }
 
   function drawHelp() {
-    drawCenterPanel(520, 340);
+    drawCenterPanel(520, 400);
     ctx.fillStyle = '#f5d76e';
     ctx.font = 'bold 28px "Courier New", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('CONTROLS', W / 2, 150);
+    ctx.fillText('CONTROLS', W / 2, 110);
 
     const lines = [
       ['SPACE / W / ↑', 'JUMP'],
-      ['S / ↓', 'DUCK (hold to slide under signs)'],
+      ['S / ↓', 'DUCK (slide under signs)'],
       ['D / →', 'ACCELERATE'],
       ['A / ←', 'BRAKE'],
       ['P / ESC', 'PAUSE'],
@@ -864,7 +868,7 @@
     ctx.font = '14px "Courier New", monospace';
     ctx.textAlign = 'left';
     for (let i = 0; i < lines.length; i++) {
-      const y = 200 + i * 28;
+      const y = 160 + i * 28;
       ctx.fillStyle = '#f5d76e';
       ctx.fillText(lines[i][0], W / 2 - 160, y);
       ctx.fillStyle = '#e8e8e8';
@@ -872,7 +876,7 @@
     }
     ctx.textAlign = 'center';
     ctx.fillStyle = '#7ec3e8';
-    ctx.fillText('PRESS ? OR ENTER TO CLOSE', W / 2, 440);
+    ctx.fillText('PRESS ? OR ENTER TO CLOSE', W / 2, 410);
   }
 
   function drawCenterPanel(w, h) {
@@ -954,7 +958,7 @@
       updateParticles(dt);
 
       state.distance += state.speed * dt * 60;
-      state.score += Math.round(state.speed * dt * 10);
+      state.score += state.speed * dt * 10;
       state.fuel -= FUEL_DRAIN_PER_SEC * dt;
       state.flashTimer = Math.max(0, state.flashTimer - dt);
 
