@@ -703,6 +703,77 @@ function makeCrowdTexture() {
   }
 }
 
+// ---- Trees & outer scenery (G-3) ----
+// Procedural foliage scattered in a band outside the stands so the horizon
+// reads as a landscape, not empty grass into the sky.
+{
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a3a1f, roughness: 0.95 });
+  const foliageMats = [
+    new THREE.MeshStandardMaterial({ color: 0x2d6a2d, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: 0x3a8a3a, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: 0x4f7a3a, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: 0x6a8a3a, roughness: 0.92 })
+  ];
+  const trunkGeo = new THREE.CylinderGeometry(0.4, 0.5, 4, 6);
+  const coneGeo = new THREE.ConeGeometry(3, 8, 8);
+  const sphereGeo = new THREE.SphereGeometry(3.2, 10, 8);
+
+  // Place ~220 trees in a ring outside the stands.
+  // Stand outer extent ≈ TURN_RADIUS + standOffset + panelDepth = 120 + 12 + 18 = 150
+  // Trees from ~180 to ~750 outward, avoiding the track interior.
+  const TREES = 220;
+  for (let i = 0; i < TREES; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 180 + Math.random() * 580;
+    const x = Math.cos(ang) * dist;
+    const z = Math.sin(ang) * dist;
+    // Skip if too close to track (defensive — distance threshold should already handle)
+    if (Math.abs(x) < TRACK.STRAIGHT_HALF + 80 && Math.abs(z) < OUTER_R + 100) continue;
+
+    const group = new THREE.Group();
+    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+    trunk.position.y = 2;
+    trunk.castShadow = true;
+    group.add(trunk);
+
+    // 50/50 cone (pine) or sphere (deciduous)
+    const isCone = Math.random() < 0.55;
+    const foliageMat = foliageMats[Math.floor(Math.random() * foliageMats.length)];
+    const foliage = new THREE.Mesh(isCone ? coneGeo : sphereGeo, foliageMat);
+    foliage.position.y = isCone ? 8 : 6;
+    foliage.castShadow = true;
+    // Vary tree size
+    const scale = 0.7 + Math.random() * 1.3;
+    group.scale.set(scale, scale * (0.9 + Math.random() * 0.3), scale);
+    group.position.set(x, 0, z);
+    group.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(group);
+  }
+}
+
+// ---- Infield decorative buildings (small support structures) ----
+{
+  const bldgMat = new THREE.MeshStandardMaterial({ color: 0xd0c4a8, roughness: 0.85 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.8 });
+  // A few support buildings spread around the infield (medical, garage, comm)
+  const positions = [
+    { x: -160, z: 40, w: 18, d: 10, h: 5 },
+    { x: 160, z: 40, w: 18, d: 10, h: 5 },
+    { x: -80, z: -40, w: 24, d: 12, h: 4 },
+    { x: 80, z: -40, w: 24, d: 12, h: 4 }
+  ];
+  for (const p of positions) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(p.w, p.h, p.d), bldgMat);
+    b.position.set(p.x, p.h / 2, p.z);
+    b.castShadow = true;
+    b.receiveShadow = true;
+    scene.add(b);
+    const r = new THREE.Mesh(new THREE.BoxGeometry(p.w + 0.4, 0.3, p.d + 0.4), roofMat);
+    r.position.set(p.x, p.h + 0.15, p.z);
+    scene.add(r);
+  }
+}
+
 // ============================================================
 // SCENE HELPERS
 // ============================================================
