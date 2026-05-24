@@ -1354,39 +1354,182 @@ for (const sign of [-1, 1]) {
   car.add(exhaust);
 }
 
-// --- 4 exposed wheels ---
+// --- 4 exposed wheels (with rim spokes + brake disc + caliper) ---
 {
-  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 20);
-  const rimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.34, 8);
-  const rimMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.7, roughness: 0.3 });
+  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 20);
+  const sidewallGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.02, 20);
+  const rimGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.36, 8);
+  const hubGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.4, 8);
+  const spokeGeo = new THREE.BoxGeometry(0.36, 0.04, 0.04);
+  const brakeGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.04, 18);
+  const caliperGeo = new THREE.BoxGeometry(0.1, 0.18, 0.18);
+
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0xb8b8b8, metalness: 0.75, roughness: 0.28 });
+  const hubMat = new THREE.MeshStandardMaterial({ color: 0xf5d76e, metalness: 0.6, roughness: 0.35 });
+  const sidewallMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.85 });
+  const brakeMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, metalness: 0.4, roughness: 0.6 });
+  const caliperMat = new THREE.MeshStandardMaterial({ color: 0xd63a3a, metalness: 0.5, roughness: 0.35 });
 
   const wheelPositions = [
-    [-0.85, 0.42, 1.5, 'front'],  // FL
-    [ 0.85, 0.42, 1.5, 'front'],  // FR
-    [-0.85, 0.42, -1.6, 'rear'], // RL
-    [ 0.85, 0.42, -1.6, 'rear']  // RR
+    [-0.85, 0.42, 1.5, 'front'],
+    [ 0.85, 0.42, 1.5, 'front'],
+    [-0.85, 0.42, -1.6, 'rear'],
+    [ 0.85, 0.42, -1.6, 'rear']
   ];
 
   for (const [x, y, z, kind] of wheelPositions) {
     const wheelGroup = new THREE.Group();
+    // Tire body
     const tire = new THREE.Mesh(wheelGeo, carTire);
     tire.rotation.z = Math.PI / 2;
     tire.castShadow = true;
     wheelGroup.add(tire);
+    // Sidewall accents (slightly visible from the side)
+    for (const sgn of [-1, 1]) {
+      const sw = new THREE.Mesh(sidewallGeo, sidewallMat);
+      sw.rotation.z = Math.PI / 2;
+      sw.position.x = sgn * 0.16;
+      wheelGroup.add(sw);
+    }
+    // Rim (slightly inset from tire)
     const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.rotation.z = Math.PI / 2;
     wheelGroup.add(rim);
+    // Hub (center cap)
+    const hub = new THREE.Mesh(hubGeo, hubMat);
+    hub.rotation.z = Math.PI / 2;
+    wheelGroup.add(hub);
+    // 5 rim spokes
+    for (let s = 0; s < 5; s++) {
+      const sp = new THREE.Mesh(spokeGeo, rimMat);
+      sp.rotation.x = (s / 5) * Math.PI * 2;
+      sp.position.x = 0; // along axle
+      wheelGroup.add(sp);
+    }
+    // Brake disc (slightly outboard so it peeks through spokes)
+    for (const sgn of [-1, 1]) {
+      const brake = new THREE.Mesh(brakeGeo, brakeMat);
+      brake.rotation.z = Math.PI / 2;
+      brake.position.x = sgn * 0.14;
+      wheelGroup.add(brake);
+      // Red brake caliper at top of disc
+      const caliper = new THREE.Mesh(caliperGeo, caliperMat);
+      caliper.position.set(sgn * 0.14, 0.18, 0);
+      wheelGroup.add(caliper);
+    }
     wheelGroup.position.set(x, y, z);
     wheelGroup.userData = { kind, baseZ: z };
     car.add(wheelGroup);
   }
 }
 
-// --- Floor / underbody (helps the car not look like it's floating) ---
+// --- Suspension push-rods (visible struts between chassis and wheels) ---
+{
+  const strutMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.6, roughness: 0.35 });
+  const positions = [
+    { wheelX: -0.85, wheelZ: 1.5,  chassisX: -0.3, chassisZ: 1.5 },
+    { wheelX:  0.85, wheelZ: 1.5,  chassisX:  0.3, chassisZ: 1.5 },
+    { wheelX: -0.85, wheelZ: -1.6, chassisX: -0.3, chassisZ: -1.6 },
+    { wheelX:  0.85, wheelZ: -1.6, chassisX:  0.3, chassisZ: -1.6 }
+  ];
+  for (const p of positions) {
+    const dx = p.wheelX - p.chassisX;
+    const len = Math.hypot(dx, 0.3);
+    const strut = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.04, len, 6),
+      strutMat
+    );
+    strut.position.set((p.wheelX + p.chassisX) / 2, 0.5, p.chassisZ);
+    strut.rotation.z = Math.atan2(0.3, -dx) - Math.PI / 2;
+    car.add(strut);
+  }
+}
+
+// --- Mirrors (small wing-mounted side-pods near the cockpit) ---
+for (const sign of [-1, 1]) {
+  const mirror = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.15, 0.3),
+    carPaint
+  );
+  mirror.position.set(sign * 0.55, 0.95, 0.3);
+  car.add(mirror);
+  // Mirror glass
+  const glass = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.18, 0.13),
+    carWindow
+  );
+  glass.position.set(sign * 0.55, 0.95, 0.45);
+  glass.rotation.y = sign * 0.2;
+  car.add(glass);
+  // Mirror stalk
+  const stalk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.3, 6),
+    carDark
+  );
+  stalk.position.set(sign * 0.42, 0.85, 0.3);
+  stalk.rotation.z = Math.PI / 2;
+  car.add(stalk);
+}
+
+// --- Livery number panel on each sidepod (yellow with black "27") ---
+{
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const cx = c.getContext('2d');
+  cx.fillStyle = '#f5d76e';
+  cx.beginPath();
+  cx.arc(64, 64, 56, 0, Math.PI * 2);
+  cx.fill();
+  cx.fillStyle = '#111';
+  cx.font = 'bold 90px Arial';
+  cx.textAlign = 'center';
+  cx.textBaseline = 'middle';
+  cx.fillText('27', 64, 68);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const liveryMat = new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.4 });
+  for (const sign of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), liveryMat);
+    panel.position.set(sign * 0.93, 0.5, -0.4);
+    panel.rotation.y = sign * Math.PI / 2;
+    car.add(panel);
+  }
+}
+
+// --- Front wing endplate flaps (more visible detail) ---
+for (const sign of [-1, 1]) {
+  const flap = new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, 0.16, 0.45),
+    carPaint
+  );
+  flap.position.set(sign * 1.05, 0.35, 3.2);
+  car.add(flap);
+}
+
+// --- Rear wing endplate winglets (small horizontal wings on outside) ---
+for (const sign of [-1, 1]) {
+  const winglet = new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, 0.04, 0.5),
+    carPaint
+  );
+  winglet.position.set(sign * 0.86, 1.55, -2.55);
+  car.add(winglet);
+}
+
+// --- Floor / underbody ---
 {
   const floor = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.05, 4.0), carCarbon);
   floor.position.set(0, 0.21, 0);
   car.add(floor);
+  // Splitter at front
+  const splitter = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.04, 0.3), carCarbon);
+  splitter.position.set(0, 0.18, 2.5);
+  car.add(splitter);
+  // Diffuser at rear (angled)
+  const diffuser = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 0.7), carCarbon);
+  diffuser.position.set(0, 0.4, -2.2);
+  diffuser.rotation.x = -0.25;
+  car.add(diffuser);
 }
 
 scene.add(car);
