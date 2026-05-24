@@ -162,6 +162,10 @@
     comboPopupT: 0,
     // floating "+50" texts
     scorePopups: [],
+    // mini-events
+    semis: [],
+    nextSemiAt: 8,
+    nextPitstopAt: 1400,
     // scores
     scores: []
   };
@@ -504,6 +508,9 @@
     state.comboTimer = 0;
     state.comboPopupT = 0;
     state.scorePopups = [];
+    state.semis = [];
+    state.nextSemiAt = 8;
+    state.nextPitstopAt = 1400;
     audio.init();
     audio.startEngine();
     show(SCREEN.PLAYING);
@@ -630,6 +637,25 @@
       bob: Math.random() * Math.PI * 2
     };
   }
+  function makePitstop() {
+    return {
+      type: 'pitstop',
+      x: W + 100,
+      w: 64,
+      h: 56,
+      y: GROUND_Y - 56,
+      taken: false,
+      bob: 0
+    };
+  }
+  function makeSemi() {
+    // Spawns off-screen right, overtakes player going right→left
+    return {
+      x: W + 240,
+      vx: -(state.speed + 2 + Math.random() * 1.5),
+      color: ['#3a6aa8', '#aa3a3a', '#3aa83a', '#d4a040'][Math.floor(Math.random() * 4)]
+    };
+  }
 
   function updateWorld(dt) {
     const move = state.speed * dt * 60;
@@ -641,11 +667,26 @@
       state.spawnTimer = Math.max(0.42, 0.85 + Math.random() * 0.7 - state.speed * 0.045);
     }
 
+    // Pit stop spawns at distance milestones
+    if (state.distance >= state.nextPitstopAt) {
+      state.collectibles.push(makePitstop());
+      state.nextPitstopAt += 1400 + Math.random() * 400;
+    }
+
+    // Semi-truck spawns on a timer (faster than player, overtakes)
+    state.nextSemiAt -= dt;
+    if (state.nextSemiAt <= 0) {
+      state.semis.push(makeSemi());
+      state.nextSemiAt = 9 + Math.random() * 8;
+    }
+
     for (const o of state.obstacles) o.x -= move;
     for (const c of state.collectibles) { c.x -= move; c.bob += dt * 4; }
+    for (const s of state.semis) s.x += s.vx;
 
     state.obstacles = state.obstacles.filter((o) => o.x + o.w > -30);
     state.collectibles = state.collectibles.filter((c) => c.x + c.w > -30);
+    state.semis = state.semis.filter((s) => s.x > -340);
 
     // Collisions
     const pb = playerBox();
@@ -678,6 +719,14 @@
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
           audio.playFuel();
+        } else if (c.type === 'pitstop') {
+          // Full refuel + chunky bonus
+          state.fuel = FUEL_MAX;
+          const pts = 500 * mult;
+          state.score += pts;
+          spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `PIT STOP!  +${pts}`, '#7ee27e');
+          audio.playBiome(); // celebratory arpeggio
         } else {
           const pts = SNACK_POINTS * mult;
           state.score += pts;
@@ -1329,6 +1378,10 @@
   }
   function drawCollectibles() {
     for (const c of state.collectibles) {
+      if (c.type === 'pitstop') {
+        drawPitstop(c);
+        continue;
+      }
       const float = Math.sin(c.bob) * 4;
       const y = c.y + float;
       if (c.type === 'fuel') {
@@ -1371,6 +1424,82 @@
       }
     }
   }
+  function drawPitstop(c) {
+    // A red-and-white awning over a fuel pump
+    const x = c.x, y = c.y;
+    // Glow
+    ctx.fillStyle = 'rgba(126, 226, 126, 0.35)';
+    ctx.beginPath();
+    ctx.arc(x + c.w / 2, y + c.h / 2 + 8, c.w * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    // Posts
+    ctx.fillStyle = '#7a6a55';
+    ctx.fillRect(x + 4, y + 18, 4, c.h - 18);
+    ctx.fillRect(x + c.w - 8, y + 18, 4, c.h - 18);
+    // Awning (red+white stripes)
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = i % 2 === 0 ? '#d63a3a' : '#fafafa';
+      ctx.fillRect(x + i * (c.w / 6), y, c.w / 6 + 1, 14);
+    }
+    // Awning trim
+    ctx.fillStyle = '#3a3a40';
+    ctx.fillRect(x, y + 14, c.w, 4);
+    // Pump body
+    ctx.fillStyle = '#3a7a3a';
+    roundRect(ctx, x + c.w / 2 - 12, y + 24, 24, c.h - 24, 3);
+    ctx.fill();
+    // Pump face
+    ctx.fillStyle = '#fafafa';
+    ctx.fillRect(x + c.w / 2 - 8, y + 28, 16, 10);
+    // "$" sign
+    ctx.fillStyle = '#3a7a3a';
+    ctx.font = 'bold 11px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$$', x + c.w / 2, y + 33);
+    // Label
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 9px "JetBrains Mono", Consolas, monospace';
+    ctx.fillText('PIT STOP', x + c.w / 2, y + 50);
+  }
+
+  function drawSemis() {
+    for (const s of state.semis) {
+      // Trailer
+      ctx.fillStyle = s.color;
+      roundRect(ctx, s.x, GROUND_Y - 64, 180, 56, 4);
+      ctx.fill();
+      // Trailer logo stripe
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillRect(s.x + 16, GROUND_Y - 44, 148, 4);
+      // Cab
+      ctx.fillStyle = '#dadada';
+      roundRect(ctx, s.x + 180, GROUND_Y - 52, 56, 44, 5);
+      ctx.fill();
+      // Cab windshield
+      ctx.fillStyle = '#9cd0f0';
+      ctx.fillRect(s.x + 198, GROUND_Y - 46, 28, 14);
+      // Headlight (we're facing -X so it's on the left side)
+      ctx.fillStyle = '#fff8a8';
+      ctx.fillRect(s.x + 234, GROUND_Y - 30, 4, 6);
+      // Wheels — three under trailer, one under cab
+      const wheelY = GROUND_Y - 4;
+      [s.x + 24, s.x + 96, s.x + 168, s.x + 220].forEach((wx) => {
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.arc(wx, wheelY, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#888';
+        ctx.beginPath();
+        ctx.arc(wx, wheelY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(s.x + 4, GROUND_Y + 10, 232, 4);
+    }
+  }
+
   function drawParticles() {
     for (const p of state.particles) {
       const a = Math.max(0, p.life / p.max);
@@ -1538,6 +1667,7 @@
     drawNearScenery(b);
 
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      drawSemis();
       drawCollectibles();
       drawObstacles();
       drawPlayer();
