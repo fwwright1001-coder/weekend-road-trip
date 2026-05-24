@@ -195,6 +195,130 @@
   }
 
   // ============================================================
+  // AUDIO (Web Audio API — procedural, no assets)
+  // ============================================================
+  // Engine drone is a continuous oscillator pitched by speed.
+  // Pickups, hits, jumps, win/lose are short envelope shapes.
+  // Muted state persists across reloads.
+  const MUTE_KEY = 'wrt.muted.v1';
+  const audio = {
+    ctx: null,
+    master: null,
+    engineOsc: null,
+    engineGain: null,
+    muted: (() => { try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; } })(),
+
+    init() {
+      if (this.ctx) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 0.35;
+        this.master.connect(this.ctx.destination);
+      } catch (e) { /* no audio available — game still works */ }
+    },
+    setMuted(m) {
+      this.muted = m;
+      try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch {}
+      if (this.master) this.master.gain.value = m ? 0 : 0.35;
+    },
+    toggle() {
+      this.setMuted(!this.muted);
+      showAudioBanner(this.muted ? 'SOUND OFF' : 'SOUND ON');
+    },
+
+    // Continuous engine — pitch tied to speed
+    startEngine() {
+      if (!this.ctx || this.engineOsc) return;
+      const ctx = this.ctx;
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 90;
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.value = 600;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0;
+      osc.connect(filt); filt.connect(gain); gain.connect(this.master);
+      osc.start();
+      this.engineOsc = osc;
+      this.engineGain = gain;
+      this.engineFilt = filt;
+      // ramp in
+      gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.4);
+    },
+    stopEngine() {
+      if (!this.engineOsc) return;
+      const ctx = this.ctx;
+      this.engineGain.gain.cancelScheduledValues(ctx.currentTime);
+      this.engineGain.gain.linearRampToValueAtTime(0.0, ctx.currentTime + 0.2);
+      const osc = this.engineOsc;
+      setTimeout(() => { try { osc.stop(); } catch {} }, 260);
+      this.engineOsc = null;
+    },
+    updateEngine(speedFrac) {
+      if (!this.engineOsc) return;
+      const f = 80 + speedFrac * 220;
+      this.engineOsc.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.05);
+      this.engineFilt.frequency.setTargetAtTime(500 + speedFrac * 900, this.ctx.currentTime, 0.08);
+    },
+
+    // One-shot helpers
+    blip({ freq = 600, freq2 = freq, dur = 0.12, type = 'triangle', vol = 0.25 } = {}) {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq2), t + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(g); g.connect(this.master);
+      osc.start(t); osc.stop(t + dur + 0.02);
+    },
+    noiseHit(dur = 0.18) {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime;
+      const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const filt = this.ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.value = 800;
+      const g = this.ctx.createGain();
+      g.gain.value = 0.4;
+      src.connect(filt); filt.connect(g); g.connect(this.master);
+      src.start(t);
+      // Low thump alongside
+      this.blip({ freq: 90, freq2: 50, dur: 0.18, type: 'sine', vol: 0.4 });
+    },
+    playJump()   { this.blip({ freq: 480, freq2: 720, dur: 0.10, type: 'sine', vol: 0.16 }); },
+    playSnack()  { this.blip({ freq: 880, freq2: 1320, dur: 0.10, type: 'triangle', vol: 0.22 }); },
+    playFuel()   { this.blip({ freq: 660, freq2: 990, dur: 0.16, type: 'triangle', vol: 0.25 }); },
+    playHit()    { this.noiseHit(); },
+    playBiome()  {
+      // ascending arpeggio C E G
+      [523, 659, 784].forEach((f, i) => setTimeout(() =>
+        this.blip({ freq: f, freq2: f, dur: 0.18, type: 'triangle', vol: 0.18 }), i * 80));
+    },
+    playWin() {
+      [523, 659, 784, 1046].forEach((f, i) => setTimeout(() =>
+        this.blip({ freq: f, freq2: f, dur: 0.28, type: 'triangle', vol: 0.24 }), i * 140));
+    },
+    playLose() {
+      [392, 330, 277, 220].forEach((f, i) => setTimeout(() =>
+        this.blip({ freq: f, freq2: f, dur: 0.26, type: 'sawtooth', vol: 0.22 }), i * 130));
+    }
+  };
+  let audioBanner = { text: '', t: 0 };
+  function showAudioBanner(text) { audioBanner = { text, t: 1.3 }; }
+
+  // ============================================================
   // DOM REFS
   // ============================================================
   const hudEl = document.getElementById('hud');
@@ -256,6 +380,7 @@
       e.preventDefault();
     }
     state.keys.add(e.code);
+    if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
     handleKey(e.code);
   });
   window.addEventListener('keyup', (e) => {
@@ -278,7 +403,7 @@
         break;
       case SCREEN.PAUSED:
         if (isAction('pause', code) || isAction('confirm', code)) show(SCREEN.PLAYING);
-        else if (code === 'KeyQ') show(SCREEN.TITLE);
+        else if (code === 'KeyQ') { audio.stopEngine(); show(SCREEN.TITLE); }
         break;
       case SCREEN.GAMEOVER:
       case SCREEN.WIN:
@@ -335,7 +460,7 @@
         case 'scores': show(SCREEN.SCORES); break;
         case 'help': openHelp(); break;
         case 'resume': show(SCREEN.PLAYING); break;
-        case 'quit': show(SCREEN.TITLE); break;
+        case 'quit': audio.stopEngine(); show(SCREEN.TITLE); break;
         case 'continue': afterRun(); break;
         case 'return': show(SCREEN.TITLE); break;
       }
@@ -351,6 +476,7 @@
     state.speed = BASE_SPEED;
     state.fuel = FUEL_MAX;
     state.biomeIdx = 0;
+    state._lastBiomeIdx = 0;
     state.biomeAnnounced = -1;
     state.obstacles = [];
     state.collectibles = [];
@@ -366,6 +492,8 @@
     state.player.ducking = false;
     state.player.tilt = 0;
     state.player.bob = 0;
+    audio.init();
+    audio.startEngine();
     show(SCREEN.PLAYING);
   }
 
@@ -417,8 +545,8 @@
     if (!state.player.jumping) {
       state.player.vy = JUMP_V;
       state.player.jumping = true;
-      // dust on takeoff
       spawnDust(PLAYER_X + 30, GROUND_Y + 6, 8);
+      audio.playJump();
     }
   }
   function updatePlayer(dt) {
@@ -517,6 +645,7 @@
         state.flashTimer = 0.3;
         screenShake(10, 0.35);
         spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
+        audio.playHit();
       }
     }
     for (const c of state.collectibles) {
@@ -527,9 +656,11 @@
           state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
           state.score += FUEL_PICKUP_BONUS;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
+          audio.playFuel();
         } else {
           state.score += SNACK_POINTS;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
+          audio.playSnack();
         }
       }
     }
@@ -1271,7 +1402,11 @@
     if (state.biomeIdx > state._lastBiomeIdx) {
       state.score += BIOME_BONUS;
       state._lastBiomeIdx = state.biomeIdx;
+      audio.playBiome();
     }
+
+    // Engine pitch follows speed
+    audio.updateEngine((state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
 
     // Exhaust puffs while moving fast
     exhaustTimer -= dt;
@@ -1283,6 +1418,8 @@
     // Win/lose
     if (state.distance >= TRIP_TOTAL) {
       state.pendingScore = state.score;
+      audio.stopEngine();
+      audio.playWin();
       show(SCREEN.WIN);
       document.getElementById('win-score').textContent = pad(state.score, 6);
     }
@@ -1293,6 +1430,8 @@
       document.getElementById('go-summary').textContent =
         `You made it ${pct}% of the way before the tank ran dry.`;
       document.getElementById('go-score').textContent = pad(state.score, 6);
+      audio.stopEngine();
+      audio.playLose();
       show(SCREEN.GAMEOVER);
     }
   }
@@ -1328,6 +1467,26 @@
       drawBiomeBanner();
       drawDamageFlash();
     }
+    drawAudioBanner();
+  }
+
+  function drawAudioBanner() {
+    if (audioBanner.t <= 0) return;
+    const a = Math.min(1, audioBanner.t * 2);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(12,14,24,0.85)';
+    const bw = 180, bh = 36;
+    ctx.fillRect(W - bw - 20, 20, bw, bh);
+    ctx.strokeStyle = '#f5d76e';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(W - bw - 20, 20, bw, bh);
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = 'bold 13px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`♪  ${audioBanner.text}`, W - bw / 2 - 20, 38);
+    ctx.restore();
   }
 
   // ============================================================
@@ -1341,6 +1500,7 @@
       updateGame(dt);
       updateHUD();
     }
+    audioBanner.t = Math.max(0, audioBanner.t - dt);
 
     render();
     requestAnimationFrame(tick);
