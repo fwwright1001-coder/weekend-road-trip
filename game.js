@@ -1073,14 +1073,22 @@ document.querySelectorAll('[data-action]').forEach((btn) => {
 // RUN LIFECYCLE
 // ============================================================
 function startRun() {
+  const now = performance.now() / 1000;
   state.lap = 1;
-  state.lapStartTime = performance.now() / 1000;
+  state.lapStartTime = now;
   state.lastLapTime = 0;
   state.bestLapTime = Infinity;
   state.score = 0;
   state.fuel = FUEL_MAX;
   state.speed = 0;
+  state.pendingScore = 0;
+  raceStartTime = now;
+  placeCarAtStart();
   show(SCREEN.PLAYING);
+  // Snap camera to chase position so it doesn't lerp from miles away.
+  chaseAnchor.getWorldPosition(camera.position);
+  lookAnchor.getWorldPosition(tmpLook);
+  camera.lookAt(tmpLook);
 }
 
 function afterRun() {
@@ -1130,6 +1138,163 @@ function pad(n, w) {
 }
 
 // ============================================================
+// DRIVING PHYSICS (3D-4)
+// ============================================================
+const PHYS = {
+  MAX_SPEED: 82,          // m/s (~183 mph)
+  ACCEL: 24,              // m/s^2
+  BRAKE: 42,              // m/s^2
+  DRAG: 6,                // m/s^2 when no input
+  OFF_TRACK_CAP: 32,      // m/s when off-track
+  OFF_TRACK_SCRUB: 30,    // m/s^2 deceleration when off-track
+  STEER_RATE: 7,          // m/s lateral speed at full input
+  LANE_MAX: TRACK.WIDTH / 2 - 1.0, // hard wall lane
+  BOOST_MULT: 1.25,       // boost speed multiplier
+  BOOST_DRAIN: 1.8,       // extra fuel/sec while boosting
+  FUEL_DRAIN_BASE: 0.75,  // fuel/sec at any speed
+  FUEL_DRAIN_HIGH: 0.4,   // additional fuel/sec, scaled by speed/max
+  WALL_FUEL_PENALTY: 12,
+  WALL_SPEED_PENALTY: 0.45 // multiply speed by this on wall hit
+};
+
+let wallCooldown = 0;
+let raceStartTime = 0;
+
+function updateDriving(dt) {
+  // ---- Input ----
+  const wantThrottle = state.keys.has('Space') || state.keys.has('KeyW') || state.keys.has('ArrowUp');
+  const wantBrake = state.keys.has('KeyS') || state.keys.has('ArrowDown');
+  const wantLeft = state.keys.has('KeyA') || state.keys.has('ArrowLeft');
+  const wantRight = state.keys.has('KeyD') || state.keys.has('ArrowRight');
+  const wantBoost = (state.keys.has('ShiftLeft') || state.keys.has('ShiftRight')) && state.fuel > 5;
+
+  // ---- Longitudinal physics ----
+  if (wantBrake) {
+    CAR_STATE.speed -= PHYS.BRAKE * dt;
+  } else if (wantThrottle) {
+    const target = wantBoost ? PHYS.MAX_SPEED * PHYS.BOOST_MULT : PHYS.MAX_SPEED;
+    CAR_STATE.speed += PHYS.ACCEL * dt;
+    if (CAR_STATE.speed > target) CAR_STATE.speed = target;
+  } else {
+    CAR_STATE.speed -= PHYS.DRAG * dt;
+  }
+  // Off-track scrub
+  const offTrack = Math.abs(CAR_STATE.lane) > TRACK.WIDTH / 2 - 0.5;
+  if (offTrack && CAR_STATE.speed > PHYS.OFF_TRACK_CAP) {
+    CAR_STATE.speed -= PHYS.OFF_TRACK_SCRUB * dt;
+  }
+  if (CAR_STATE.speed < 0) CAR_STATE.speed = 0;
+
+  // ---- Steering (lane offset) ----
+  if (wantLeft) CAR_STATE.lane -= PHYS.STEER_RATE * dt;
+  if (wantRight) CAR_STATE.lane += PHYS.STEER_RATE * dt;
+  // Gentle auto-center bias when no input
+  if (!wantLeft && !wantRight) {
+    const center = -CAR_STATE.lane * 0.5 * dt;
+    CAR_STATE.lane += center;
+  }
+
+  // ---- Wall collision ----
+  if (Math.abs(CAR_STATE.lane) > PHYS.LANE_MAX && wallCooldown <= 0) {
+    CAR_STATE.lane = Math.sign(CAR_STATE.lane) * PHYS.LANE_MAX;
+    CAR_STATE.speed *= PHYS.WALL_SPEED_PENALTY;
+    state.fuel -= PHYS.WALL_FUEL_PENALTY;
+    wallCooldown = 0.5;
+    flashHud();
+  }
+  wallCooldown = Math.max(0, wallCooldown - dt);
+
+  // ---- Advance around the lap ----
+  const prevU = CAR_STATE.u;
+  const du = (CAR_STATE.speed * dt) / LAP_PERIMETER;
+  CAR_STATE.u = (CAR_STATE.u + du) % 1;
+
+  // Lap completion: u wrapped from near-1 back to near-0
+  if (prevU > 0.9 && CAR_STATE.u < 0.1) {
+    onLapCompleted();
+  }
+
+  // ---- Apply to transform ----
+  applyCarTransform();
+
+  // ---- Wheel spin ----
+  const wheelOmega = CAR_STATE.speed / 0.42; // rad/sec
+  car.children.forEach((child) => {
+    if (child.userData && child.userData.kind) {
+      child.rotation.x -= wheelOmega * dt;
+    }
+  });
+
+  // ---- Fuel + score ----
+  const speedFrac = CAR_STATE.speed / PHYS.MAX_SPEED;
+  const drain = PHYS.FUEL_DRAIN_BASE + PHYS.FUEL_DRAIN_HIGH * speedFrac + (wantBoost ? PHYS.BOOST_DRAIN : 0);
+  state.fuel -= drain * dt;
+  state.score += CAR_STATE.speed * dt; // 1 point per meter traveled
+
+  if (state.fuel <= 0) {
+    state.fuel = 0;
+    show(SCREEN.GAMEOVER);
+    const pct = Math.round(((state.lap - 1) / LAPS_TO_WIN) * 100);
+    document.getElementById('go-summary').textContent =
+      `You completed ${state.lap - 1} of ${LAPS_TO_WIN} laps (${pct}%).`;
+    document.getElementById('go-score').textContent = pad(state.score, 6);
+    state.pendingScore = state.score;
+  }
+}
+
+function onLapCompleted() {
+  const now = performance.now() / 1000;
+  const lapTime = now - state.lapStartTime;
+  state.lastLapTime = lapTime;
+  if (lapTime < state.bestLapTime) state.bestLapTime = lapTime;
+  state.lapStartTime = now;
+  // Bonuses
+  state.score += 1000;
+  if (lapTime < 30) state.score += Math.max(0, 800 - (lapTime - 15) * 30);
+  state.lap += 1;
+  if (state.lap > LAPS_TO_WIN) {
+    show(SCREEN.WIN);
+    const total = now - raceStartTime;
+    document.getElementById('win-summary').textContent =
+      `Finished ${LAPS_TO_WIN} laps in ${formatTime(total)}. Best lap: ${formatTime(state.bestLapTime)}.`;
+    document.getElementById('win-score').textContent = pad(state.score, 6);
+    state.pendingScore = state.score;
+  }
+}
+
+function formatTime(seconds) {
+  if (!isFinite(seconds)) return '--:--.---';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds - Math.floor(seconds)) * 1000);
+  return `${m}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+}
+
+function flashHud() {
+  const fuel = document.getElementById('hud-fuel');
+  if (!fuel) return;
+  fuel.parentElement.style.transition = 'background 0.05s';
+  fuel.parentElement.style.background = 'rgba(232, 90, 26, 0.5)';
+  setTimeout(() => {
+    fuel.parentElement.style.background = '';
+  }, 200);
+}
+
+function updateHUD() {
+  document.getElementById('hud-lap').textContent = `${Math.min(state.lap, LAPS_TO_WIN)} / ${LAPS_TO_WIN}`;
+  document.getElementById('hud-last').textContent = state.lastLapTime ? formatTime(state.lastLapTime) : '--:--.---';
+  document.getElementById('hud-best').textContent = state.bestLapTime < Infinity ? formatTime(state.bestLapTime) : '--:--.---';
+  document.getElementById('hud-score').textContent = pad(state.score, 6);
+  const mph = Math.round(CAR_STATE.speed * 2.237);
+  document.getElementById('hud-mph').textContent = String(mph);
+  const fuelPct = Math.max(0, state.fuel) / FUEL_MAX;
+  const fuelEl = document.getElementById('hud-fuel');
+  fuelEl.style.width = `${fuelPct * 100}%`;
+  fuelEl.classList.toggle('low', fuelPct < 0.25);
+  fuelEl.classList.toggle('mid', fuelPct >= 0.25 && fuelPct < 0.5);
+}
+
+// ============================================================
 // MAIN LOOP
 // ============================================================
 const TITLE_CAM_POS = new THREE.Vector3(-160, 26, 70);
@@ -1142,7 +1307,9 @@ function tick() {
   const elapsed = state.clock.getElapsedTime();
 
   if (state.screen === SCREEN.PLAYING) {
+    updateDriving(dt);
     updateChaseCamera(dt);
+    updateHUD();
   } else {
     updateTitleCamera(elapsed);
   }
@@ -1150,6 +1317,22 @@ function tick() {
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
+
+// Debug hook for headless preview (where rAF is throttled when the tab is hidden).
+// Lets tests force-step the simulation. Safe to keep in prod — it's only data.
+window.__dbg = { camera, car, state, CAR_STATE, chaseAnchor, lookAnchor, SCREEN,
+  step(dtOverride = 0.016) {
+    const dt = dtOverride;
+    if (state.screen === SCREEN.PLAYING) {
+      updateDriving(dt);
+      updateChaseCamera(dt);
+      updateHUD();
+    } else {
+      updateTitleCamera(performance.now() / 1000);
+    }
+    renderer.render(scene, camera);
+  }
+};
 
 function updateTitleCamera(t) {
   // Slow orbital drift around the establishing position for a cinematic title shot.
