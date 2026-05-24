@@ -294,15 +294,63 @@ function buildStadiumPath(path, halfX, radius) {
 
   const geom = new THREE.ShapeGeometry(outer, 96);
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x2a2a2e,
-    roughness: 0.85,
-    metalness: 0.05
+    map: makeAsphaltTexture(),
+    color: 0xffffff,
+    roughness: 0.72,
+    metalness: 0.06
   });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = 0.02;
   mesh.receiveShadow = true;
   scene.add(mesh);
+}
+
+// Procedural asphalt — speckle + worn patches + a hint of a racing groove.
+function makeAsphaltTexture() {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 512;
+  const cx = c.getContext('2d');
+  // Base asphalt color
+  cx.fillStyle = '#2c2c30';
+  cx.fillRect(0, 0, c.width, c.height);
+  // Aggregate (small lighter grains)
+  for (let i = 0; i < 18000; i++) {
+    const v = 36 + Math.floor(Math.random() * 28);
+    cx.fillStyle = `rgb(${v},${v},${v + 2})`;
+    cx.fillRect(Math.random() * c.width, Math.random() * c.height, 1, 1);
+  }
+  // Darker grains
+  for (let i = 0; i < 6000; i++) {
+    const v = 18 + Math.floor(Math.random() * 12);
+    cx.fillStyle = `rgb(${v},${v},${v + 1})`;
+    cx.fillRect(Math.random() * c.width, Math.random() * c.height, 1, 1);
+  }
+  // Worn patches (a few large faded areas)
+  for (let i = 0; i < 28; i++) {
+    const lighten = Math.random() < 0.5;
+    cx.fillStyle = lighten ? 'rgba(180,180,180,0.06)' : 'rgba(0,0,0,0.08)';
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const r = 30 + Math.random() * 90;
+    cx.beginPath();
+    cx.arc(x, y, r, 0, Math.PI * 2);
+    cx.fill();
+  }
+  // Subtle horizontal "racing line" darkening
+  cx.fillStyle = 'rgba(0,0,0,0.18)';
+  cx.fillRect(0, c.height * 0.45, c.width, c.height * 0.18);
+  cx.fillStyle = 'rgba(255,255,255,0.04)';
+  cx.fillRect(0, c.height * 0.78, c.width, c.height * 0.06); // marbles strip on outer edge
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(28, 6);
+  tex.anisotropy = 8;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 // ---- Infield grass ----
