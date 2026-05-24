@@ -107,31 +107,153 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x88b8d8);
-scene.fog = new THREE.Fog(0xa8c4d4, 200, 800);
+scene.fog = new THREE.Fog(0xd8d0b8, 380, 1400);
 
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 2000);
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 3000);
 // Establishing shot: broadcast-style — west end of front straight, slightly inside
 // the track, elevated, looking east down the straight toward turn 1.
 // Chase cam takes over in 3D-3.
 camera.position.set(-160, 26, 70);
 camera.lookAt(120, 6, 105);
 
-// Lights
-const ambient = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6);
+// Lights — softer ambient warmth, stronger directional sun
+const ambient = new THREE.HemisphereLight(0xe8dfc8, 0x3a4858, 0.7);
 scene.add(ambient);
 
-const sun = new THREE.DirectionalLight(0xfff4dc, 1.3);
-sun.position.set(80, 140, 60);
+const SUN_DIRECTION = new THREE.Vector3(0.45, 0.65, 0.35).normalize();
+const sun = new THREE.DirectionalLight(0xfff0d0, 1.6);
+sun.position.copy(SUN_DIRECTION).multiplyScalar(220);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -200;
-sun.shadow.camera.right = 200;
-sun.shadow.camera.top = 200;
-sun.shadow.camera.bottom = -200;
+sun.shadow.camera.left = -240;
+sun.shadow.camera.right = 240;
+sun.shadow.camera.top = 240;
+sun.shadow.camera.bottom = -240;
 sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 500;
+sun.shadow.camera.far = 600;
+sun.shadow.bias = -0.0005;
 scene.add(sun);
+
+// Gentle rim fill from the opposite side so shadowed surfaces still read.
+const rimLight = new THREE.DirectionalLight(0xb8c8e0, 0.25);
+rimLight.position.set(-100, 60, -80);
+scene.add(rimLight);
+
+// ============================================================
+// SKY (G-1)
+// ============================================================
+// Vertical gradient skydome with a procedural sun glow.
+const skyMaterial = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  uniforms: {
+    uTop:     { value: new THREE.Color(0x2e6cb4) },
+    uMid:     { value: new THREE.Color(0xa8c8e0) },
+    uHorizon: { value: new THREE.Color(0xf4e3c0) },
+    uGround:  { value: new THREE.Color(0xb8a888) },
+    uSunDir:  { value: SUN_DIRECTION.clone() },
+    uSunColor: { value: new THREE.Color(0xfff4dc) }
+  },
+  vertexShader: /* glsl */ `
+    varying vec3 vDir;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vDir = normalize(wp.xyz - cameraPosition);
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform vec3 uTop;
+    uniform vec3 uMid;
+    uniform vec3 uHorizon;
+    uniform vec3 uGround;
+    uniform vec3 uSunDir;
+    uniform vec3 uSunColor;
+    varying vec3 vDir;
+    void main() {
+      vec3 d = normalize(vDir);
+      float h = d.y;
+      vec3 sky;
+      if (h >= 0.0) {
+        // Above horizon: blend horizon → mid → top
+        float t1 = smoothstep(0.0, 0.18, h);
+        float t2 = smoothstep(0.18, 0.7, h);
+        sky = mix(uHorizon, uMid, t1);
+        sky = mix(sky, uTop, t2);
+      } else {
+        sky = mix(uHorizon, uGround, smoothstep(0.0, -0.25, h));
+      }
+      // Sun + haze
+      float cs = max(dot(d, normalize(uSunDir)), 0.0);
+      float disk = smoothstep(0.9985, 0.9998, cs);
+      float halo = pow(cs, 24.0) * 0.6;
+      float wash = pow(cs, 6.0) * 0.15;
+      sky = mix(sky, uSunColor, disk);
+      sky += uSunColor * halo;
+      sky += vec3(1.0, 0.85, 0.6) * wash;
+      gl_FragColor = vec4(sky, 1.0);
+    }
+  `
+});
+{
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(1800, 48, 32), skyMaterial);
+  dome.renderOrder = -1;
+  scene.add(dome);
+}
+
+// Procedural clouds — soft white blobs on flat planes at altitude.
+{
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 128;
+  const cx = c.getContext('2d');
+  const grad = cx.createRadialGradient(128, 64, 8, 128, 64, 100);
+  grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+  // Build a few overlapping ellipses to break up the circular look
+  const draw = (x, y, rx, ry, a) => {
+    cx.save();
+    cx.translate(x, y);
+    cx.scale(rx, ry);
+    cx.fillStyle = grad;
+    cx.beginPath();
+    cx.arc(0, 0, 50, 0, Math.PI * 2);
+    cx.fill();
+    cx.restore();
+  };
+  draw(110, 70, 0.9, 0.6);
+  draw(160, 60, 1.0, 0.5);
+  draw(80, 60, 0.7, 0.45);
+  draw(130, 55, 0.8, 0.4);
+  const cloudTex = new THREE.CanvasTexture(c);
+  cloudTex.colorSpace = THREE.SRGBColorSpace;
+
+  const cloudMat = new THREE.MeshBasicMaterial({
+    map: cloudTex,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    fog: false
+  });
+
+  const CLOUDS = 24;
+  for (let i = 0; i < CLOUDS; i++) {
+    const ang = (i / CLOUDS) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = 700 + Math.random() * 500;
+    const x = Math.cos(ang) * dist;
+    const z = Math.sin(ang) * dist;
+    const y = 140 + Math.random() * 180;
+    const w = 280 + Math.random() * 280;
+    const h = w * (0.32 + Math.random() * 0.2);
+    const cloud = new THREE.Mesh(new THREE.PlaneGeometry(w, h), cloudMat);
+    cloud.position.set(x, y, z);
+    // Face roughly downward so they read as bottoms of clouds from below
+    cloud.rotation.x = -Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+    cloud.rotation.z = Math.random() * Math.PI;
+    cloud.renderOrder = -1;
+    scene.add(cloud);
+  }
+}
 
 // ============================================================
 // SPEEDWAY GEOMETRY (3D-2)
@@ -1297,8 +1419,8 @@ function updateHUD() {
 // ============================================================
 // MAIN LOOP
 // ============================================================
-const TITLE_CAM_POS = new THREE.Vector3(-160, 26, 70);
-const TITLE_CAM_LOOK = new THREE.Vector3(120, 6, 105);
+const TITLE_CAM_POS = new THREE.Vector3(-160, 32, 60);
+const TITLE_CAM_LOOK = new THREE.Vector3(120, 18, 105);
 const tmpVec = new THREE.Vector3();
 const tmpLook = new THREE.Vector3();
 
