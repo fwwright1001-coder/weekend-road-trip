@@ -110,9 +110,12 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x88b8d8);
 scene.fog = new THREE.Fog(0xa8c4d4, 200, 800);
 
-const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.5, 2000);
-camera.position.set(0, 8, 20);
-camera.lookAt(0, 2, 0);
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 2000);
+// Establishing shot: broadcast-style — west end of front straight, slightly inside
+// the track, elevated, looking east down the straight toward turn 1.
+// Chase cam takes over in 3D-3.
+camera.position.set(-160, 26, 70);
+camera.lookAt(120, 6, 105);
 
 // Lights
 const ambient = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6);
@@ -130,13 +133,462 @@ sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 500;
 scene.add(sun);
 
-// Placeholder ground until 3D-2 builds the real track
-const groundGeo = new THREE.PlaneGeometry(2000, 2000);
-const groundMat = new THREE.MeshStandardMaterial({ color: 0x3a6b3a, roughness: 0.95 });
-const ground = new THREE.Mesh(groundGeo, groundMat);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
+// ============================================================
+// SPEEDWAY GEOMETRY (3D-2)
+// ============================================================
+// Scaled-down Indianapolis Motor Speedway oval.
+// Coordinates: XZ plane is the ground, Y is up.
+// Race direction is counter-clockwise viewed from above (standard for IMS).
+
+const TRACK = {
+  STRAIGHT_HALF: 200,   // half-length of straights (so each straight is 400 long)
+  TURN_RADIUS: 120,     // outer turn radius
+  WIDTH: 14,            // track surface width
+  WALL_HEIGHT: 1.4,     // SAFER barrier height
+  PIT_OFFSET: 18        // pit lane offset from front straight inner edge
+};
+const OUTER_R = TRACK.TURN_RADIUS;
+const INNER_R = TRACK.TURN_RADIUS - TRACK.WIDTH;
+
+// Helper — append a stadium-shaped path to a Shape/Path.
+function buildStadiumPath(path, halfX, radius) {
+  // Start at top-right of upper straight, go counter-clockwise (positive arc).
+  // CCW order is required for the outer outline; reverse it for holes.
+  path.moveTo(halfX, radius);
+  path.lineTo(-halfX, radius);
+  path.absarc(-halfX, 0, radius, Math.PI / 2, -Math.PI / 2, true); // left arc
+  path.lineTo(halfX, -radius);
+  path.absarc(halfX, 0, radius, -Math.PI / 2, Math.PI / 2, true);  // right arc
+  return path;
+}
+
+// ---- Track surface (asphalt ring) ----
+{
+  const outer = new THREE.Shape();
+  buildStadiumPath(outer, TRACK.STRAIGHT_HALF, OUTER_R);
+  const hole = new THREE.Path();
+  buildStadiumPath(hole, TRACK.STRAIGHT_HALF, INNER_R);
+  outer.holes.push(hole);
+
+  const geom = new THREE.ShapeGeometry(outer, 96);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x2a2a2e,
+    roughness: 0.85,
+    metalness: 0.05
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.02;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+
+// ---- Infield grass ----
+{
+  const grass = new THREE.Shape();
+  buildStadiumPath(grass, TRACK.STRAIGHT_HALF, INNER_R - 0.05);
+  const geom = new THREE.ShapeGeometry(grass, 64);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x4a8a3a, roughness: 0.98 });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.0;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+
+// ---- Surrounding ground (outside the track) ----
+{
+  const huge = new THREE.PlaneGeometry(4000, 4000);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3a6b3a, roughness: 0.98 });
+  const mesh = new THREE.Mesh(huge, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = -0.05;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+
+// ---- Yard of bricks (start/finish line) ----
+{
+  // Generate a brick-pattern canvas texture.
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 64;
+  const cx = c.getContext('2d');
+  cx.fillStyle = '#7a4a30';
+  cx.fillRect(0, 0, c.width, c.height);
+  cx.fillStyle = '#5a3318';
+  for (let row = 0; row < 4; row++) {
+    const offset = (row % 2) * 32;
+    for (let col = 0; col < 9; col++) {
+      const x = col * 32 + offset - 8;
+      const y = row * 16 + 1;
+      cx.fillRect(x, y, 28, 14);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.repeat.set(1, 1);
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  // Position: middle of front straight (front straight is at +Z direction = high Z in our coords).
+  // Actually our straights are at z = ±OUTER_R. Pick z = +OUTER_R - WIDTH/2 as front straight center.
+  const w = TRACK.WIDTH;
+  const geom = new THREE.PlaneGeometry(8, w);
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(0, 0.03, OUTER_R - w / 2);
+  scene.add(mesh);
+}
+
+// ---- White lane markers along the straights ----
+{
+  const stripeMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+  // Outer edge stripes
+  const outerLen = TRACK.STRAIGHT_HALF * 2;
+  const stripeGeo = new THREE.PlaneGeometry(outerLen, 0.3);
+  for (const sign of [1, -1]) {
+    // Outer line of straight
+    const outerLine = new THREE.Mesh(stripeGeo, stripeMat);
+    outerLine.rotation.x = -Math.PI / 2;
+    outerLine.position.set(0, 0.025, sign * OUTER_R);
+    scene.add(outerLine);
+    // Inner line of straight
+    const innerLine = new THREE.Mesh(stripeGeo, stripeMat);
+    innerLine.rotation.x = -Math.PI / 2;
+    innerLine.position.set(0, 0.025, sign * INNER_R);
+    scene.add(innerLine);
+  }
+}
+
+// ---- SAFER walls (outer track barrier) ----
+{
+  // Build a wall as a ribbon along the outer stadium path, at height TRACK.WALL_HEIGHT.
+  const pts = [];
+  const segments = 96;
+  // upper straight
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20;
+    const x = -TRACK.STRAIGHT_HALF + t * 2 * TRACK.STRAIGHT_HALF;
+    pts.push(new THREE.Vector2(x, OUTER_R));
+  }
+  // right arc
+  for (let i = 1; i <= segments / 2; i++) {
+    const a = Math.PI / 2 - (i / (segments / 2)) * Math.PI;
+    pts.push(new THREE.Vector2(TRACK.STRAIGHT_HALF + Math.cos(a) * OUTER_R, Math.sin(a) * OUTER_R));
+  }
+  // lower straight (reverse direction)
+  for (let i = 1; i <= 20; i++) {
+    const t = i / 20;
+    const x = TRACK.STRAIGHT_HALF - t * 2 * TRACK.STRAIGHT_HALF;
+    pts.push(new THREE.Vector2(x, -OUTER_R));
+  }
+  // left arc
+  for (let i = 1; i <= segments / 2; i++) {
+    const a = -Math.PI / 2 - (i / (segments / 2)) * Math.PI;
+    pts.push(new THREE.Vector2(-TRACK.STRAIGHT_HALF + Math.cos(a) * OUTER_R, Math.sin(a) * OUTER_R));
+  }
+  // close
+  pts.push(pts[0].clone());
+
+  const wallGroup = new THREE.Group();
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.8 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0xd63a3a, roughness: 0.7 });
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b.x - a.x;
+    const dz = b.y - a.y;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.01) continue;
+    const cx = (a.x + b.x) / 2;
+    const cz = (a.y + b.y) / 2;
+    const angle = Math.atan2(dz, dx);
+
+    const segGeo = new THREE.BoxGeometry(len * 1.02, TRACK.WALL_HEIGHT, 0.4);
+    const mesh = new THREE.Mesh(segGeo, wallMat);
+    mesh.position.set(cx, TRACK.WALL_HEIGHT / 2, cz);
+    mesh.rotation.y = -angle;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    wallGroup.add(mesh);
+
+    // Red top trim
+    const trimGeo = new THREE.BoxGeometry(len * 1.02, 0.15, 0.42);
+    const trimMesh = new THREE.Mesh(trimGeo, trim);
+    trimMesh.position.set(cx, TRACK.WALL_HEIGHT + 0.05, cz);
+    trimMesh.rotation.y = -angle;
+    wallGroup.add(trimMesh);
+  }
+  scene.add(wallGroup);
+}
+
+// ---- Catch fence (semi-transparent above the wall) ----
+{
+  const fenceGroup = new THREE.Group();
+  const fenceMat = new THREE.MeshBasicMaterial({
+    color: 0xaaaaaa,
+    transparent: true,
+    opacity: 0.25,
+    side: THREE.DoubleSide
+  });
+  // single ring sized slightly outside the wall
+  const fenceHeight = 6;
+  const segments = 128;
+  for (let i = 0; i < segments; i++) {
+    const t0 = i / segments;
+    const t1 = (i + 1) / segments;
+    const p0 = pointOnOuterPath(t0, 0.6);
+    const p1 = pointOnOuterPath(t1, 0.6);
+    const dx = p1.x - p0.x;
+    const dz = p1.z - p0.z;
+    const len = Math.hypot(dx, dz);
+    const cx = (p0.x + p1.x) / 2;
+    const cz = (p0.z + p1.z) / 2;
+    const angle = Math.atan2(dz, dx);
+
+    const geo = new THREE.PlaneGeometry(len, fenceHeight);
+    const m = new THREE.Mesh(geo, fenceMat);
+    m.position.set(cx, fenceHeight / 2 + TRACK.WALL_HEIGHT, cz);
+    m.rotation.y = -angle + Math.PI / 2;
+    fenceGroup.add(m);
+  }
+  scene.add(fenceGroup);
+}
+
+// ---- Grandstands (continuous tiered ribbon) ----
+{
+  const standsGroup = new THREE.Group();
+  const concrete = new THREE.MeshStandardMaterial({ color: 0xb8b8c2, roughness: 0.85 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x4a4a58, roughness: 0.6, metalness: 0.2 });
+  const crowdTex = makeCrowdTexture();
+  const crowdMat = new THREE.MeshStandardMaterial({
+    map: crowdTex,
+    roughness: 0.95,
+    side: THREE.DoubleSide
+  });
+
+  const standOffset = 12;
+  const tierDepth = 3.0;
+  const tierHeight = 1.6;
+  const tiers = 6;
+  const segments = 192; // higher count for smoothness
+
+  for (let i = 0; i < segments; i++) {
+    const t = i / segments;
+    const tNext = (i + 1) / segments;
+    const p = pointOnOuterPath(t, standOffset);
+    const pNext = pointOnOuterPath(tNext, standOffset);
+    const dx = pNext.x - p.x;
+    const dz = pNext.z - p.z;
+    const segLen = Math.hypot(dx, dz) * 1.04; // slight overlap to close gaps
+    const cx = (p.x + pNext.x) / 2;
+    const cz = (p.z + pNext.z) / 2;
+    const angle = Math.atan2(dz, dx);
+
+    // Crowd panel — single tall sloped panel using the crowd texture
+    const panelHeight = tiers * tierHeight;
+    const panelDepth = tiers * tierDepth;
+    const slope = Math.atan2(panelHeight, panelDepth);
+
+    // Concrete base (a low solid wall right against the SAFER wall)
+    const base = new THREE.Mesh(
+      new THREE.BoxGeometry(segLen, 1.2, 1.0),
+      concrete
+    );
+    base.position.set(cx, 0.6, cz);
+    base.rotation.y = -angle + Math.PI / 2;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    standsGroup.add(base);
+
+    // Crowd slope (tilted plane with crowd texture)
+    const crowdPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(segLen, Math.hypot(panelHeight, panelDepth)),
+      crowdMat
+    );
+    // position center of the slope
+    const slopeMidOut = panelDepth / 2;
+    const slopeMidY = 1.2 + panelHeight / 2;
+    const outwardX = Math.cos(angle - Math.PI / 2) * slopeMidOut;
+    const outwardZ = Math.sin(angle - Math.PI / 2) * slopeMidOut;
+    crowdPlane.position.set(cx + outwardX, slopeMidY, cz + outwardZ);
+    // rotate to face inward+up
+    crowdPlane.rotation.y = -angle + Math.PI / 2;
+    crowdPlane.rotation.x = -(Math.PI / 2 - slope);
+    crowdPlane.receiveShadow = true;
+    standsGroup.add(crowdPlane);
+
+    // Roof beam (back-edge cap)
+    const beam = new THREE.Mesh(
+      new THREE.BoxGeometry(segLen, 0.6, 1.4),
+      roofMat
+    );
+    const beamOutOut = panelDepth + 0.5;
+    beam.position.set(
+      cx + Math.cos(angle - Math.PI / 2) * beamOutOut,
+      panelHeight + 1.2,
+      cz + Math.sin(angle - Math.PI / 2) * beamOutOut
+    );
+    beam.rotation.y = -angle + Math.PI / 2;
+    beam.castShadow = true;
+    standsGroup.add(beam);
+  }
+  scene.add(standsGroup);
+}
+
+// ---- Advertising banners on the inside catch-fence ----
+{
+  const bannerColors = [0xd63a3a, 0x3a8ec8, 0xf5d76e, 0x7ee27e, 0xe85a1a, 0xffffff];
+  const segments = 64;
+  for (let i = 0; i < segments; i++) {
+    const t = i / segments;
+    if (t > 0.4 && t < 0.6) continue; // gap for pit area
+    const p = pointOnOuterPath(t, -1.5); // just inside the wall
+    const pNext = pointOnOuterPath((i + 1) / segments, -1.5);
+    const dx = pNext.x - p.x;
+    const dz = pNext.z - p.z;
+    const segLen = Math.hypot(dx, dz);
+    const cx = (p.x + pNext.x) / 2;
+    const cz = (p.z + pNext.z) / 2;
+    const angle = Math.atan2(dz, dx);
+
+    const banner = new THREE.Mesh(
+      new THREE.PlaneGeometry(segLen * 0.92, 0.7),
+      new THREE.MeshBasicMaterial({ color: bannerColors[i % bannerColors.length] })
+    );
+    banner.position.set(cx, 0.5, cz);
+    banner.rotation.y = -angle + Math.PI / 2;
+    standsGroup_addBanner(banner);
+  }
+}
+function standsGroup_addBanner(mesh) { scene.add(mesh); }
+
+// Generate a crowd texture procedurally — densely packed colored speckle pattern.
+function makeCrowdTexture() {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 256;
+  const cx = c.getContext('2d');
+  cx.fillStyle = '#7a7a8a';
+  cx.fillRect(0, 0, c.width, c.height);
+  const palette = ['#d63a3a', '#f5d76e', '#3a8ec8', '#7ee27e', '#e85a1a', '#b070d8', '#eeeeee', '#aa5533', '#f0a0a0', '#a0c8e8', '#ffcc33'];
+  // Dense crowd: ~25000 packed colored rectangles
+  for (let i = 0; i < 25000; i++) {
+    cx.fillStyle = palette[Math.floor(Math.random() * palette.length)];
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    cx.fillRect(x, y, 5, 6);
+  }
+  // Row shadows to imply seating tiers
+  cx.fillStyle = 'rgba(0,0,0,0.12)';
+  for (let r = 0; r < 12; r++) {
+    cx.fillRect(0, r * 22 + 18, c.width, 3);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// ---- Pagoda tower (signature IMS structure, inside front straight) ----
+{
+  const pagoda = new THREE.Group();
+  const tower = new THREE.Mesh(
+    new THREE.BoxGeometry(8, 36, 8),
+    new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.55, metalness: 0.1 })
+  );
+  tower.position.y = 18;
+  tower.castShadow = true;
+  pagoda.add(tower);
+
+  // Tiered glass sections
+  for (let i = 0; i < 4; i++) {
+    const tier = new THREE.Mesh(
+      new THREE.BoxGeometry(10 - i * 1.2, 1.2, 10 - i * 1.2),
+      new THREE.MeshStandardMaterial({ color: 0x3a8ec8, roughness: 0.2, metalness: 0.5 })
+    );
+    tier.position.y = 8 + i * 7;
+    pagoda.add(tier);
+  }
+
+  // Roof spike
+  const spike = new THREE.Mesh(
+    new THREE.ConeGeometry(2, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xd63a3a, roughness: 0.5 })
+  );
+  spike.position.y = 40;
+  pagoda.add(spike);
+
+  // Place on the infield, in front of start/finish
+  pagoda.position.set(0, 0, INNER_R - 20);
+  scene.add(pagoda);
+}
+
+// ---- Pit lane wall (small wall paralleling the front straight, on the infield side) ----
+{
+  const len = TRACK.STRAIGHT_HALF * 1.6;
+  const pitWall = new THREE.Mesh(
+    new THREE.BoxGeometry(len, 0.8, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0xe8e8e8 })
+  );
+  pitWall.position.set(0, 0.4, INNER_R - TRACK.PIT_OFFSET);
+  scene.add(pitWall);
+
+  // Pit boxes (numbered slots, just decorative geometry)
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x3a3a4a });
+  for (let i = -5; i <= 5; i++) {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(8, 0.05, 6), boxMat);
+    box.position.set(i * 14, 0.025, INNER_R - TRACK.PIT_OFFSET - 4);
+    scene.add(box);
+  }
+}
+
+// ============================================================
+// SCENE HELPERS
+// ============================================================
+function pointOnOuterPath(t, offset = 0) {
+  // t in [0, 1) traces the outer track CCW starting at front-straight center going right.
+  // Returns world-space (x, z) on the outer line (radius OUTER_R + offset).
+  const r = OUTER_R + offset;
+  // Track perimeter pieces:
+  // [0..A]: front straight, x: 0 → STRAIGHT_HALF
+  // [A..B]: right arc (turn 1+2)
+  // [B..C]: back straight, x: STRAIGHT_HALF → -STRAIGHT_HALF
+  // [C..D]: left arc (turn 3+4)
+  // [D..1]: front straight, x: -STRAIGHT_HALF → 0
+  const straightLen = TRACK.STRAIGHT_HALF * 2;
+  const arcLen = Math.PI * r;
+  const total = straightLen * 2 + arcLen * 2;
+  const A = TRACK.STRAIGHT_HALF / total;
+  const B = (TRACK.STRAIGHT_HALF + arcLen) / total;
+  const C = (TRACK.STRAIGHT_HALF + arcLen + straightLen) / total;
+  const D = (TRACK.STRAIGHT_HALF + arcLen + straightLen + arcLen) / total;
+
+  if (t < A) {
+    const u = t / A;
+    return { x: u * TRACK.STRAIGHT_HALF, z: r };
+  } else if (t < B) {
+    const u = (t - A) / (B - A);
+    const angle = Math.PI / 2 - u * Math.PI;
+    return { x: TRACK.STRAIGHT_HALF + Math.cos(angle) * r, z: Math.sin(angle) * r };
+  } else if (t < C) {
+    const u = (t - B) / (C - B);
+    return { x: TRACK.STRAIGHT_HALF - u * straightLen, z: -r };
+  } else if (t < D) {
+    const u = (t - C) / (D - C);
+    const angle = -Math.PI / 2 - u * Math.PI;
+    return { x: -TRACK.STRAIGHT_HALF + Math.cos(angle) * r, z: Math.sin(angle) * r };
+  } else {
+    const u = (t - D) / (1 - D);
+    return { x: -TRACK.STRAIGHT_HALF + u * TRACK.STRAIGHT_HALF, z: r };
+  }
+}
+
+function randomCrowdColor() {
+  const palette = [0xd63a3a, 0xf5d76e, 0x3a8ec8, 0x7ee27e, 0xe85a1a, 0xb070d8, 0xeeeeee, 0x222222];
+  return palette[Math.floor(Math.random() * palette.length)];
+}
 
 state.clock = new THREE.Clock();
 
