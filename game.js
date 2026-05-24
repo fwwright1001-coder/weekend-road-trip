@@ -47,6 +47,11 @@
 
   // Each biome covers a stretch of the road. Total trip = 6000 units.
   // Each biome has its own palette (sky, sun, ground) and time-of-day.
+  //
+  // === EXTENSION POINT: BIOMES ===
+  // Add a new biome by pushing another object to this array (see CONTRIBUTING.md).
+  // You'll also want to add a `case 'YOURNAME':` branch in drawMidScenery()
+  // for biome-specific scenery.
   const BIOMES = [
     {
       name: 'CITY',
@@ -316,6 +321,9 @@
       // Low thump alongside
       this.blip({ freq: 90, freq2: 50, dur: 0.18, type: 'sine', vol: 0.4 });
     },
+    // === EXTENSION POINT: AUDIO ===
+    // Add your own sound effects here. Use this.blip({freq, freq2, dur, type, vol})
+    // for tone sweeps or this.noiseHit(dur) for noise bursts.
     playJump()   { this.blip({ freq: 480, freq2: 720, dur: 0.10, type: 'sine', vol: 0.16 }); },
     playSnack()  { this.blip({ freq: 880, freq2: 1320, dur: 0.10, type: 'triangle', vol: 0.22 }); },
     playFuel()   { this.blip({ freq: 660, freq2: 990, dur: 0.16, type: 'triangle', vol: 0.25 }); },
@@ -609,8 +617,13 @@
   // ============================================================
   // OBSTACLES & COLLECTIBLES
   // ============================================================
-  // Obstacle types: 'pothole', 'cone', 'sign', 'barrier'
-  // Collectible types: 'fuel', 'snack'
+  // === EXTENSION POINT: OBSTACLE TYPES & COLLECTIBLE TYPES ===
+  // - Add a new obstacle: pick a type string, add to makeObstacle(), then
+  //   draw it in drawObstacles(). Tweak spawn() to spawn it.
+  // - Add a new collectible: same pattern via makeCollectible() +
+  //   drawCollectibles() + handle the pickup branch in updateWorld().
+  // Obstacle types so far: 'pothole', 'cone', 'sign'
+  // Collectible types so far: 'fuel', 'snack', 'pitstop'
   function spawn() {
     const r = Math.random();
     if (r < 0.5) {
@@ -855,6 +868,10 @@
   // ============================================================
   // PARTICLES
   // ============================================================
+  // === EXTENSION POINT: PARTICLES ===
+  // Spawn your own particles with state.particles.push({ x, y, vx, vy,
+  //   life, max, color, size, gravity }). The render loop fades them
+  //   automatically based on life/max.
   function spawnSparks(x, y) {
     for (let i = 0; i < 14; i++) {
       state.particles.push({
