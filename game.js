@@ -156,9 +156,17 @@
     initials: ['A', 'A', 'A'],
     initialsIdx: 0,
     pendingScore: 0,
+    // combo system
+    combo: 0,
+    comboTimer: 0,
+    comboPopupT: 0,
+    // floating "+50" texts
+    scorePopups: [],
     // scores
     scores: []
   };
+  const COMBO_WINDOW = 4.0;  // seconds since last pickup before combo resets
+  const COMBO_MAX = 5;
 
   // ============================================================
   // STORAGE
@@ -492,6 +500,10 @@
     state.player.ducking = false;
     state.player.tilt = 0;
     state.player.bob = 0;
+    state.combo = 0;
+    state.comboTimer = 0;
+    state.comboPopupT = 0;
+    state.scorePopups = [];
     audio.init();
     audio.startEngine();
     show(SCREEN.PLAYING);
@@ -645,6 +657,8 @@
         state.flashTimer = 0.3;
         screenShake(10, 0.35);
         spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
+        spawnScorePopup(o.x + o.w / 2, o.y - 10, '-' + HIT_FUEL_PENALTY + ' FUEL', '#ff6b3a');
+        state.combo = 0; // hit breaks combo
         audio.playHit();
       }
     }
@@ -652,19 +666,81 @@
       if (c.taken) continue;
       if (rectsOverlap(pb, c)) {
         c.taken = true;
+        // Bump combo
+        state.combo = Math.min(COMBO_MAX, state.combo + 1);
+        state.comboTimer = COMBO_WINDOW;
+        state.comboPopupT = 0.6;
+        const mult = state.combo;
         if (c.type === 'fuel') {
+          const pts = FUEL_PICKUP_BONUS * mult;
           state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
-          state.score += FUEL_PICKUP_BONUS;
+          state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
           audio.playFuel();
         } else {
-          state.score += SNACK_POINTS;
+          const pts = SNACK_POINTS * mult;
+          state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#f5d76e');
           audio.playSnack();
         }
       }
     }
     state.collectibles = state.collectibles.filter((c) => !c.taken);
+  }
+
+  // ============================================================
+  // SCORE POPUPS + COMBO
+  // ============================================================
+  function spawnScorePopup(x, y, text, color) {
+    state.scorePopups.push({
+      x, y, text, color,
+      vy: -1.4,
+      life: 1.0,
+      max: 1.0
+    });
+  }
+  function updateScorePopups(dt) {
+    for (const p of state.scorePopups) {
+      p.y += p.vy;
+      p.vy *= 0.96;
+      p.life -= dt;
+    }
+    state.scorePopups = state.scorePopups.filter((p) => p.life > 0);
+  }
+  function drawScorePopups() {
+    ctx.save();
+    ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const p of state.scorePopups) {
+      const a = Math.min(1, p.life * 2);
+      ctx.globalAlpha = a;
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillText(p.text, p.x + 1, p.y + 1);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.restore();
+  }
+  function drawComboHud() {
+    if (state.combo < 2 || state.screen !== SCREEN.PLAYING) return;
+    const t = Math.min(1, state.comboPopupT * 2);
+    const scale = 1 + (1 - t) * 0.4;
+    const yOff = (1 - t) * -8;
+    ctx.save();
+    ctx.translate(W / 2, 60 + yOff);
+    ctx.scale(scale, scale);
+    ctx.font = 'bold 26px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(`COMBO  x${state.combo}`, 1, 1);
+    ctx.fillStyle = '#f5d76e';
+    ctx.fillText(`COMBO  x${state.combo}`, 0, 0);
+    ctx.restore();
   }
 
   function rectsOverlap(a, b) {
@@ -1389,6 +1465,7 @@
     updatePlayer(dt);
     updateWorld(dt);
     updateParticles(dt);
+    updateScorePopups(dt);
 
     state.distance += state.speed * dt * 60;
     state.score += state.speed * dt * 8;        // small distance score
@@ -1396,6 +1473,12 @@
     state.flashTimer = Math.max(0, state.flashTimer - dt);
     state.shakeT = Math.max(0, state.shakeT - dt);
     state.bannerT = Math.max(0, (state.bannerT || 0) - dt);
+    state.comboPopupT = Math.max(0, state.comboPopupT - dt);
+    // Combo decay window
+    if (state.combo > 0) {
+      state.comboTimer -= dt;
+      if (state.comboTimer <= 0) state.combo = 0;
+    }
 
     // Biome clear bonus
     const b = currentBiome();
@@ -1459,12 +1542,14 @@
       drawObstacles();
       drawPlayer();
       drawParticles();
+      drawScorePopups();
     }
 
     ctx.restore();
 
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
       drawBiomeBanner();
+      drawComboHud();
       drawDamageFlash();
     }
     drawAudioBanner();
