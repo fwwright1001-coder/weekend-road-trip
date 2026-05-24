@@ -3,14 +3,128 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Weekend Road Trip</title>
+  <title>Indy 500 — Weekend Road Trip</title>
   <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
 </head>
 <body>
-  <div id="frame">
-    <canvas id="game" width="960" height="540"></canvas>
-    <div id="hint">Tip: click the game and press <kbd>?</kbd> for controls.</div>
+  <div id="stage">
+    <canvas id="game"></canvas>
+
+    <div id="hud" class="hidden">
+      <div class="hud-row top">
+        <div class="hud-card">
+          <div class="hud-label">LAP</div>
+          <div class="hud-value" id="hud-lap">1 / 5</div>
+        </div>
+        <div class="hud-card">
+          <div class="hud-label">LAST</div>
+          <div class="hud-value" id="hud-last">--:--.---</div>
+        </div>
+        <div class="hud-card">
+          <div class="hud-label">BEST</div>
+          <div class="hud-value" id="hud-best">--:--.---</div>
+        </div>
+        <div class="hud-card">
+          <div class="hud-label">SCORE</div>
+          <div class="hud-value" id="hud-score">000000</div>
+        </div>
+      </div>
+      <div class="hud-row bottom">
+        <div class="hud-speedo">
+          <div class="hud-mph" id="hud-mph">0</div>
+          <div class="hud-mph-label">MPH</div>
+        </div>
+        <div class="hud-fuel">
+          <div class="hud-label">FUEL</div>
+          <div class="hud-fuel-bar"><div class="hud-fuel-fill" id="hud-fuel"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="overlay">
+      <!-- Title screen -->
+      <div class="screen" id="screen-title">
+        <h1>INDY 500</h1>
+        <p class="tagline">Weekend Road Trip — Brickyard Edition</p>
+        <p class="story">
+          Marty's been heads-down shipping for 11 months. Today his PTO finally
+          cleared — and his cousin pulled some strings at IMS. Five laps around
+          the Brickyard. Don't burn the gas, don't hit the wall, don't embarrass
+          the family name.
+        </p>
+        <button class="cta" data-action="start">START ENGINE</button>
+        <div class="menu-actions">
+          <button data-action="scores">HIGH SCORES</button>
+          <button data-action="help">CONTROLS</button>
+        </div>
+      </div>
+
+      <!-- Paused -->
+      <div class="screen hidden" id="screen-paused">
+        <h2>PAUSED</h2>
+        <button class="cta" data-action="resume">RESUME</button>
+        <button data-action="quit">QUIT TO MENU</button>
+      </div>
+
+      <!-- Game Over -->
+      <div class="screen hidden" id="screen-gameover">
+        <h2 class="bad">OUT OF FUEL</h2>
+        <p id="go-summary"></p>
+        <p class="score-line">FINAL SCORE  <span id="go-score">000000</span></p>
+        <button class="cta" data-action="continue">CONTINUE</button>
+      </div>
+
+      <!-- Win -->
+      <div class="screen hidden" id="screen-win">
+        <h2 class="good">CHECKERED FLAG</h2>
+        <p id="win-summary"></p>
+        <p class="score-line">FINAL SCORE  <span id="win-score">000000</span></p>
+        <button class="cta" data-action="continue">CONTINUE</button>
+      </div>
+
+      <!-- Initials Entry -->
+      <div class="screen hidden" id="screen-initials">
+        <h2>NEW HIGH SCORE</h2>
+        <p class="score-line">SCORE  <span id="initials-score">000000</span></p>
+        <div class="initials" id="initials-display">
+          <span class="initial active">A</span>
+          <span class="initial">A</span>
+          <span class="initial">A</span>
+        </div>
+        <p class="instructions">← → SELECT  ·  ↑ ↓ CHANGE  ·  A-Z TYPE  ·  ENTER SUBMIT</p>
+      </div>
+
+      <!-- High Scores -->
+      <div class="screen hidden" id="screen-scores">
+        <h2>HIGH SCORES</h2>
+        <ol id="scores-list" class="scores-list"></ol>
+        <button class="cta" data-action="return">RETURN</button>
+      </div>
+
+      <!-- Help -->
+      <div class="screen hidden" id="screen-help">
+        <h2>CONTROLS</h2>
+        <table class="help-table">
+          <tr><td>SPACE / W / ↑</td><td>Throttle</td></tr>
+          <tr><td>S / ↓</td><td>Brake</td></tr>
+          <tr><td>A / ←</td><td>Steer left</td></tr>
+          <tr><td>D / →</td><td>Steer right</td></tr>
+          <tr><td>SHIFT</td><td>Boost (limited)</td></tr>
+          <tr><td>P / ESC</td><td>Pause</td></tr>
+          <tr><td>?</td><td>Toggle this help</td></tr>
+        </table>
+        <button class="cta" data-action="return">RETURN</button>
+      </div>
+    </div>
   </div>
-  <script src="game.js"></script>
+  <script type="module" src="game.js"></script>
 </body>
 </html>
