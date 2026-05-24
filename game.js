@@ -1518,6 +1518,39 @@
     ctx.fillStyle = `rgba(232, 90, 26, ${state.flashTimer * 1.4})`;
     ctx.fillRect(0, 0, W, H);
   }
+  function drawSpeedLines() {
+    // Only at higher speeds; intensity scales with how fast above base
+    const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+    if (frac < 0.55) return;
+    const intensity = (frac - 0.55) / 0.45; // 0..1
+    const count = Math.floor(4 + intensity * 14);
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.15 + intensity * 0.35})`;
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < count; i++) {
+      // pseudo-random but stable per-frame seed by state.distance for some flicker
+      const seed = (i * 9301 + Math.floor(state.distance * 1.4)) % 233280;
+      const r = (seed / 233280);
+      const y = 100 + r * (GROUND_Y - 120);
+      const len = 40 + r * 80 + intensity * 60;
+      const x = (Math.floor(state.distance * 4) + i * 71) % (W + 200) - 100;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + len, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawSpeedVignette() {
+    const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+    if (frac < 0.7) return;
+    const intensity = (frac - 0.7) / 0.3;
+    const g = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 540);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, `rgba(0,0,0,${0.18 * intensity})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
   function drawBiomeBanner() {
     // Show biome name briefly when entering a new biome
     const b = currentBiome();
@@ -1670,6 +1703,7 @@
       drawSemis();
       drawCollectibles();
       drawObstacles();
+      drawSpeedLines();
       drawPlayer();
       drawParticles();
       drawScorePopups();
@@ -1678,6 +1712,7 @@
     ctx.restore();
 
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      drawSpeedVignette();
       drawBiomeBanner();
       drawComboHud();
       drawDamageFlash();
