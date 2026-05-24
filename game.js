@@ -1,13 +1,22 @@
-/*
- * Weekend Road Trip — a single-player 2D side-scroller.
- * ENGR 5513 Applied AI in Engineering, Lipscomb MSAI, Summer 2026.
+/* ============================================================
+ * Weekend Road Trip — single-player 2D side-scroller
+ * ENGR 5513 Applied AI in Engineering · Lipscomb MSAI · Summer 2026
+ * Forrest Wright
  *
- * Architecture (single-file, intentional):
- *   - State machine over SCREENS (title, playing, paused, gameover, win, initials, scores)
- *   - Per-tick update + render driven by requestAnimationFrame
- *   - Procedural scenery (no image assets — all canvas primitives)
- *   - High scores persisted to localStorage under STORAGE_KEY
- */
+ * Drive Marty's convertible from the city to the coast in one tank
+ * of gas. Jump potholes, duck under stop signs, grab fuel & snacks.
+ * Don't run out of gas before you reach the ocean.
+ *
+ * Architecture (single-file, no dependencies, no build step):
+ *   - Canvas 2D rendering, requestAnimationFrame loop
+ *   - State machine: title, playing, paused, gameover, win, initials, scores, help
+ *   - HTML/CSS overlays handle all menus + HUD (crisp typography)
+ *   - 5-layer parallax + procedural per-biome scenery
+ *   - Obstacle/collectible spawner + AABB collision
+ *   - Particle pool (smoke, sparks, dust, pickup bursts)
+ *   - Screen shake on impact
+ *   - High scores persisted to localStorage with 3-char initials
+ * ============================================================ */
 
 (() => {
   'use strict';
@@ -17,26 +26,84 @@
   // ============================================================
   const W = 960;
   const H = 540;
-  const GROUND_Y = 430;
-  const GRAVITY = 0.7;
-  const JUMP_V = -13;
-  const PLAYER_X = 140;
+  const GROUND_Y = 432;      // top of road surface
+  const GRAVITY = 0.85;
+  const JUMP_V = -14.5;
+  const PLAYER_X = 170;
   const BASE_SPEED = 5;
-  const MAX_SPEED = 9;
-  const SPEED_ACCEL = 0.08;
-  const SPEED_BRAKE = 0.15;
+  const MAX_SPEED = 9.5;
+  const SPEED_ACCEL = 0.07;
+  const SPEED_BRAKE = 0.16;
+  const SPEED_DRAG = 0.018;
   const FUEL_MAX = 100;
-  const FUEL_DRAIN_PER_SEC = 1.8;
-  const HIT_FUEL_PENALTY = 18;
-  const STORAGE_KEY = 'wrt.highscores.v1';
+  const FUEL_DRAIN_PER_SEC = 1.4;
+  const HIT_FUEL_PENALTY = 16;
+  const SNACK_POINTS = 50;
+  const FUEL_PICKUP_BONUS = 25;
+  const FUEL_PICKUP_REFILL = 22;
+  const BIOME_BONUS = 500;
+  const STORAGE_KEY = 'wrt.highscores.v2';
   const MAX_SCORES = 5;
 
-  // Biome plan: each is a stretch of distance. Total trip = ~6000 distance units.
+  // Each biome covers a stretch of the road. Total trip = 6000 units.
+  // Each biome has its own palette (sky, sun, ground) and time-of-day.
   const BIOMES = [
-    { name: 'CITY',   end: 1500, sky: ['#7ec3e8', '#b8e0f0'], ground: '#3a3a3a', accent: '#5c5c70' },
-    { name: 'FOREST', end: 3000, sky: ['#9bd0a8', '#e0f0d0'], ground: '#2d4a2d', accent: '#1f3a1f' },
-    { name: 'DESERT', end: 4500, sky: ['#f5b27a', '#f9d6a0'], ground: '#c69065', accent: '#8a5a3a' },
-    { name: 'COAST',  end: 6000, sky: ['#ffb37a', '#ffd9a8'], ground: '#e8c890', accent: '#d4a96a' }
+    {
+      name: 'CITY',
+      end: 1500,
+      timeOfDay: 'dawn',
+      sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],    // sunrise → soft blue at zenith
+      sunColor: '#fff0c0',
+      sunY: 130,
+      mountainColor: '#5a5670',
+      ground: '#3a3a40',
+      grass: '#3a5a3a',
+      road: '#222226',
+      dashColor: '#ffea88',
+      fogTint: 'rgba(248, 220, 180, 0.18)'
+    },
+    {
+      name: 'FOREST',
+      end: 3000,
+      timeOfDay: 'morning',
+      sky: ['#7ec3e8', '#bce0f0', '#e8f4ec'],
+      sunColor: '#fff6d8',
+      sunY: 95,
+      mountainColor: '#3a5a3a',
+      ground: '#2d4a2d',
+      grass: '#456f3a',
+      road: '#222226',
+      dashColor: '#ffea88',
+      fogTint: 'rgba(180, 220, 200, 0.12)'
+    },
+    {
+      name: 'DESERT',
+      end: 4500,
+      timeOfDay: 'afternoon',
+      sky: ['#f5b27a', '#f9d6a0', '#cce0e8'],
+      sunColor: '#ffd680',
+      sunY: 110,
+      mountainColor: '#a67050',
+      ground: '#c69065',
+      grass: '#b88a5a',
+      road: '#3a3338',
+      dashColor: '#ffea88',
+      fogTint: 'rgba(248, 200, 140, 0.22)'
+    },
+    {
+      name: 'COAST',
+      end: 6000,
+      timeOfDay: 'sunset',
+      sky: ['#ff7e3a', '#ffb37a', '#ffd9a8'],
+      sunColor: '#ffe0a0',
+      sunY: 200,
+      mountainColor: '#a06a8a',
+      ground: '#e8c890',
+      grass: '#c8a880',
+      road: '#2a2a30',
+      dashColor: '#ffea88',
+      fogTint: 'rgba(255, 180, 120, 0.25)'
+    }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
 
@@ -56,26 +123,35 @@
   // ============================================================
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
 
   const state = {
     screen: SCREEN.TITLE,
     prevScreen: SCREEN.TITLE,
     keys: new Set(),
-    lastTime: 0,
     // gameplay
     distance: 0,
     score: 0,
-    speed: BASE_SPEED,
+    speed: 0,
     fuel: FUEL_MAX,
     biomeIdx: 0,
+    biomeAnnounced: -1,
     obstacles: [],
     collectibles: [],
     particles: [],
     spawnTimer: 0,
     flashTimer: 0,
+    shakeT: 0,
+    shakeMag: 0,
     // player
-    player: { y: GROUND_Y, vy: 0, ducking: false, jumping: false },
+    player: {
+      y: GROUND_Y,
+      vy: 0,
+      ducking: false,
+      jumping: false,
+      tilt: 0,
+      wheelAngle: 0,
+      bob: 0
+    },
     // initials entry
     initials: ['A', 'A', 'A'],
     initialsIdx: 0,
@@ -96,31 +172,69 @@
       return [];
     }
   }
-
   function saveScores(scores) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(scores.slice(0, MAX_SCORES)));
     } catch (e) {
-      // localStorage unavailable; silently skip — game still playable per session
+      // localStorage unavailable — game still works per session
     }
   }
-
   function qualifies(score) {
-    const list = state.scores;
-    if (list.length < MAX_SCORES) return true;
-    return score > list[list.length - 1].score;
+    if (state.scores.length < MAX_SCORES) return true;
+    return score > state.scores[state.scores.length - 1].score;
   }
-
   function insertScore(initials, score) {
-    const entry = {
+    state.scores.push({
       initials: initials.join(''),
       score: Math.floor(score),
       date: new Date().toISOString().slice(0, 10)
-    };
-    state.scores.push(entry);
+    });
     state.scores.sort((a, b) => b.score - a.score);
     state.scores = state.scores.slice(0, MAX_SCORES);
     saveScores(state.scores);
+  }
+
+  // ============================================================
+  // DOM REFS
+  // ============================================================
+  const hudEl = document.getElementById('hud');
+  const overlayEl = document.getElementById('overlay');
+  const screenEls = {
+    [SCREEN.TITLE]: document.getElementById('screen-title'),
+    [SCREEN.PAUSED]: document.getElementById('screen-paused'),
+    [SCREEN.GAMEOVER]: document.getElementById('screen-gameover'),
+    [SCREEN.WIN]: document.getElementById('screen-win'),
+    [SCREEN.INITIALS]: document.getElementById('screen-initials'),
+    [SCREEN.SCORES]: document.getElementById('screen-scores'),
+    [SCREEN.HELP]: document.getElementById('screen-help')
+  };
+  const hudScore = document.getElementById('hud-score');
+  const hudBiome = document.getElementById('hud-biome');
+  const hudTrip = document.getElementById('hud-trip');
+  const hudMph = document.getElementById('hud-mph');
+  const hudFuel = document.getElementById('hud-fuel');
+
+  // ============================================================
+  // SCREEN MANAGEMENT
+  // ============================================================
+  function show(target) {
+    if (state.screen !== SCREEN.HELP) state.prevScreen = state.screen;
+    state.screen = target;
+    applyScreen();
+  }
+  function applyScreen() {
+    for (const key in screenEls) screenEls[key].classList.add('hidden');
+    if (screenEls[state.screen]) screenEls[state.screen].classList.remove('hidden');
+    overlayEl.style.display = state.screen === SCREEN.PLAYING ? 'none' : 'grid';
+    hudEl.classList.toggle('hidden',
+      state.screen !== SCREEN.PLAYING && state.screen !== SCREEN.PAUSED);
+    if (state.screen === SCREEN.SCORES) renderScoresList();
+    if (state.screen === SCREEN.INITIALS) renderInitials();
+  }
+  function openHelp() {
+    state.prevScreen = state.screen;
+    state.screen = SCREEN.HELP;
+    applyScreen();
   }
 
   // ============================================================
@@ -135,68 +249,56 @@
     pause: ['KeyP', 'Escape'],
     help: ['Slash']
   };
-
-  function isAction(action, code) {
-    return KEYMAP[action] && KEYMAP[action].includes(code);
-  }
+  const isAction = (action, code) => KEYMAP[action] && KEYMAP[action].includes(code);
 
   window.addEventListener('keydown', (e) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
       e.preventDefault();
     }
     state.keys.add(e.code);
-    handleKeyPress(e.code, e.key);
+    handleKey(e.code);
   });
-
   window.addEventListener('keyup', (e) => {
     state.keys.delete(e.code);
     if (isAction('duck', e.code)) state.player.ducking = false;
   });
 
-  function handleKeyPress(code, key) {
+  function handleKey(code) {
     switch (state.screen) {
       case SCREEN.TITLE:
         if (isAction('confirm', code)) startRun();
-        else if (code === 'KeyH') showScores();
+        else if (code === 'KeyH') show(SCREEN.SCORES);
         else if (isAction('help', code)) openHelp();
         break;
       case SCREEN.PLAYING:
         if (isAction('jump', code)) tryJump();
         if (isAction('duck', code)) state.player.ducking = true;
-        if (isAction('pause', code)) state.screen = SCREEN.PAUSED;
+        if (isAction('pause', code)) show(SCREEN.PAUSED);
         if (isAction('help', code)) openHelp();
         break;
       case SCREEN.PAUSED:
-        if (isAction('pause', code) || isAction('confirm', code)) state.screen = SCREEN.PLAYING;
-        if (code === 'KeyQ') state.screen = SCREEN.TITLE;
+        if (isAction('pause', code) || isAction('confirm', code)) show(SCREEN.PLAYING);
+        else if (code === 'KeyQ') show(SCREEN.TITLE);
         break;
       case SCREEN.GAMEOVER:
       case SCREEN.WIN:
-        if (isAction('confirm', code)) {
-          if (qualifies(state.score)) startInitialsEntry();
-          else showScores();
-        }
+        if (isAction('confirm', code)) afterRun();
         break;
       case SCREEN.INITIALS:
-        handleInitialsKey(code, key);
+        handleInitialsKey(code);
         break;
       case SCREEN.SCORES:
-        if (isAction('confirm', code) || code === 'KeyR') state.screen = SCREEN.TITLE;
+        if (isAction('confirm', code) || code === 'KeyR') show(SCREEN.TITLE);
         break;
       case SCREEN.HELP:
         if (isAction('help', code) || isAction('confirm', code) || isAction('pause', code)) {
-          state.screen = state.prevScreen;
+          show(state.prevScreen);
         }
         break;
     }
   }
 
-  function openHelp() {
-    state.prevScreen = state.screen;
-    state.screen = SCREEN.HELP;
-  }
-
-  function handleInitialsKey(code, key) {
+  function handleInitialsKey(code) {
     if (code === 'ArrowLeft') {
       state.initialsIdx = (state.initialsIdx + 2) % 3;
     } else if (code === 'ArrowRight') {
@@ -207,7 +309,8 @@
       state.initials[state.initialsIdx] = cycleChar(state.initials[state.initialsIdx], -1);
     } else if (isAction('confirm', code)) {
       insertScore(state.initials, state.pendingScore);
-      showScores();
+      show(SCREEN.SCORES);
+      return;
     } else if (/^Key[A-Z]$/.test(code)) {
       state.initials[state.initialsIdx] = code.slice(3);
       state.initialsIdx = Math.min(2, state.initialsIdx + 1);
@@ -215,18 +318,32 @@
       state.initialsIdx = Math.max(0, state.initialsIdx - 1);
       state.initials[state.initialsIdx] = 'A';
     }
+    renderInitials();
+  }
+  function cycleChar(c, dir) {
+    let n = c.charCodeAt(0) + dir;
+    if (n > 90) n = 65;
+    if (n < 65) n = 90;
+    return String.fromCharCode(n);
   }
 
-  function cycleChar(c, dir) {
-    const code = c.charCodeAt(0);
-    let next = code + dir;
-    if (next > 90) next = 65;
-    if (next < 65) next = 90;
-    return String.fromCharCode(next);
-  }
+  // Button wiring (mouse parity with keyboard)
+  document.querySelectorAll('[data-action]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      switch (btn.dataset.action) {
+        case 'start': startRun(); break;
+        case 'scores': show(SCREEN.SCORES); break;
+        case 'help': openHelp(); break;
+        case 'resume': show(SCREEN.PLAYING); break;
+        case 'quit': show(SCREEN.TITLE); break;
+        case 'continue': afterRun(); break;
+        case 'return': show(SCREEN.TITLE); break;
+      }
+    });
+  });
 
   // ============================================================
-  // SCREEN TRANSITIONS
+  // RUN LIFECYCLE
   // ============================================================
   function startRun() {
     state.distance = 0;
@@ -234,27 +351,63 @@
     state.speed = BASE_SPEED;
     state.fuel = FUEL_MAX;
     state.biomeIdx = 0;
+    state.biomeAnnounced = -1;
     state.obstacles = [];
     state.collectibles = [];
     state.particles = [];
     state.spawnTimer = 0;
+    state.flashTimer = 0;
+    state.shakeT = 0;
+    state.shakeMag = 0;
+    state.pendingScore = 0;
     state.player.y = GROUND_Y;
     state.player.vy = 0;
     state.player.jumping = false;
     state.player.ducking = false;
-    state.screen = SCREEN.PLAYING;
+    state.player.tilt = 0;
+    state.player.bob = 0;
+    show(SCREEN.PLAYING);
   }
 
-  function startInitialsEntry() {
-    state.pendingScore = state.score;
-    state.initials = ['A', 'A', 'A'];
-    state.initialsIdx = 0;
-    state.screen = SCREEN.INITIALS;
+  function afterRun() {
+    if (qualifies(state.pendingScore || state.score)) {
+      state.pendingScore = state.pendingScore || state.score;
+      state.initials = ['A', 'A', 'A'];
+      state.initialsIdx = 0;
+      show(SCREEN.INITIALS);
+    } else {
+      show(SCREEN.SCORES);
+    }
   }
 
-  function showScores() {
+  function renderScoresList() {
+    const ol = document.getElementById('scores-list');
     state.scores = loadScores();
-    state.screen = SCREEN.SCORES;
+    ol.innerHTML = '';
+    if (state.scores.length === 0) {
+      ol.innerHTML = '<li class="empty"><span class="empty">NO SCORES YET — HIT THE ROAD.</span></li>';
+      return;
+    }
+    state.scores.forEach((s, i) => {
+      const li = document.createElement('li');
+      li.innerHTML =
+        `<span class="rank">${i + 1}.</span>` +
+        `<span class="player-initials">${s.initials}</span>` +
+        `<span class="score">${pad(s.score, 6)}</span>` +
+        `<span class="date">${s.date}</span>`;
+      ol.appendChild(li);
+    });
+  }
+  function renderInitials() {
+    const el = document.getElementById('initials-display');
+    el.innerHTML = state.initials.map((c, i) =>
+      `<span class="${i === state.initialsIdx ? 'initial active' : 'initial'}">${c}</span>`
+    ).join('');
+    document.getElementById('initials-score').textContent = pad(state.pendingScore, 6);
+  }
+  function pad(n, w) {
+    const s = String(Math.floor(n));
+    return s.length >= w ? s : '0'.repeat(w - s.length) + s;
   }
 
   // ============================================================
@@ -264,66 +417,78 @@
     if (!state.player.jumping) {
       state.player.vy = JUMP_V;
       state.player.jumping = true;
+      // dust on takeoff
+      spawnDust(PLAYER_X + 30, GROUND_Y + 6, 8);
     }
   }
-
   function updatePlayer(dt) {
     state.player.vy += GRAVITY;
     state.player.y += state.player.vy;
     if (state.player.y >= GROUND_Y) {
+      const wasJumping = state.player.jumping;
       state.player.y = GROUND_Y;
       state.player.vy = 0;
-      state.player.jumping = false;
+      if (wasJumping) {
+        state.player.jumping = false;
+        spawnDust(PLAYER_X + 24, GROUND_Y + 6, 14);
+      }
     }
+    // gentle body wobble — sells the suspension
+    state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
+    // wheel rotation
+    state.player.wheelAngle += state.speed * 0.18;
+    // braking/accel tilt
+    const wantAccel = state.keys.has('KeyD') || state.keys.has('ArrowRight');
+    const wantBrake = state.keys.has('KeyA') || state.keys.has('ArrowLeft');
+    const targetTilt = wantAccel ? -0.04 : wantBrake ? 0.06 : 0;
+    state.player.tilt += (targetTilt - state.player.tilt) * 0.12;
   }
-
   function playerBox() {
-    const h = state.player.ducking ? 30 : 50;
-    const w = 70;
-    const y = state.player.y - h + 10; // offset so duck flattens shape
+    const h = state.player.ducking ? 32 : 52;
+    const w = 76;
+    const y = state.player.y - h + 10;
     return { x: PLAYER_X, y, w, h };
   }
 
   // ============================================================
   // OBSTACLES & COLLECTIBLES
   // ============================================================
-  // Obstacle types: 'pothole' (low, jump), 'sign' (high, duck), 'cone' (low, jump)
-  // Collectible types: 'fuel' (+fuel), 'snack' (+score)
-
+  // Obstacle types: 'pothole', 'cone', 'sign', 'barrier'
+  // Collectible types: 'fuel', 'snack'
   function spawn() {
     const r = Math.random();
-    if (r < 0.55) {
-      const type = Math.random() < 0.5 ? 'pothole' : 'cone';
-      state.obstacles.push(makeObstacle(type));
-    } else if (r < 0.78) {
+    if (r < 0.5) {
+      const t = ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)];
+      state.obstacles.push(makeObstacle(t));
+    } else if (r < 0.72) {
       state.obstacles.push(makeObstacle('sign'));
-    } else if (r < 0.92) {
+    } else if (r < 0.90) {
       state.collectibles.push(makeCollectible('snack'));
     } else {
       state.collectibles.push(makeCollectible('fuel'));
     }
   }
-
   function makeObstacle(type) {
-    const o = { type, x: W + 40, hit: false };
-    if (type === 'pothole') { o.w = 60; o.h = 18; o.y = GROUND_Y + 2; }
-    else if (type === 'cone') { o.w = 22; o.h = 34; o.y = GROUND_Y - o.h + 8; }
-    else if (type === 'sign') { o.w = 18; o.h = 100; o.y = GROUND_Y - 130; }
+    const o = { type, x: W + 60, hit: false };
+    if (type === 'pothole') {
+      o.w = 64; o.h = 18; o.y = GROUND_Y + 2;
+    } else if (type === 'cone') {
+      o.w = 24; o.h = 36; o.y = GROUND_Y - o.h + 8;
+    } else if (type === 'sign') {
+      o.w = 18; o.h = 110; o.y = GROUND_Y - 132;
+    }
     return o;
   }
-
   function makeCollectible(type) {
-    const yHigh = GROUND_Y - 80; // forces a jump
-    const yLow = GROUND_Y - 30;
-    const o = {
+    return {
       type,
-      x: W + 40,
-      w: 26,
-      h: 26,
-      y: Math.random() < 0.4 ? yHigh : yLow,
-      taken: false
+      x: W + 60,
+      w: 28,
+      h: 28,
+      y: Math.random() < 0.4 ? GROUND_Y - 86 : GROUND_Y - 34,
+      taken: false,
+      bob: Math.random() * Math.PI * 2
     };
-    return o;
   }
 
   function updateWorld(dt) {
@@ -332,25 +497,26 @@
     state.spawnTimer -= dt;
     if (state.spawnTimer <= 0) {
       spawn();
-      state.spawnTimer = 0.7 + Math.random() * 0.9 - state.speed * 0.04;
-      if (state.spawnTimer < 0.4) state.spawnTimer = 0.4;
+      // Faster spawns as speed climbs
+      state.spawnTimer = Math.max(0.42, 0.85 + Math.random() * 0.7 - state.speed * 0.045);
     }
 
     for (const o of state.obstacles) o.x -= move;
-    for (const c of state.collectibles) c.x -= move;
+    for (const c of state.collectibles) { c.x -= move; c.bob += dt * 4; }
 
-    state.obstacles = state.obstacles.filter((o) => o.x + o.w > -20);
-    state.collectibles = state.collectibles.filter((c) => c.x + c.w > -20);
+    state.obstacles = state.obstacles.filter((o) => o.x + o.w > -30);
+    state.collectibles = state.collectibles.filter((c) => c.x + c.w > -30);
 
-    // collisions
+    // Collisions
     const pb = playerBox();
     for (const o of state.obstacles) {
       if (o.hit) continue;
       if (rectsOverlap(pb, o)) {
         o.hit = true;
         state.fuel -= HIT_FUEL_PENALTY;
-        state.flashTimer = 0.25;
-        burst(o.x + o.w / 2, o.y + o.h / 2, '#ff5252');
+        state.flashTimer = 0.3;
+        screenShake(10, 0.35);
+        spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
       }
     }
     for (const c of state.collectibles) {
@@ -358,12 +524,12 @@
       if (rectsOverlap(pb, c)) {
         c.taken = true;
         if (c.type === 'fuel') {
-          state.fuel = Math.min(FUEL_MAX, state.fuel + 25);
-          state.score += 25;
-          burst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
+          state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
+          state.score += FUEL_PICKUP_BONUS;
+          spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
         } else {
-          state.score += 50;
-          burst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
+          state.score += SNACK_POINTS;
+          spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
         }
       }
     }
@@ -374,30 +540,92 @@
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
 
-  function burst(x, y, color) {
-    for (let i = 0; i < 10; i++) {
+  // ============================================================
+  // PARTICLES
+  // ============================================================
+  function spawnSparks(x, y) {
+    for (let i = 0; i < 14; i++) {
       state.particles.push({
         x, y,
-        vx: (Math.random() - 0.5) * 6,
-        vy: (Math.random() - 0.5) * 6 - 2,
-        life: 0.5,
-        color
+        vx: (Math.random() - 0.5) * 9,
+        vy: (Math.random() - 0.5) * 7 - 3,
+        life: 0.55,
+        max: 0.55,
+        color: Math.random() < 0.5 ? '#ff7048' : '#f5d76e',
+        size: 2 + Math.random() * 2,
+        gravity: 0.4
       });
     }
   }
-
+  function spawnPickupBurst(x, y, color) {
+    for (let i = 0; i < 10; i++) {
+      state.particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 4,
+        vy: -1 - Math.random() * 4,
+        life: 0.7,
+        max: 0.7,
+        color,
+        size: 3 + Math.random() * 2,
+        gravity: 0.18
+      });
+    }
+  }
+  function spawnDust(x, y, count) {
+    for (let i = 0; i < count; i++) {
+      state.particles.push({
+        x: x + (Math.random() - 0.5) * 10,
+        y,
+        vx: -1 - Math.random() * 2,
+        vy: -0.5 - Math.random() * 1.5,
+        life: 0.5 + Math.random() * 0.3,
+        max: 0.8,
+        color: 'rgba(220,210,190,0.7)',
+        size: 3 + Math.random() * 3,
+        gravity: -0.05 // floats up a touch
+      });
+    }
+  }
+  function spawnExhaust(x, y) {
+    state.particles.push({
+      x, y,
+      vx: -2 - Math.random() * 2,
+      vy: -0.5 - Math.random() * 0.6,
+      life: 0.5,
+      max: 0.5,
+      color: 'rgba(200,200,210,0.55)',
+      size: 4 + Math.random() * 3,
+      gravity: -0.04
+    });
+  }
   function updateParticles(dt) {
     for (const p of state.particles) {
       p.x += p.vx;
       p.y += p.vy;
-      p.vy += 0.3;
+      p.vy += p.gravity;
       p.life -= dt;
     }
     state.particles = state.particles.filter((p) => p.life > 0);
   }
 
   // ============================================================
-  // RENDER — scenery
+  // SCREEN SHAKE
+  // ============================================================
+  function screenShake(mag, duration) {
+    state.shakeMag = mag;
+    state.shakeT = duration;
+  }
+  function shakeOffset() {
+    if (state.shakeT <= 0) return { x: 0, y: 0 };
+    const t = state.shakeT / 0.35;
+    return {
+      x: (Math.random() - 0.5) * state.shakeMag * t,
+      y: (Math.random() - 0.5) * state.shakeMag * t
+    };
+  }
+
+  // ============================================================
+  // RENDERING — sky / parallax / scenery
   // ============================================================
   function currentBiome() {
     for (let i = 0; i < BIOMES.length; i++) {
@@ -409,200 +637,456 @@
     state.biomeIdx = BIOMES.length - 1;
     return BIOMES[state.biomeIdx];
   }
+  function nextBiome() {
+    return BIOMES[Math.min(state.biomeIdx + 1, BIOMES.length - 1)];
+  }
+  function biomeBlend() {
+    // 0 in middle of biome, → 1 in last 200 units (transition zone)
+    const b = BIOMES[state.biomeIdx];
+    const start = state.biomeIdx === 0 ? 0 : BIOMES[state.biomeIdx - 1].end;
+    const trans = 220;
+    if (b.end - state.distance < trans) {
+      return 1 - (b.end - state.distance) / trans;
+    }
+    if (state.distance - start < trans) {
+      return (state.distance - start) / trans - 1; // negative → previous-biome blend
+    }
+    return 0;
+  }
+  function lerpColor(a, b, t) {
+    const ah = a.replace('#', '');
+    const bh = b.replace('#', '');
+    const ar = parseInt(ah.slice(0, 2), 16);
+    const ag = parseInt(ah.slice(2, 4), 16);
+    const ab = parseInt(ah.slice(4, 6), 16);
+    const br = parseInt(bh.slice(0, 2), 16);
+    const bg = parseInt(bh.slice(2, 4), 16);
+    const bb = parseInt(bh.slice(4, 6), 16);
+    const r = Math.round(ar + (br - ar) * t);
+    const g = Math.round(ag + (bg - ag) * t);
+    const bl = Math.round(ab + (bb - ab) * t);
+    return `rgb(${r}, ${g}, ${bl})`;
+  }
+  function blendedBiomeColor(prop) {
+    const b = currentBiome();
+    const blend = biomeBlend();
+    if (blend > 0) {
+      const n = nextBiome();
+      const ap = Array.isArray(b[prop]) ? b[prop] : [b[prop]];
+      const bp = Array.isArray(n[prop]) ? n[prop] : [n[prop]];
+      if (ap.length === bp.length) return ap.map((c, i) => lerpColor(c, bp[i], blend));
+      return lerpColor(ap[0], bp[0], blend);
+    }
+    return b[prop];
+  }
 
   function drawSky(biome) {
+    const sky = blendedBiomeColor('sky');
+    const colors = Array.isArray(sky) ? sky : [sky];
     const g = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
-    g.addColorStop(0, biome.sky[0]);
-    g.addColorStop(1, biome.sky[1]);
+    if (colors.length >= 3) {
+      g.addColorStop(0, colors[2]);    // zenith
+      g.addColorStop(0.55, colors[1]); // mid
+      g.addColorStop(1.0, colors[0]);  // horizon
+    } else {
+      g.addColorStop(0, colors[0]);
+      g.addColorStop(1, colors[0]);
+    }
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, GROUND_Y);
-    // sun
-    ctx.fillStyle = 'rgba(255, 240, 200, 0.8)';
+    ctx.fillRect(0, 0, W, GROUND_Y + 30);
+  }
+
+  function drawSun(biome) {
+    const sunX = W - 160 + Math.sin(state.distance * 0.0002) * 30;
+    const sunY = biome.sunY;
+    const sunR = biome.timeOfDay === 'sunset' ? 60 : 42;
+    // halo — radial fade from warm core to transparent
+    const haloG = ctx.createRadialGradient(sunX, sunY, sunR * 0.4, sunX, sunY, sunR * 3);
+    haloG.addColorStop(0, hexToRgba(biome.sunColor, 0.65));
+    haloG.addColorStop(0.45, hexToRgba(biome.sunColor, 0.18));
+    haloG.addColorStop(1, hexToRgba(biome.sunColor, 0));
+    ctx.fillStyle = haloG;
     ctx.beginPath();
-    ctx.arc(W - 140, 110, 38, 0, Math.PI * 2);
+    ctx.arc(sunX, sunY, sunR * 3, 0, Math.PI * 2);
+    ctx.fill();
+    // disk
+    ctx.fillStyle = biome.sunColor;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  function hexToRgba(hex, alpha) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function drawClouds(biome) {
+    // Cloud layer — slow parallax (0.05x)
+    const off = state.distance * 0.05;
+    ctx.fillStyle = biome.timeOfDay === 'sunset'
+      ? 'rgba(255, 200, 160, 0.75)'
+      : 'rgba(255, 255, 255, 0.78)';
+    const cloudCount = 6;
+    for (let i = 0; i < cloudCount; i++) {
+      const baseX = (i * 320 + 100 - off) % (W + 400);
+      const x = baseX < -200 ? baseX + W + 400 : baseX;
+      const y = 50 + ((i * 47) % 80);
+      drawCloud(x, y, 60 + (i * 17) % 40);
+    }
+  }
+  function drawCloud(x, y, r) {
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+    ctx.arc(x + r * 0.5, y + 6, r * 0.42, 0, Math.PI * 2);
+    ctx.arc(x - r * 0.5, y + 6, r * 0.42, 0, Math.PI * 2);
+    ctx.arc(x - r * 0.2, y - r * 0.25, r * 0.36, 0, Math.PI * 2);
+    ctx.arc(x + r * 0.3, y - r * 0.2, r * 0.32, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  function drawParallax(biome) {
-    const d = state.distance;
-    // far layer
-    drawFarLayer(biome, d * 0.15);
-    // mid layer (biome-specific)
-    drawMidLayer(biome, d * 0.4);
-    // near scenery (ground details handled below)
+  function drawFarMountains(biome) {
+    // Slow-moving mountain silhouette layer (0.12x parallax)
+    const off = state.distance * 0.12;
+    const baseY = GROUND_Y - 70;
+    ctx.fillStyle = biome.mountainColor;
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND_Y);
+    for (let i = 0; i < 8; i++) {
+      const x = ((i * 180) - (off % 180)) - 90;
+      ctx.lineTo(x, baseY);
+      ctx.lineTo(x + 90, baseY - 80 - (i % 3) * 12);
+      ctx.lineTo(x + 180, baseY);
+    }
+    ctx.lineTo(W, GROUND_Y);
+    ctx.closePath();
+    ctx.fill();
   }
 
-  function drawFarLayer(biome, off) {
-    ctx.fillStyle = shade(biome.accent, -0.25);
-    const baseY = GROUND_Y - 80;
-    for (let i = 0; i < 6; i++) {
-      const x = ((i * 220) - (off % 220)) - 110;
-      ctx.beginPath();
-      ctx.moveTo(x, baseY);
-      ctx.lineTo(x + 110, baseY - 90);
-      ctx.lineTo(x + 220, baseY);
-      ctx.closePath();
-      ctx.fill();
+  function drawMidScenery(biome) {
+    // Biome-specific mid layer (0.32x parallax)
+    const off = state.distance * 0.32;
+    switch (biome.name) {
+      case 'CITY':  drawCitySkyline(off); break;
+      case 'FOREST': drawForestMid(off); break;
+      case 'DESERT': drawDesertMid(off); break;
+      case 'COAST':  drawCoastMid(off); break;
     }
   }
-
-  function drawMidLayer(biome, off) {
-    if (biome.name === 'CITY') drawCityMid(off);
-    else if (biome.name === 'FOREST') drawForestMid(off);
-    else if (biome.name === 'DESERT') drawDesertMid(off);
-    else drawCoastMid(off);
-  }
-
-  function drawCityMid(off) {
+  function drawCitySkyline(off) {
     const baseY = GROUND_Y;
-    for (let i = 0; i < 10; i++) {
-      const x = ((i * 130) - (off % 130)) - 60;
-      const h = 80 + ((i * 53) % 90);
-      ctx.fillStyle = '#3d3d52';
-      ctx.fillRect(x, baseY - h, 110, h);
+    for (let i = 0; i < 12; i++) {
+      const x = ((i * 120) - (off % 120)) - 60;
+      const h = 90 + ((i * 47) % 110);
+      ctx.fillStyle = '#2e2e44';
+      ctx.fillRect(x, baseY - h, 100, h);
+      // antenna
+      if (i % 3 === 1) {
+        ctx.fillStyle = '#1a1a26';
+        ctx.fillRect(x + 48, baseY - h - 12, 4, 12);
+      }
       // windows
       ctx.fillStyle = '#f5d76e';
       for (let row = 0; row < Math.floor(h / 20) - 1; row++) {
         for (let col = 0; col < 4; col++) {
           if (((i + row + col) % 3) !== 0) continue;
-          ctx.fillRect(x + 12 + col * 22, baseY - h + 12 + row * 20, 12, 10);
+          ctx.fillRect(x + 12 + col * 22, baseY - h + 12 + row * 20, 10, 10);
         }
       }
     }
   }
-
   function drawForestMid(off) {
     const baseY = GROUND_Y;
-    for (let i = 0; i < 16; i++) {
-      const x = ((i * 80) - (off % 80)) - 40;
-      const h = 110 + ((i * 37) % 40);
+    // Background pine wall
+    for (let i = 0; i < 22; i++) {
+      const x = ((i * 60) - (off % 60)) - 30;
+      const h = 110 + ((i * 37) % 50);
+      // trunk
       ctx.fillStyle = '#5a3a1f';
-      ctx.fillRect(x + 18, baseY - 30, 8, 30);
+      ctx.fillRect(x + 14, baseY - 28, 6, 28);
+      // pine cone
       ctx.fillStyle = '#1f3a1f';
       ctx.beginPath();
-      ctx.moveTo(x, baseY - 30);
-      ctx.lineTo(x + 22, baseY - 30 - h);
-      ctx.lineTo(x + 44, baseY - 30);
+      ctx.moveTo(x - 4, baseY - 28);
+      ctx.lineTo(x + 17, baseY - 28 - h);
+      ctx.lineTo(x + 38, baseY - 28);
+      ctx.closePath();
+      ctx.fill();
+      // secondary tier
+      ctx.beginPath();
+      ctx.moveTo(x, baseY - 28 - h * 0.4);
+      ctx.lineTo(x + 17, baseY - 28 - h * 0.95);
+      ctx.lineTo(x + 34, baseY - 28 - h * 0.4);
       ctx.closePath();
       ctx.fill();
     }
   }
-
   function drawDesertMid(off) {
     const baseY = GROUND_Y;
+    // distant mesas
+    for (let i = 0; i < 6; i++) {
+      const x = ((i * 220) - (off % 220)) - 110;
+      const w = 160;
+      const h = 80 + (i % 3) * 14;
+      ctx.fillStyle = '#8a5530';
+      ctx.beginPath();
+      ctx.moveTo(x, baseY);
+      ctx.lineTo(x + 16, baseY - h);
+      ctx.lineTo(x + w - 16, baseY - h);
+      ctx.lineTo(x + w, baseY);
+      ctx.closePath();
+      ctx.fill();
+      // top streak
+      ctx.fillStyle = '#a96a3a';
+      ctx.fillRect(x + 16, baseY - h, w - 32, 6);
+    }
+    // saguaros
     for (let i = 0; i < 14; i++) {
-      const x = ((i * 100) - (off % 100)) - 50;
-      const h = 70 + ((i * 41) % 40);
+      const x = ((i * 110) - (off % 110)) - 55;
+      const h = 60 + ((i * 41) % 30);
       ctx.fillStyle = '#5a8a3a';
-      // cactus trunk
-      ctx.fillRect(x + 16, baseY - h, 14, h);
-      // arms
-      ctx.fillRect(x + 8, baseY - h + 18, 8, 24);
-      ctx.fillRect(x + 30, baseY - h + 28, 8, 20);
-      ctx.fillRect(x + 8, baseY - h + 18, 4, 4); // arm cap (decorative)
+      ctx.fillRect(x + 14, baseY - h, 12, h);
+      ctx.fillRect(x + 6, baseY - h + 14, 8, 22);
+      ctx.fillRect(x + 26, baseY - h + 22, 8, 18);
     }
   }
-
   function drawCoastMid(off) {
     const baseY = GROUND_Y;
-    // ocean strip on the horizon
-    ctx.fillStyle = '#3a8ec8';
-    ctx.fillRect(0, baseY - 60, W, 30);
-    // sun reflection
-    ctx.fillStyle = 'rgba(255, 200, 130, 0.5)';
-    ctx.fillRect(W - 200, baseY - 50, 60, 8);
+    // ocean strip
+    const oceanG = ctx.createLinearGradient(0, baseY - 60, 0, baseY - 20);
+    oceanG.addColorStop(0, '#3a7eb4');
+    oceanG.addColorStop(1, '#1f4e7a');
+    ctx.fillStyle = oceanG;
+    ctx.fillRect(0, baseY - 60, W, 40);
+    // sun reflection on water
+    ctx.fillStyle = 'rgba(255, 210, 140, 0.55)';
+    ctx.fillRect(W - 240, baseY - 50, 80, 6);
+    ctx.fillRect(W - 220, baseY - 40, 60, 4);
     // palms
     for (let i = 0; i < 8; i++) {
       const x = ((i * 160) - (off % 160)) - 80;
-      ctx.fillStyle = '#5a3a1f';
-      ctx.fillRect(x + 20, baseY - 90, 6, 90);
+      const h = 100 + (i % 3) * 18;
+      // trunk
+      ctx.fillStyle = '#6a4a2a';
+      ctx.beginPath();
+      ctx.moveTo(x + 22, baseY);
+      ctx.quadraticCurveTo(x + 30, baseY - h * 0.5, x + 24, baseY - h);
+      ctx.lineTo(x + 28, baseY - h);
+      ctx.quadraticCurveTo(x + 36, baseY - h * 0.5, x + 28, baseY);
+      ctx.closePath();
+      ctx.fill();
+      // fronds
       ctx.fillStyle = '#2d7a3a';
+      drawPalmFronds(x + 26, baseY - h);
+    }
+  }
+  function drawPalmFronds(cx, cy) {
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + 0.2;
+      const len = 32;
       ctx.beginPath();
-      ctx.ellipse(x + 23, baseY - 90, 40, 12, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(x + 23, baseY - 80, 30, 8, 0.4, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(cx, cy);
+      ctx.quadraticCurveTo(
+        cx + Math.cos(ang) * len * 0.5,
+        cy + Math.sin(ang) * len * 0.5 - 6,
+        cx + Math.cos(ang) * len,
+        cy + Math.sin(ang) * len
+      );
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = '#2d7a3a';
+      ctx.stroke();
+    }
+  }
+
+  function drawNearScenery(biome) {
+    // Near-ground details — fast parallax (0.7x)
+    const off = state.distance * 0.7;
+    ctx.fillStyle = biome.grass;
+    // Grass tufts
+    for (let i = 0; i < 28; i++) {
+      const x = ((i * 50) - (off % 50)) - 25;
+      const tuftY = GROUND_Y - 4;
+      ctx.fillRect(x, tuftY, 3, 4);
+      ctx.fillRect(x + 6, tuftY - 1, 3, 5);
+      ctx.fillRect(x + 12, tuftY, 3, 4);
+    }
+    // Biome-specific roadside detail
+    if (biome.name === 'CITY') {
+      ctx.fillStyle = '#2a2a2e';
+      for (let i = 0; i < 6; i++) {
+        const x = ((i * 240) - (off % 240)) - 120;
+        // streetlight pole + lamp
+        ctx.fillRect(x, GROUND_Y - 60, 4, 60);
+        ctx.fillRect(x - 12, GROUND_Y - 64, 20, 4);
+        ctx.fillStyle = '#f5d76e';
+        ctx.fillRect(x - 10, GROUND_Y - 60, 6, 4);
+        ctx.fillStyle = '#2a2a2e';
+      }
+    } else if (biome.name === 'DESERT') {
+      // small bushes
+      ctx.fillStyle = '#7a8a3a';
+      for (let i = 0; i < 12; i++) {
+        const x = ((i * 110) - (off % 110)) - 55;
+        ctx.beginPath();
+        ctx.arc(x, GROUND_Y + 2, 6, 0, Math.PI * 2);
+        ctx.arc(x + 8, GROUND_Y + 2, 5, 0, Math.PI * 2);
+        ctx.arc(x - 8, GROUND_Y + 2, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
   function drawGround(biome) {
-    ctx.fillStyle = biome.ground;
+    // Grass strip
+    ctx.fillStyle = biome.grass;
     ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
-    // road
-    ctx.fillStyle = '#222';
-    ctx.fillRect(0, GROUND_Y + 10, W, 60);
-    // dashed center line, scrolls with distance
-    ctx.fillStyle = '#f5d76e';
-    const dashW = 50;
-    const gap = 30;
+    // Road
+    ctx.fillStyle = biome.road;
+    ctx.fillRect(0, GROUND_Y + 12, W, 62);
+    // Road edge highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(0, GROUND_Y + 12, W, 2);
+    ctx.fillRect(0, GROUND_Y + 72, W, 2);
+    // Dashed center line, scrolls with distance
+    ctx.fillStyle = biome.dashColor;
+    const dashW = 52;
+    const gap = 32;
     const cycle = dashW + gap;
-    const offset = state.distance % cycle;
-    for (let x = -offset; x < W; x += cycle) {
-      ctx.fillRect(x, GROUND_Y + 38, dashW, 5);
+    const dashOff = state.distance % cycle;
+    for (let x = -dashOff; x < W; x += cycle) {
+      ctx.fillRect(x, GROUND_Y + 40, dashW, 5);
     }
+    // Subtle vignette on the road shoulder
+    const vg = ctx.createLinearGradient(0, GROUND_Y + 12, 0, GROUND_Y + 74);
+    vg.addColorStop(0, 'rgba(0,0,0,0.0)');
+    vg.addColorStop(0.5, 'rgba(0,0,0,0.0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, GROUND_Y + 12, W, 62);
   }
 
   // ============================================================
-  // RENDER — entities
+  // RENDERING — entities
   // ============================================================
   function drawPlayer() {
-    const { y, ducking, jumping } = state.player;
-    const w = 70;
-    const h = ducking ? 30 : 50;
+    const { y, ducking, jumping, tilt, wheelAngle, bob } = state.player;
+    const w = 80;
+    const h = ducking ? 36 : 56;
     const x = PLAYER_X;
-    const top = y - h + 10;
+    const cy = y - h / 2 + 8 + bob;
 
-    // shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    // Shadow (scaled with jump height)
+    ctx.save();
+    const shadowScale = jumping ? 0.55 + Math.min(1, (GROUND_Y - y) / 80) * 0.45 : 1;
+    ctx.fillStyle = `rgba(0,0,0,${0.35 * shadowScale})`;
     ctx.beginPath();
-    const shadowScale = jumping ? 0.6 : 1.0;
-    ctx.ellipse(x + w / 2, GROUND_Y + 15, w / 2 * shadowScale, 6 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + w / 2, GROUND_Y + 18, (w / 2) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
 
-    // car body (red convertible)
-    ctx.fillStyle = '#d63a3a';
-    ctx.fillRect(x, top + 12, w, h - 12);
-    // hood slope
-    ctx.beginPath();
-    ctx.moveTo(x + w - 14, top + 12);
-    ctx.lineTo(x + w, top + 12);
-    ctx.lineTo(x + w, top + 20);
-    ctx.closePath();
+    ctx.save();
+    ctx.translate(x + w / 2, cy);
+    ctx.rotate(tilt);
+    ctx.translate(-(x + w / 2), -cy);
+
+    const top = cy - h / 2;
+    // Car body (red convertible)
+    ctx.fillStyle = '#c81e28';
+    roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
     ctx.fill();
-    // windshield
-    ctx.fillStyle = '#7ec0e8';
-    ctx.fillRect(x + 18, top, 32, 14);
-    // driver (head)
-    ctx.fillStyle = '#f4c891';
-    ctx.beginPath();
-    ctx.arc(x + 34, top + 6, 5, 0, Math.PI * 2);
+    // Hood gradient highlight
+    const bodyG = ctx.createLinearGradient(x, top, x, top + h);
+    bodyG.addColorStop(0, 'rgba(255,255,255,0.25)');
+    bodyG.addColorStop(0.4, 'rgba(255,255,255,0)');
+    ctx.fillStyle = bodyG;
+    roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
     ctx.fill();
-    // wheels
+    // White stripe accent
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x + 12, top + 24, w - 24, 4);
+    // Windshield
+    ctx.fillStyle = '#9cd0f0';
+    roundRect(ctx, x + 18, top + 2, 34, 14, 3);
+    ctx.fill();
+    // Windshield frame
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Driver (head + visible torso)
+    if (!ducking) {
+      ctx.fillStyle = '#f4c891';
+      ctx.beginPath();
+      ctx.arc(x + 36, top + 8, 5, 0, Math.PI * 2);
+      ctx.fill();
+      // Sunglasses
+      ctx.fillStyle = '#111';
+      ctx.fillRect(x + 32, top + 6, 9, 2);
+    } else {
+      // ducked driver — just hair
+      ctx.fillStyle = '#3a2a1a';
+      ctx.fillRect(x + 32, top + 12, 12, 4);
+    }
+    // Headlights
+    ctx.fillStyle = '#fff8a8';
+    ctx.fillRect(x + w - 8, top + 22, 6, 6);
+    ctx.fillStyle = 'rgba(255,248,168,0.25)';
+    ctx.fillRect(x + w - 4, top + 24, 18, 3);
+    // Door line
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + 44, top + 14);
+    ctx.lineTo(x + 44, top + h - 4);
+    ctx.stroke();
+
+    // Wheels (with rotation indicator)
+    const wheelY = top + h - 2;
+    drawWheel(x + 18, wheelY, wheelAngle);
+    drawWheel(x + w - 18, wheelY, wheelAngle);
+
+    ctx.restore();
+  }
+  function drawWheel(cx, cy, angle) {
     ctx.fillStyle = '#111';
-    const wheelY = top + h - 4;
     ctx.beginPath();
-    ctx.arc(x + 14, wheelY, 9, 0, Math.PI * 2);
-    ctx.arc(x + w - 14, wheelY, 9, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 10, 0, Math.PI * 2);
     ctx.fill();
+    // Rim
     ctx.fillStyle = '#999';
     ctx.beginPath();
-    ctx.arc(x + 14, wheelY, 3, 0, Math.PI * 2);
-    ctx.arc(x + w - 14, wheelY, 3, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
     ctx.fill();
-    // headlight
-    ctx.fillStyle = '#fff8a8';
-    ctx.fillRect(x + w - 6, top + 18, 6, 6);
+    // Spoke indicator (shows rotation)
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#666';
+    ctx.fillRect(-1, -8, 2, 16);
+    ctx.fillRect(-8, -1, 16, 2);
+    ctx.restore();
   }
 
   function drawObstacles() {
     for (const o of state.obstacles) {
       if (o.type === 'pothole') {
-        ctx.fillStyle = '#1a1a1a';
+        // Pothole shadow ring
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(o.x + o.w / 2, o.y + o.h / 2 + 2, o.w / 2 + 2, o.h / 2 + 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#0a0a0e';
         ctx.beginPath();
         ctx.ellipse(o.x + o.w / 2, o.y + o.h / 2, o.w / 2, o.h / 2, 0, 0, Math.PI * 2);
         ctx.fill();
       } else if (o.type === 'cone') {
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.beginPath();
+        ctx.ellipse(o.x + o.w / 2, o.y + o.h, o.w / 2 + 3, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Cone body
         ctx.fillStyle = '#e85a1a';
         ctx.beginPath();
         ctx.moveTo(o.x + o.w / 2, o.y);
@@ -610,399 +1094,264 @@
         ctx.lineTo(o.x - 4, o.y + o.h);
         ctx.closePath();
         ctx.fill();
+        // White stripes
         ctx.fillStyle = '#fff';
-        ctx.fillRect(o.x - 2, o.y + o.h - 12, o.w + 4, 4);
+        ctx.fillRect(o.x - 2, o.y + o.h - 14, o.w + 4, 4);
+        ctx.fillRect(o.x + 2, o.y + o.h - 22, o.w - 4, 3);
       } else if (o.type === 'sign') {
-        // post
-        ctx.fillStyle = '#666';
-        ctx.fillRect(o.x + o.w / 2 - 2, o.y + 40, 4, o.h - 40);
-        // sign
+        // Post
+        ctx.fillStyle = '#6a6a70';
+        ctx.fillRect(o.x + o.w / 2 - 2, o.y + 44, 4, o.h - 44);
+        // Sign panel
         ctx.fillStyle = '#d63a3a';
-        ctx.fillRect(o.x - 30, o.y, 78, 40);
+        roundRect(ctx, o.x - 30, o.y, 78, 42, 4);
+        ctx.fill();
+        // Border ring
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        roundRect(ctx, o.x - 28, o.y + 2, 74, 38, 3);
+        ctx.stroke();
+        // STOP text
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 14px "Courier New", monospace';
+        ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('STOP', o.x + 9, o.y + 20);
+        ctx.fillText('STOP', o.x + 9, o.y + 21);
       }
     }
   }
-
   function drawCollectibles() {
     for (const c of state.collectibles) {
+      const float = Math.sin(c.bob) * 4;
+      const y = c.y + float;
       if (c.type === 'fuel') {
-        ctx.fillStyle = '#3a7a3a';
-        ctx.fillRect(c.x, c.y, c.w, c.h);
+        // Glow
+        ctx.fillStyle = 'rgba(126, 226, 126, 0.35)';
+        ctx.beginPath();
+        ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+        // Can
+        ctx.fillStyle = '#2a7a2a';
+        roundRect(ctx, c.x, y, c.w, c.h, 3);
+        ctx.fill();
+        ctx.strokeStyle = '#7ee27e';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // F letter
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 14px "Courier New", monospace';
+        ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('F', c.x + c.w / 2, c.y + c.h / 2);
+        ctx.fillText('F', c.x + c.w / 2, y + c.h / 2);
       } else {
+        // Snack — yellow coin
+        ctx.fillStyle = 'rgba(245, 215, 110, 0.4)';
+        ctx.beginPath();
+        ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w * 0.65, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = '#f5d76e';
-        ctx.fillRect(c.x, c.y, c.w, c.h);
+        ctx.beginPath();
+        ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#a86a1a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
         ctx.fillStyle = '#a86a1a';
-        ctx.font = 'bold 14px "Courier New", monospace';
+        ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('$', c.x + c.w / 2, c.y + c.h / 2);
+        ctx.fillText('$', c.x + c.w / 2, y + c.h / 2);
       }
     }
   }
-
   function drawParticles() {
     for (const p of state.particles) {
-      ctx.globalAlpha = Math.max(0, p.life / 0.5);
+      const a = Math.max(0, p.life / p.max);
+      ctx.globalAlpha = a;
       ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     }
     ctx.globalAlpha = 1;
   }
 
   // ============================================================
-  // RENDER — HUD
+  // RENDERING — overlays drawn on canvas
   // ============================================================
-  function drawHUD(biome) {
-    ctx.font = 'bold 16px "Courier New", monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, W, 36);
-    ctx.fillStyle = '#f5d76e';
-    ctx.fillText(`SCORE  ${pad(state.score, 6)}`, 16, 10);
-    ctx.fillText(`BIOME  ${biome.name}`, 220, 10);
-    ctx.fillText(`MPH    ${Math.round(state.speed * 12)}`, 420, 10);
-
-    // fuel bar
-    ctx.fillStyle = '#e8e8e8';
-    ctx.fillText('FUEL', 580, 10);
-    ctx.strokeStyle = '#e8e8e8';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(630, 10, 160, 16);
-    const f = Math.max(0, state.fuel) / FUEL_MAX;
-    ctx.fillStyle = f > 0.5 ? '#7ee27e' : f > 0.25 ? '#f5d76e' : '#e85a1a';
-    ctx.fillRect(632, 12, 156 * f, 12);
-
-    // trip progress bar
-    ctx.fillStyle = '#e8e8e8';
-    ctx.fillText('TRIP', 810, 10);
-    ctx.strokeRect(810, 28, 140, 6);
-    ctx.fillStyle = '#7ec3e8';
-    ctx.fillRect(812, 30, 136 * Math.min(1, state.distance / TRIP_TOTAL), 2);
-
-    if (state.flashTimer > 0) {
-      ctx.fillStyle = `rgba(255, 80, 80, ${state.flashTimer * 1.5})`;
-      ctx.fillRect(0, 0, W, H);
+  function drawDamageFlash() {
+    if (state.flashTimer <= 0) return;
+    ctx.fillStyle = `rgba(232, 90, 26, ${state.flashTimer * 1.4})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+  function drawBiomeBanner() {
+    // Show biome name briefly when entering a new biome
+    const b = currentBiome();
+    if (state.biomeAnnounced !== state.biomeIdx) {
+      state.biomeAnnounced = state.biomeIdx;
+      state.bannerT = 2.2;
+      state.bannerText = b.name;
     }
-  }
-
-  function pad(n, w) {
-    const s = String(Math.floor(n));
-    return s.length >= w ? s : '0'.repeat(w - s.length) + s;
-  }
-
-  // ============================================================
-  // RENDER — overlay screens
-  // ============================================================
-  function drawTitle() {
-    drawSceneIdle();
-    drawCenterPanel(560, 360);
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 44px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('WEEKEND ROAD TRIP', W / 2, 130);
-
-    ctx.fillStyle = '#e8e8e8';
-    ctx.font = '16px "Courier New", monospace';
-    wrap(
-      "Marty's been heads-down shipping for 11 months. Today his PTO finally cleared. " +
-      "Pile in the convertible, dodge potholes and stop signs, grab fuel & roadside snacks — " +
-      "city, forest, desert, coast. Don't run out of gas before the ocean.",
-      W / 2, 190, 460, 20
-    );
-
-    ctx.fillStyle = '#7ec3e8';
-    ctx.font = 'bold 18px "Courier New", monospace';
-    ctx.fillText('PRESS  ENTER  TO  DRIVE', W / 2, 360);
-    ctx.fillStyle = '#a0a0c0';
-    ctx.font = '14px "Courier New", monospace';
-    ctx.fillText('[H] HIGH SCORES    [?] CONTROLS', W / 2, 395);
-  }
-
-  function drawPaused() {
-    drawCenterPanel(420, 220);
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 36px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('PAUSED', W / 2, 230);
-    ctx.fillStyle = '#e8e8e8';
-    ctx.font = '16px "Courier New", monospace';
-    ctx.fillText('PRESS P OR ENTER TO RESUME', W / 2, 290);
-    ctx.fillStyle = '#a0a0c0';
-    ctx.fillText('[Q] QUIT TO TITLE', W / 2, 320);
-  }
-
-  function drawGameOver() {
-    drawCenterPanel(480, 280);
-    ctx.fillStyle = '#e85a1a';
-    ctx.font = 'bold 36px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('OUT OF GAS', W / 2, 200);
-    ctx.fillStyle = '#e8e8e8';
-    ctx.font = '16px "Courier New", monospace';
-    const pct = Math.round((state.distance / TRIP_TOTAL) * 100);
-    ctx.fillText(`You made it ${pct}% of the way.`, W / 2, 250);
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 22px "Courier New", monospace';
-    ctx.fillText(`FINAL SCORE  ${pad(state.score, 6)}`, W / 2, 290);
-    ctx.fillStyle = '#7ec3e8';
-    ctx.font = 'bold 16px "Courier New", monospace';
-    ctx.fillText('PRESS ENTER TO CONTINUE', W / 2, 340);
-  }
-
-  function drawWin() {
-    drawCenterPanel(560, 320);
-    ctx.fillStyle = '#7ee27e';
-    ctx.font = 'bold 36px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('YOU MADE IT!', W / 2, 180);
-    ctx.fillStyle = '#e8e8e8';
-    ctx.font = '16px "Courier New", monospace';
-    wrap(
-      "Marty pulls the convertible up to the boardwalk. The Atlantic stretches out in front of him. " +
-      "He turns off the engine, takes a breath, and reaches for his sunglasses.",
-      W / 2, 220, 460, 20
-    );
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 22px "Courier New", monospace';
-    ctx.fillText(`FINAL SCORE  ${pad(state.score, 6)}`, W / 2, 320);
-    ctx.fillStyle = '#7ec3e8';
-    ctx.font = 'bold 16px "Courier New", monospace';
-    ctx.fillText('PRESS ENTER TO CONTINUE', W / 2, 360);
-  }
-
-  function drawInitials() {
-    drawCenterPanel(480, 280);
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 28px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('NEW HIGH SCORE!', W / 2, 180);
-
-    ctx.fillStyle = '#e8e8e8';
-    ctx.font = '14px "Courier New", monospace';
-    ctx.fillText(`SCORE  ${pad(state.pendingScore, 6)}`, W / 2, 215);
-    ctx.fillText('ENTER YOUR INITIALS', W / 2, 240);
-
-    ctx.font = 'bold 56px "Courier New", monospace';
-    for (let i = 0; i < 3; i++) {
-      const x = W / 2 - 80 + i * 80;
-      ctx.fillStyle = i === state.initialsIdx ? '#f5d76e' : '#e8e8e8';
-      ctx.fillText(state.initials[i], x, 310);
-      if (i === state.initialsIdx) {
-        ctx.fillStyle = '#f5d76e';
-        ctx.fillRect(x - 22, 350, 44, 3);
-      }
-    }
-    ctx.fillStyle = '#a0a0c0';
-    ctx.font = '12px "Courier New", monospace';
-    ctx.fillText('← → SELECT    ↑ ↓ CHANGE    A-Z TYPE    ENTER SUBMIT', W / 2, 380);
-  }
-
-  function drawScores() {
-    drawCenterPanel(560, 420);
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 32px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('HIGH SCORES', W / 2, 120);
-
-    ctx.font = '18px "Courier New", monospace';
-    if (state.scores.length === 0) {
-      ctx.fillStyle = '#a0a0c0';
-      ctx.fillText('NO SCORES YET — HIT THE ROAD.', W / 2, 240);
-    } else {
-      ctx.textAlign = 'left';
-      for (let i = 0; i < state.scores.length; i++) {
-        const s = state.scores[i];
-        const y = 180 + i * 36;
-        ctx.fillStyle = '#e8e8e8';
-        ctx.fillText(`${i + 1}.`, W / 2 - 180, y);
-        ctx.fillStyle = '#f5d76e';
-        ctx.fillText(s.initials, W / 2 - 130, y);
-        ctx.fillStyle = '#e8e8e8';
-        ctx.fillText(pad(s.score, 6), W / 2 - 30, y);
-        ctx.fillStyle = '#a0a0c0';
-        ctx.font = '14px "Courier New", monospace';
-        ctx.fillText(s.date, W / 2 + 90, y);
-        ctx.font = '18px "Courier New", monospace';
-      }
-    }
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#7ec3e8';
-    ctx.font = 'bold 16px "Courier New", monospace';
-    ctx.fillText('PRESS ENTER TO RETURN', W / 2, 440);
-  }
-
-  function drawHelp() {
-    drawCenterPanel(520, 400);
-    ctx.fillStyle = '#f5d76e';
-    ctx.font = 'bold 28px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('CONTROLS', W / 2, 110);
-
-    const lines = [
-      ['SPACE / W / ↑', 'JUMP'],
-      ['S / ↓', 'DUCK (slide under signs)'],
-      ['D / →', 'ACCELERATE'],
-      ['A / ←', 'BRAKE'],
-      ['P / ESC', 'PAUSE'],
-      ['ENTER', 'CONFIRM / CONTINUE'],
-      ['?', 'TOGGLE THIS HELP']
-    ];
-    ctx.font = '14px "Courier New", monospace';
-    ctx.textAlign = 'left';
-    for (let i = 0; i < lines.length; i++) {
-      const y = 160 + i * 28;
+    if (state.bannerT > 0) {
+      const a = Math.min(1, state.bannerT * 1.5);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(12, 14, 24, 0.7)';
+      const bw = 280, bh = 50;
+      ctx.fillRect((W - bw) / 2, 110, bw, bh);
+      ctx.strokeStyle = '#f5d76e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect((W - bw) / 2, 110, bw, bh);
       ctx.fillStyle = '#f5d76e';
-      ctx.fillText(lines[i][0], W / 2 - 160, y);
-      ctx.fillStyle = '#e8e8e8';
-      ctx.fillText(lines[i][1], W / 2 - 20, y);
+      ctx.font = 'bold 22px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`▸  ${state.bannerText}  ◂`, W / 2, 135);
+      ctx.restore();
     }
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#7ec3e8';
-    ctx.fillText('PRESS ? OR ENTER TO CLOSE', W / 2, 410);
   }
 
-  function drawCenterPanel(w, h) {
-    const x = (W - w) / 2;
-    const y = (H - h) / 2;
-    ctx.fillStyle = 'rgba(20, 20, 40, 0.92)';
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#f5d76e';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, w, h);
-  }
-
-  function drawSceneIdle() {
-    const biome = BIOMES[0];
-    drawSky(biome);
-    drawFarLayer(biome, 0);
-    drawCityMid(0);
-    drawGround(biome);
-  }
-
-  function wrap(text, x, y, maxWidth, lineHeight) {
-    const words = text.split(' ');
-    let line = '';
-    for (const word of words) {
-      const test = line + word + ' ';
-      if (ctx.measureText(test).width > maxWidth && line.length > 0) {
-        ctx.fillText(line.trim(), x, y);
-        line = word + ' ';
-        y += lineHeight;
-      } else {
-        line = test;
-      }
-    }
-    ctx.fillText(line.trim(), x, y);
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
   }
 
   // ============================================================
-  // UTIL
+  // HUD
   // ============================================================
-  function shade(hex, amt) {
-    // amt in [-1, 1]; -1 = black, +1 = white
-    const c = hex.replace('#', '');
-    let r = parseInt(c.slice(0, 2), 16);
-    let g = parseInt(c.slice(2, 4), 16);
-    let b = parseInt(c.slice(4, 6), 16);
-    if (amt < 0) {
-      r = Math.round(r * (1 + amt));
-      g = Math.round(g * (1 + amt));
-      b = Math.round(b * (1 + amt));
-    } else {
-      r = Math.round(r + (255 - r) * amt);
-      g = Math.round(g + (255 - g) * amt);
-      b = Math.round(b + (255 - b) * amt);
-    }
-    return `rgb(${r}, ${g}, ${b})`;
+  function updateHUD() {
+    const b = currentBiome();
+    hudScore.textContent = pad(state.score, 6);
+    hudBiome.textContent = b.name;
+    hudMph.textContent = String(Math.round(state.speed * 12));
+    const fuelFrac = Math.max(0, state.fuel) / FUEL_MAX;
+    hudFuel.style.width = `${fuelFrac * 100}%`;
+    hudFuel.classList.toggle('low', fuelFrac < 0.25);
+    hudFuel.classList.toggle('mid', fuelFrac >= 0.25 && fuelFrac < 0.5);
+    hudTrip.style.width = `${Math.min(100, (state.distance / TRIP_TOTAL) * 100)}%`;
   }
 
   // ============================================================
-  // MAIN LOOP
+  // GAMEPLAY UPDATE
   // ============================================================
-  function tick(time) {
-    const dt = Math.min(0.05, (time - state.lastTime) / 1000 || 0);
-    state.lastTime = time;
+  let lastFrame = 0;
+  let exhaustTimer = 0;
 
-    if (state.screen === SCREEN.PLAYING) {
-      // input affecting speed
-      if (state.keys.has('KeyD') || state.keys.has('ArrowRight')) {
-        state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
-      } else if (state.keys.has('KeyA') || state.keys.has('ArrowLeft')) {
-        state.speed = Math.max(BASE_SPEED * 0.6, state.speed - SPEED_BRAKE);
-      } else {
-        // drift toward base speed
-        if (state.speed > BASE_SPEED) state.speed -= 0.02;
-        else if (state.speed < BASE_SPEED) state.speed += 0.02;
-      }
-
-      updatePlayer(dt);
-      updateWorld(dt);
-      updateParticles(dt);
-
-      state.distance += state.speed * dt * 60;
-      state.score += state.speed * dt * 10;
-      state.fuel -= FUEL_DRAIN_PER_SEC * dt;
-      state.flashTimer = Math.max(0, state.flashTimer - dt);
-
-      // win
-      if (state.distance >= TRIP_TOTAL) {
-        state.screen = SCREEN.WIN;
-      }
-      // lose
-      if (state.fuel <= 0) {
-        state.fuel = 0;
-        state.screen = SCREEN.GAMEOVER;
-      }
+  function updateGame(dt) {
+    // Speed input
+    const wantAccel = state.keys.has('KeyD') || state.keys.has('ArrowRight');
+    const wantBrake = state.keys.has('KeyA') || state.keys.has('ArrowLeft');
+    if (wantAccel) state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
+    else if (wantBrake) state.speed = Math.max(BASE_SPEED * 0.5, state.speed - SPEED_BRAKE);
+    else {
+      // drift toward base speed
+      if (state.speed > BASE_SPEED) state.speed -= SPEED_DRAG;
+      else if (state.speed < BASE_SPEED) state.speed += SPEED_DRAG;
     }
 
-    render();
-    requestAnimationFrame(tick);
+    updatePlayer(dt);
+    updateWorld(dt);
+    updateParticles(dt);
+
+    state.distance += state.speed * dt * 60;
+    state.score += state.speed * dt * 8;        // small distance score
+    state.fuel -= FUEL_DRAIN_PER_SEC * dt;
+    state.flashTimer = Math.max(0, state.flashTimer - dt);
+    state.shakeT = Math.max(0, state.shakeT - dt);
+    state.bannerT = Math.max(0, (state.bannerT || 0) - dt);
+
+    // Biome clear bonus
+    const b = currentBiome();
+    if (state.biomeIdx > state._lastBiomeIdx) {
+      state.score += BIOME_BONUS;
+      state._lastBiomeIdx = state.biomeIdx;
+    }
+
+    // Exhaust puffs while moving fast
+    exhaustTimer -= dt;
+    if (exhaustTimer <= 0 && state.speed > BASE_SPEED + 0.5) {
+      spawnExhaust(PLAYER_X + 4, state.player.y - 10);
+      exhaustTimer = 0.07;
+    }
+
+    // Win/lose
+    if (state.distance >= TRIP_TOTAL) {
+      state.pendingScore = state.score;
+      show(SCREEN.WIN);
+      document.getElementById('win-score').textContent = pad(state.score, 6);
+    }
+    if (state.fuel <= 0) {
+      state.fuel = 0;
+      state.pendingScore = state.score;
+      const pct = Math.round((state.distance / TRIP_TOTAL) * 100);
+      document.getElementById('go-summary').textContent =
+        `You made it ${pct}% of the way before the tank ran dry.`;
+      document.getElementById('go-score').textContent = pad(state.score, 6);
+      show(SCREEN.GAMEOVER);
+    }
   }
 
+  // ============================================================
+  // RENDER FRAME
+  // ============================================================
   function render() {
-    const biome = currentBiome();
-    drawSky(biome);
-    drawParallax(biome);
-    drawGround(biome);
+    const b = currentBiome();
+    const shake = state.screen === SCREEN.PLAYING ? shakeOffset() : { x: 0, y: 0 };
+
+    ctx.save();
+    ctx.translate(shake.x, shake.y);
+
+    drawSky(b);
+    drawSun(b);
+    drawClouds(b);
+    drawFarMountains(b);
+    drawMidScenery(b);
+    drawGround(b);
+    drawNearScenery(b);
 
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
       drawCollectibles();
       drawObstacles();
       drawPlayer();
       drawParticles();
-      drawHUD(biome);
     }
 
-    if (state.screen === SCREEN.TITLE) drawTitle();
-    else if (state.screen === SCREEN.PAUSED) drawPaused();
-    else if (state.screen === SCREEN.GAMEOVER) drawGameOver();
-    else if (state.screen === SCREEN.WIN) drawWin();
-    else if (state.screen === SCREEN.INITIALS) drawInitials();
-    else if (state.screen === SCREEN.SCORES) drawScores();
-    else if (state.screen === SCREEN.HELP) drawHelp();
+    ctx.restore();
+
+    if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      drawBiomeBanner();
+      drawDamageFlash();
+    }
+  }
+
+  // ============================================================
+  // MAIN LOOP
+  // ============================================================
+  function tick(time) {
+    const dt = Math.min(0.05, (time - lastFrame) / 1000 || 0);
+    lastFrame = time;
+
+    if (state.screen === SCREEN.PLAYING) {
+      updateGame(dt);
+      updateHUD();
+    }
+
+    render();
+    requestAnimationFrame(tick);
   }
 
   // ============================================================
   // BOOT
   // ============================================================
+  state._lastBiomeIdx = 0;
+  state.bannerT = 0;
   state.scores = loadScores();
+  applyScreen();
   requestAnimationFrame(tick);
 })();

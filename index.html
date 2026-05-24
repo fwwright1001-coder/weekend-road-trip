@@ -7,9 +7,127 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="frame">
-    <canvas id="game" width="960" height="540"></canvas>
-    <div id="hint">Tip: click the game and press <kbd>?</kbd> for controls.</div>
+  <div id="stage">
+    <div id="frame">
+      <canvas id="game" width="960" height="540"></canvas>
+
+      <!-- ============ HUD overlay (visible during gameplay) ============ -->
+      <div id="hud" class="hidden">
+        <div class="hud-row top">
+          <div class="hud-card">
+            <div class="hud-label">SCORE</div>
+            <div class="hud-value" id="hud-score">000000</div>
+          </div>
+          <div class="hud-card">
+            <div class="hud-label">BIOME</div>
+            <div class="hud-value" id="hud-biome">CITY</div>
+          </div>
+          <div class="hud-card hud-trip">
+            <div class="hud-label">TRIP</div>
+            <div class="hud-trip-bar"><div class="hud-trip-fill" id="hud-trip"></div></div>
+          </div>
+        </div>
+        <div class="hud-row bottom">
+          <div class="hud-speedo">
+            <div class="hud-mph" id="hud-mph">0</div>
+            <div class="hud-mph-label">MPH</div>
+          </div>
+          <div class="hud-fuel">
+            <div class="hud-label">FUEL</div>
+            <div class="hud-fuel-bar"><div class="hud-fuel-fill" id="hud-fuel"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ Menu overlay (all non-gameplay screens) ============ -->
+      <div id="overlay">
+        <!-- Title -->
+        <div class="screen" id="screen-title">
+          <h1>WEEKEND ROAD TRIP</h1>
+          <p class="tagline">An American Vacation — Coast to Coast</p>
+          <p class="story">
+            Marty's been heads-down shipping for eleven months. Today his PTO
+            finally cleared. He throws a duffel in the convertible, points it
+            west, and drives. Dodge the potholes, duck the low signs, grab
+            roadside snacks. Don't run out of gas before you reach the ocean.
+          </p>
+          <button class="cta" data-action="start">START THE TRIP</button>
+          <div class="menu-actions">
+            <button data-action="scores">HIGH SCORES</button>
+            <button data-action="help">CONTROLS</button>
+          </div>
+          <p class="credit">ENGR 5513 — Forrest Wright — Lipscomb MSAI 2026</p>
+        </div>
+
+        <!-- Paused -->
+        <div class="screen hidden" id="screen-paused">
+          <h2>PAUSED</h2>
+          <p class="muted">The road can wait. Take a breath.</p>
+          <button class="cta" data-action="resume">RESUME</button>
+          <button data-action="quit">QUIT TO MENU</button>
+        </div>
+
+        <!-- Game Over -->
+        <div class="screen hidden" id="screen-gameover">
+          <h2 class="bad">OUT OF GAS</h2>
+          <p id="go-summary" class="story-short"></p>
+          <p class="score-line">FINAL SCORE  <span id="go-score">000000</span></p>
+          <button class="cta" data-action="continue">CONTINUE</button>
+        </div>
+
+        <!-- Win -->
+        <div class="screen hidden" id="screen-win">
+          <h2 class="good">YOU MADE IT!</h2>
+          <p class="story-short">
+            Marty rolls the convertible up to the boardwalk. The Atlantic
+            stretches out in front of him. He turns off the engine, takes a
+            breath, and reaches for his sunglasses.
+          </p>
+          <p class="score-line">FINAL SCORE  <span id="win-score">000000</span></p>
+          <button class="cta" data-action="continue">CONTINUE</button>
+        </div>
+
+        <!-- Initials Entry -->
+        <div class="screen hidden" id="screen-initials">
+          <h2>NEW HIGH SCORE!</h2>
+          <p class="score-line">SCORE  <span id="initials-score">000000</span></p>
+          <p class="muted">Enter your initials:</p>
+          <div class="initials" id="initials-display">
+            <span class="initial active">A</span>
+            <span class="initial">A</span>
+            <span class="initial">A</span>
+          </div>
+          <p class="instructions">← → SELECT  ·  ↑ ↓ CHANGE  ·  A–Z TYPE  ·  ENTER SUBMIT</p>
+        </div>
+
+        <!-- High Scores -->
+        <div class="screen hidden" id="screen-scores">
+          <h2>HIGH SCORES</h2>
+          <ol id="scores-list" class="scores-list"></ol>
+          <button class="cta" data-action="return">RETURN</button>
+        </div>
+
+        <!-- Help -->
+        <div class="screen hidden" id="screen-help">
+          <h2>CONTROLS</h2>
+          <table class="help-table">
+            <tr><td>SPACE / W / ↑</td><td>Jump over potholes &amp; cones</td></tr>
+            <tr><td>S / ↓</td><td>Duck under low signs</td></tr>
+            <tr><td>D / →</td><td>Accelerate</td></tr>
+            <tr><td>A / ←</td><td>Brake</td></tr>
+            <tr><td>P / ESC</td><td>Pause</td></tr>
+            <tr><td>?</td><td>Toggle this help</td></tr>
+            <tr><td>ENTER</td><td>Confirm on menus</td></tr>
+          </table>
+          <p class="muted">
+            Grab green <strong style="color:#7ee27e">F</strong> cans for fuel,
+            yellow <strong style="color:#f5d76e">$</strong> snacks for points.
+            Reach the coast before your tank runs dry.
+          </p>
+          <button class="cta" data-action="return">RETURN</button>
+        </div>
+      </div>
+    </div>
   </div>
   <script src="game.js"></script>
 </body>
