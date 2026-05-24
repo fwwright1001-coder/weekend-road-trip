@@ -1345,13 +1345,20 @@ function updateTitleCamera(t) {
   camera.lookAt(TITLE_CAM_LOOK);
 }
 
+const CHASE_FOV_BASE = 55;
+const CHASE_FOV_BOOST = 12; // additional FOV at top speed for sense of speed
+
 function updateChaseCamera(dt) {
-  // Smoothly interpolate to the chase anchor's world position.
   chaseAnchor.getWorldPosition(tmpVec);
   lookAnchor.getWorldPosition(tmpLook);
-  // Lerp toward target — feels less twitchy than snapping
   camera.position.lerp(tmpVec, 1 - Math.pow(0.001, dt));
   camera.lookAt(tmpLook);
+
+  // Speed-driven FOV: subtle widening pushes the world past the camera at speed.
+  const speedFrac = Math.min(1, CAR_STATE.speed / PHYS.MAX_SPEED);
+  const targetFov = CHASE_FOV_BASE + speedFrac * CHASE_FOV_BOOST;
+  camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 4);
+  camera.updateProjectionMatrix();
 }
 
 // Window resize
