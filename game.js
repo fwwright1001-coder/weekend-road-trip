@@ -47,12 +47,17 @@
 
   // Each biome covers a stretch of the road. Total trip = 6000 units.
   // Each biome has its own palette (sky, sun, ground) and time-of-day.
+  //
+  // === EXTENSION POINT: BIOMES ===
+  // Add a new biome by pushing another object to this array (see CONTRIBUTING.md).
+  // You'll also want to add a `case 'YOURNAME':` branch in drawMidScenery()
+  // for biome-specific scenery.
   const BIOMES = [
     {
       name: 'CITY',
       end: 1500,
       timeOfDay: 'dawn',
-      sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],    // sunrise → soft blue at zenith
+      sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],
       sunColor: '#fff0c0',
       sunY: 130,
       mountainColor: '#5a5670',
@@ -60,7 +65,8 @@
       grass: '#3a5a3a',
       road: '#222226',
       dashColor: '#ffea88',
-      fogTint: 'rgba(248, 220, 180, 0.18)'
+      spawnMul: 1.0,    // baseline difficulty
+      birdColor: '#222222'
     },
     {
       name: 'FOREST',
@@ -74,7 +80,8 @@
       grass: '#456f3a',
       road: '#222226',
       dashColor: '#ffea88',
-      fogTint: 'rgba(180, 220, 200, 0.12)'
+      spawnMul: 0.85,   // slightly tighter
+      birdColor: '#5a3a1f'  // hawks
     },
     {
       name: 'DESERT',
@@ -88,7 +95,8 @@
       grass: '#b88a5a',
       road: '#3a3338',
       dashColor: '#ffea88',
-      fogTint: 'rgba(248, 200, 140, 0.22)'
+      spawnMul: 0.7,    // tougher
+      birdColor: '#3a3a3a'  // vultures
     },
     {
       name: 'COAST',
@@ -102,7 +110,8 @@
       grass: '#c8a880',
       road: '#2a2a30',
       dashColor: '#ffea88',
-      fogTint: 'rgba(255, 180, 120, 0.25)'
+      spawnMul: 0.55,   // final-biome chaos
+      birdColor: '#eeeeee'  // seagulls
     }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
@@ -156,9 +165,24 @@
     initials: ['A', 'A', 'A'],
     initialsIdx: 0,
     pendingScore: 0,
+    // combo system
+    combo: 0,
+    comboTimer: 0,
+    comboPopupT: 0,
+    // floating "+50" texts
+    scorePopups: [],
+    // mini-events
+    semis: [],
+    nextSemiAt: 8,
+    nextPitstopAt: 1400,
+    // birds
+    birds: [],
+    nextBirdAt: 3,
     // scores
     scores: []
   };
+  const COMBO_WINDOW = 4.0;  // seconds since last pickup before combo resets
+  const COMBO_MAX = 5;
 
   // ============================================================
   // STORAGE
@@ -193,6 +217,133 @@
     state.scores = state.scores.slice(0, MAX_SCORES);
     saveScores(state.scores);
   }
+
+  // ============================================================
+  // AUDIO (Web Audio API — procedural, no assets)
+  // ============================================================
+  // Engine drone is a continuous oscillator pitched by speed.
+  // Pickups, hits, jumps, win/lose are short envelope shapes.
+  // Muted state persists across reloads.
+  const MUTE_KEY = 'wrt.muted.v1';
+  const audio = {
+    ctx: null,
+    master: null,
+    engineOsc: null,
+    engineGain: null,
+    muted: (() => { try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; } })(),
+
+    init() {
+      if (this.ctx) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 0.35;
+        this.master.connect(this.ctx.destination);
+      } catch (e) { /* no audio available — game still works */ }
+    },
+    setMuted(m) {
+      this.muted = m;
+      try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch {}
+      if (this.master) this.master.gain.value = m ? 0 : 0.35;
+    },
+    toggle() {
+      this.setMuted(!this.muted);
+      showAudioBanner(this.muted ? 'SOUND OFF' : 'SOUND ON');
+    },
+
+    // Continuous engine — pitch tied to speed
+    startEngine() {
+      if (!this.ctx || this.engineOsc) return;
+      const ctx = this.ctx;
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 90;
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.value = 600;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0;
+      osc.connect(filt); filt.connect(gain); gain.connect(this.master);
+      osc.start();
+      this.engineOsc = osc;
+      this.engineGain = gain;
+      this.engineFilt = filt;
+      // ramp in
+      gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.4);
+    },
+    stopEngine() {
+      if (!this.engineOsc) return;
+      const ctx = this.ctx;
+      this.engineGain.gain.cancelScheduledValues(ctx.currentTime);
+      this.engineGain.gain.linearRampToValueAtTime(0.0, ctx.currentTime + 0.2);
+      const osc = this.engineOsc;
+      setTimeout(() => { try { osc.stop(); } catch {} }, 260);
+      this.engineOsc = null;
+    },
+    updateEngine(speedFrac) {
+      if (!this.engineOsc) return;
+      const f = 80 + speedFrac * 220;
+      this.engineOsc.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.05);
+      this.engineFilt.frequency.setTargetAtTime(500 + speedFrac * 900, this.ctx.currentTime, 0.08);
+    },
+
+    // One-shot helpers
+    blip({ freq = 600, freq2 = freq, dur = 0.12, type = 'triangle', vol = 0.25 } = {}) {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq2), t + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(g); g.connect(this.master);
+      osc.start(t); osc.stop(t + dur + 0.02);
+    },
+    noiseHit(dur = 0.18) {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime;
+      const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const filt = this.ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.value = 800;
+      const g = this.ctx.createGain();
+      g.gain.value = 0.4;
+      src.connect(filt); filt.connect(g); g.connect(this.master);
+      src.start(t);
+      // Low thump alongside
+      this.blip({ freq: 90, freq2: 50, dur: 0.18, type: 'sine', vol: 0.4 });
+    },
+    // === EXTENSION POINT: AUDIO ===
+    // Add your own sound effects here. Use this.blip({freq, freq2, dur, type, vol})
+    // for tone sweeps or this.noiseHit(dur) for noise bursts.
+    playJump()   { this.blip({ freq: 480, freq2: 720, dur: 0.10, type: 'sine', vol: 0.16 }); },
+    playSnack()  { this.blip({ freq: 880, freq2: 1320, dur: 0.10, type: 'triangle', vol: 0.22 }); },
+    playFuel()   { this.blip({ freq: 660, freq2: 990, dur: 0.16, type: 'triangle', vol: 0.25 }); },
+    playHit()    { this.noiseHit(); },
+    playBiome()  {
+      // ascending arpeggio C E G
+      [523, 659, 784].forEach((f, i) => setTimeout(() =>
+        this.blip({ freq: f, freq2: f, dur: 0.18, type: 'triangle', vol: 0.18 }), i * 80));
+    },
+    playWin() {
+      [523, 659, 784, 1046].forEach((f, i) => setTimeout(() =>
+        this.blip({ freq: f, freq2: f, dur: 0.28, type: 'triangle', vol: 0.24 }), i * 140));
+    },
+    playLose() {
+      [392, 330, 277, 220].forEach((f, i) => setTimeout(() =>
+        this.blip({ freq: f, freq2: f, dur: 0.26, type: 'sawtooth', vol: 0.22 }), i * 130));
+    }
+  };
+  let audioBanner = { text: '', t: 0 };
+  function showAudioBanner(text) { audioBanner = { text, t: 1.3 }; }
 
   // ============================================================
   // DOM REFS
@@ -256,6 +407,7 @@
       e.preventDefault();
     }
     state.keys.add(e.code);
+    if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
     handleKey(e.code);
   });
   window.addEventListener('keyup', (e) => {
@@ -278,7 +430,7 @@
         break;
       case SCREEN.PAUSED:
         if (isAction('pause', code) || isAction('confirm', code)) show(SCREEN.PLAYING);
-        else if (code === 'KeyQ') show(SCREEN.TITLE);
+        else if (code === 'KeyQ') { audio.stopEngine(); show(SCREEN.TITLE); }
         break;
       case SCREEN.GAMEOVER:
       case SCREEN.WIN:
@@ -335,7 +487,7 @@
         case 'scores': show(SCREEN.SCORES); break;
         case 'help': openHelp(); break;
         case 'resume': show(SCREEN.PLAYING); break;
-        case 'quit': show(SCREEN.TITLE); break;
+        case 'quit': audio.stopEngine(); show(SCREEN.TITLE); break;
         case 'continue': afterRun(); break;
         case 'return': show(SCREEN.TITLE); break;
       }
@@ -351,6 +503,7 @@
     state.speed = BASE_SPEED;
     state.fuel = FUEL_MAX;
     state.biomeIdx = 0;
+    state._lastBiomeIdx = 0;
     state.biomeAnnounced = -1;
     state.obstacles = [];
     state.collectibles = [];
@@ -366,6 +519,17 @@
     state.player.ducking = false;
     state.player.tilt = 0;
     state.player.bob = 0;
+    state.combo = 0;
+    state.comboTimer = 0;
+    state.comboPopupT = 0;
+    state.scorePopups = [];
+    state.semis = [];
+    state.nextSemiAt = 8;
+    state.nextPitstopAt = 1400;
+    state.birds = [];
+    state.nextBirdAt = 3;
+    audio.init();
+    audio.startEngine();
     show(SCREEN.PLAYING);
   }
 
@@ -417,8 +581,8 @@
     if (!state.player.jumping) {
       state.player.vy = JUMP_V;
       state.player.jumping = true;
-      // dust on takeoff
       spawnDust(PLAYER_X + 30, GROUND_Y + 6, 8);
+      audio.playJump();
     }
   }
   function updatePlayer(dt) {
@@ -453,8 +617,13 @@
   // ============================================================
   // OBSTACLES & COLLECTIBLES
   // ============================================================
-  // Obstacle types: 'pothole', 'cone', 'sign', 'barrier'
-  // Collectible types: 'fuel', 'snack'
+  // === EXTENSION POINT: OBSTACLE TYPES & COLLECTIBLE TYPES ===
+  // - Add a new obstacle: pick a type string, add to makeObstacle(), then
+  //   draw it in drawObstacles(). Tweak spawn() to spawn it.
+  // - Add a new collectible: same pattern via makeCollectible() +
+  //   drawCollectibles() + handle the pickup branch in updateWorld().
+  // Obstacle types so far: 'pothole', 'cone', 'sign'
+  // Collectible types so far: 'fuel', 'snack', 'pitstop'
   function spawn() {
     const r = Math.random();
     if (r < 0.5) {
@@ -490,6 +659,62 @@
       bob: Math.random() * Math.PI * 2
     };
   }
+  function makePitstop() {
+    return {
+      type: 'pitstop',
+      x: W + 100,
+      w: 64,
+      h: 56,
+      y: GROUND_Y - 56,
+      taken: false,
+      bob: 0
+    };
+  }
+  function makeSemi() {
+    return {
+      x: W + 240,
+      vx: -(state.speed + 2 + Math.random() * 1.5),
+      color: ['#3a6aa8', '#aa3a3a', '#3aa83a', '#d4a040'][Math.floor(Math.random() * 4)]
+    };
+  }
+  function spawnBirdFlock() {
+    const fromLeft = Math.random() < 0.5;
+    const size = 3 + Math.floor(Math.random() * 4); // 3..6 birds
+    const baseY = 60 + Math.random() * 120;
+    const speed = 0.6 + Math.random() * 0.8;
+    const color = currentBiome().birdColor || '#222';
+    const vx = fromLeft ? speed : -speed;
+    for (let i = 0; i < size; i++) {
+      state.birds.push({
+        x: fromLeft ? -20 - i * 18 : W + 20 + i * 18,
+        y: baseY + (i % 2 === 0 ? 0 : 6) + Math.random() * 4,
+        vx,
+        flap: Math.random() * Math.PI * 2,
+        color
+      });
+    }
+  }
+  function updateBirds(dt) {
+    for (const b of state.birds) {
+      b.x += b.vx;
+      b.flap += dt * 9;
+    }
+    state.birds = state.birds.filter((b) => b.x > -40 && b.x < W + 40);
+  }
+  function drawBirds() {
+    ctx.save();
+    for (const b of state.birds) {
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 1.6;
+      const wing = Math.sin(b.flap) * 4 + 5;
+      ctx.beginPath();
+      ctx.moveTo(b.x - 6, b.y + wing);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(b.x + 6, b.y + wing);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
   function updateWorld(dt) {
     const move = state.speed * dt * 60;
@@ -497,15 +722,40 @@
     state.spawnTimer -= dt;
     if (state.spawnTimer <= 0) {
       spawn();
-      // Faster spawns as speed climbs
-      state.spawnTimer = Math.max(0.42, 0.85 + Math.random() * 0.7 - state.speed * 0.045);
+      // Faster spawns as speed climbs + per-biome difficulty multiplier
+      const mul = currentBiome().spawnMul || 1;
+      state.spawnTimer = Math.max(0.32,
+        (0.85 + Math.random() * 0.7 - state.speed * 0.045) * mul);
     }
+
+    // Pit stop spawns at distance milestones
+    if (state.distance >= state.nextPitstopAt) {
+      state.collectibles.push(makePitstop());
+      state.nextPitstopAt += 1400 + Math.random() * 400;
+    }
+
+    // Semi-truck spawns on a timer (faster than player, overtakes)
+    state.nextSemiAt -= dt;
+    if (state.nextSemiAt <= 0) {
+      state.semis.push(makeSemi());
+      state.nextSemiAt = 9 + Math.random() * 8;
+    }
+
+    // Bird flocks
+    state.nextBirdAt -= dt;
+    if (state.nextBirdAt <= 0) {
+      spawnBirdFlock();
+      state.nextBirdAt = 7 + Math.random() * 8;
+    }
+    updateBirds(dt);
 
     for (const o of state.obstacles) o.x -= move;
     for (const c of state.collectibles) { c.x -= move; c.bob += dt * 4; }
+    for (const s of state.semis) s.x += s.vx;
 
     state.obstacles = state.obstacles.filter((o) => o.x + o.w > -30);
     state.collectibles = state.collectibles.filter((c) => c.x + c.w > -30);
+    state.semis = state.semis.filter((s) => s.x > -340);
 
     // Collisions
     const pb = playerBox();
@@ -517,23 +767,98 @@
         state.flashTimer = 0.3;
         screenShake(10, 0.35);
         spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
+        spawnScorePopup(o.x + o.w / 2, o.y - 10, '-' + HIT_FUEL_PENALTY + ' FUEL', '#ff6b3a');
+        state.combo = 0; // hit breaks combo
+        audio.playHit();
       }
     }
     for (const c of state.collectibles) {
       if (c.taken) continue;
       if (rectsOverlap(pb, c)) {
         c.taken = true;
+        // Bump combo
+        state.combo = Math.min(COMBO_MAX, state.combo + 1);
+        state.comboTimer = COMBO_WINDOW;
+        state.comboPopupT = 0.6;
+        const mult = state.combo;
         if (c.type === 'fuel') {
+          const pts = FUEL_PICKUP_BONUS * mult;
           state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
-          state.score += FUEL_PICKUP_BONUS;
+          state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
+          audio.playFuel();
+        } else if (c.type === 'pitstop') {
+          // Full refuel + chunky bonus
+          state.fuel = FUEL_MAX;
+          const pts = 500 * mult;
+          state.score += pts;
+          spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `PIT STOP!  +${pts}`, '#7ee27e');
+          audio.playBiome(); // celebratory arpeggio
         } else {
-          state.score += SNACK_POINTS;
+          const pts = SNACK_POINTS * mult;
+          state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#f5d76e');
+          audio.playSnack();
         }
       }
     }
     state.collectibles = state.collectibles.filter((c) => !c.taken);
+  }
+
+  // ============================================================
+  // SCORE POPUPS + COMBO
+  // ============================================================
+  function spawnScorePopup(x, y, text, color) {
+    state.scorePopups.push({
+      x, y, text, color,
+      vy: -1.4,
+      life: 1.0,
+      max: 1.0
+    });
+  }
+  function updateScorePopups(dt) {
+    for (const p of state.scorePopups) {
+      p.y += p.vy;
+      p.vy *= 0.96;
+      p.life -= dt;
+    }
+    state.scorePopups = state.scorePopups.filter((p) => p.life > 0);
+  }
+  function drawScorePopups() {
+    ctx.save();
+    ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const p of state.scorePopups) {
+      const a = Math.min(1, p.life * 2);
+      ctx.globalAlpha = a;
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillText(p.text, p.x + 1, p.y + 1);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.restore();
+  }
+  function drawComboHud() {
+    if (state.combo < 2 || state.screen !== SCREEN.PLAYING) return;
+    const t = Math.min(1, state.comboPopupT * 2);
+    const scale = 1 + (1 - t) * 0.4;
+    const yOff = (1 - t) * -8;
+    ctx.save();
+    ctx.translate(W / 2, 60 + yOff);
+    ctx.scale(scale, scale);
+    ctx.font = 'bold 26px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(`COMBO  x${state.combo}`, 1, 1);
+    ctx.fillStyle = '#f5d76e';
+    ctx.fillText(`COMBO  x${state.combo}`, 0, 0);
+    ctx.restore();
   }
 
   function rectsOverlap(a, b) {
@@ -543,6 +868,10 @@
   // ============================================================
   // PARTICLES
   // ============================================================
+  // === EXTENSION POINT: PARTICLES ===
+  // Spawn your own particles with state.particles.push({ x, y, vx, vy,
+  //   life, max, color, size, gravity }). The render loop fades them
+  //   automatically based on life/max.
   function spawnSparks(x, y) {
     for (let i = 0; i < 14; i++) {
       state.particles.push({
@@ -1122,6 +1451,10 @@
   }
   function drawCollectibles() {
     for (const c of state.collectibles) {
+      if (c.type === 'pitstop') {
+        drawPitstop(c);
+        continue;
+      }
       const float = Math.sin(c.bob) * 4;
       const y = c.y + float;
       if (c.type === 'fuel') {
@@ -1164,6 +1497,82 @@
       }
     }
   }
+  function drawPitstop(c) {
+    // A red-and-white awning over a fuel pump
+    const x = c.x, y = c.y;
+    // Glow
+    ctx.fillStyle = 'rgba(126, 226, 126, 0.35)';
+    ctx.beginPath();
+    ctx.arc(x + c.w / 2, y + c.h / 2 + 8, c.w * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    // Posts
+    ctx.fillStyle = '#7a6a55';
+    ctx.fillRect(x + 4, y + 18, 4, c.h - 18);
+    ctx.fillRect(x + c.w - 8, y + 18, 4, c.h - 18);
+    // Awning (red+white stripes)
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = i % 2 === 0 ? '#d63a3a' : '#fafafa';
+      ctx.fillRect(x + i * (c.w / 6), y, c.w / 6 + 1, 14);
+    }
+    // Awning trim
+    ctx.fillStyle = '#3a3a40';
+    ctx.fillRect(x, y + 14, c.w, 4);
+    // Pump body
+    ctx.fillStyle = '#3a7a3a';
+    roundRect(ctx, x + c.w / 2 - 12, y + 24, 24, c.h - 24, 3);
+    ctx.fill();
+    // Pump face
+    ctx.fillStyle = '#fafafa';
+    ctx.fillRect(x + c.w / 2 - 8, y + 28, 16, 10);
+    // "$" sign
+    ctx.fillStyle = '#3a7a3a';
+    ctx.font = 'bold 11px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$$', x + c.w / 2, y + 33);
+    // Label
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 9px "JetBrains Mono", Consolas, monospace';
+    ctx.fillText('PIT STOP', x + c.w / 2, y + 50);
+  }
+
+  function drawSemis() {
+    for (const s of state.semis) {
+      // Trailer
+      ctx.fillStyle = s.color;
+      roundRect(ctx, s.x, GROUND_Y - 64, 180, 56, 4);
+      ctx.fill();
+      // Trailer logo stripe
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillRect(s.x + 16, GROUND_Y - 44, 148, 4);
+      // Cab
+      ctx.fillStyle = '#dadada';
+      roundRect(ctx, s.x + 180, GROUND_Y - 52, 56, 44, 5);
+      ctx.fill();
+      // Cab windshield
+      ctx.fillStyle = '#9cd0f0';
+      ctx.fillRect(s.x + 198, GROUND_Y - 46, 28, 14);
+      // Headlight (we're facing -X so it's on the left side)
+      ctx.fillStyle = '#fff8a8';
+      ctx.fillRect(s.x + 234, GROUND_Y - 30, 4, 6);
+      // Wheels — three under trailer, one under cab
+      const wheelY = GROUND_Y - 4;
+      [s.x + 24, s.x + 96, s.x + 168, s.x + 220].forEach((wx) => {
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.arc(wx, wheelY, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#888';
+        ctx.beginPath();
+        ctx.arc(wx, wheelY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(s.x + 4, GROUND_Y + 10, 232, 4);
+    }
+  }
+
   function drawParticles() {
     for (const p of state.particles) {
       const a = Math.max(0, p.life / p.max);
@@ -1180,6 +1589,39 @@
   function drawDamageFlash() {
     if (state.flashTimer <= 0) return;
     ctx.fillStyle = `rgba(232, 90, 26, ${state.flashTimer * 1.4})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+  function drawSpeedLines() {
+    // Only at higher speeds; intensity scales with how fast above base
+    const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+    if (frac < 0.55) return;
+    const intensity = (frac - 0.55) / 0.45; // 0..1
+    const count = Math.floor(4 + intensity * 14);
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.15 + intensity * 0.35})`;
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < count; i++) {
+      // pseudo-random but stable per-frame seed by state.distance for some flicker
+      const seed = (i * 9301 + Math.floor(state.distance * 1.4)) % 233280;
+      const r = (seed / 233280);
+      const y = 100 + r * (GROUND_Y - 120);
+      const len = 40 + r * 80 + intensity * 60;
+      const x = (Math.floor(state.distance * 4) + i * 71) % (W + 200) - 100;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + len, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawSpeedVignette() {
+    const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+    if (frac < 0.7) return;
+    const intensity = (frac - 0.7) / 0.3;
+    const g = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 540);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, `rgba(0,0,0,${0.18 * intensity})`);
+    ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
   function drawBiomeBanner() {
@@ -1258,6 +1700,7 @@
     updatePlayer(dt);
     updateWorld(dt);
     updateParticles(dt);
+    updateScorePopups(dt);
 
     state.distance += state.speed * dt * 60;
     state.score += state.speed * dt * 8;        // small distance score
@@ -1265,13 +1708,23 @@
     state.flashTimer = Math.max(0, state.flashTimer - dt);
     state.shakeT = Math.max(0, state.shakeT - dt);
     state.bannerT = Math.max(0, (state.bannerT || 0) - dt);
+    state.comboPopupT = Math.max(0, state.comboPopupT - dt);
+    // Combo decay window
+    if (state.combo > 0) {
+      state.comboTimer -= dt;
+      if (state.comboTimer <= 0) state.combo = 0;
+    }
 
     // Biome clear bonus
     const b = currentBiome();
     if (state.biomeIdx > state._lastBiomeIdx) {
       state.score += BIOME_BONUS;
       state._lastBiomeIdx = state.biomeIdx;
+      audio.playBiome();
     }
+
+    // Engine pitch follows speed
+    audio.updateEngine((state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
 
     // Exhaust puffs while moving fast
     exhaustTimer -= dt;
@@ -1283,6 +1736,8 @@
     // Win/lose
     if (state.distance >= TRIP_TOTAL) {
       state.pendingScore = state.score;
+      audio.stopEngine();
+      audio.playWin();
       show(SCREEN.WIN);
       document.getElementById('win-score').textContent = pad(state.score, 6);
     }
@@ -1293,6 +1748,8 @@
       document.getElementById('go-summary').textContent =
         `You made it ${pct}% of the way before the tank ran dry.`;
       document.getElementById('go-score').textContent = pad(state.score, 6);
+      audio.stopEngine();
+      audio.playLose();
       show(SCREEN.GAMEOVER);
     }
   }
@@ -1310,24 +1767,50 @@
     drawSky(b);
     drawSun(b);
     drawClouds(b);
+    drawBirds();
     drawFarMountains(b);
     drawMidScenery(b);
     drawGround(b);
     drawNearScenery(b);
 
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      drawSemis();
       drawCollectibles();
       drawObstacles();
+      drawSpeedLines();
       drawPlayer();
       drawParticles();
+      drawScorePopups();
     }
 
     ctx.restore();
 
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      drawSpeedVignette();
       drawBiomeBanner();
+      drawComboHud();
       drawDamageFlash();
     }
+    drawAudioBanner();
+  }
+
+  function drawAudioBanner() {
+    if (audioBanner.t <= 0) return;
+    const a = Math.min(1, audioBanner.t * 2);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(12,14,24,0.85)';
+    const bw = 180, bh = 36;
+    ctx.fillRect(W - bw - 20, 20, bw, bh);
+    ctx.strokeStyle = '#f5d76e';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(W - bw - 20, 20, bw, bh);
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = 'bold 13px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`♪  ${audioBanner.text}`, W - bw / 2 - 20, 38);
+    ctx.restore();
   }
 
   // ============================================================
@@ -1341,6 +1824,7 @@
       updateGame(dt);
       updateHUD();
     }
+    audioBanner.t = Math.max(0, audioBanner.t - dt);
 
     render();
     requestAnimationFrame(tick);
