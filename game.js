@@ -542,16 +542,16 @@ function buildStadiumPath(path, halfX, radius) {
     crowdPlane.receiveShadow = true;
     standsGroup.add(crowdPlane);
 
-    // Roof beam (back-edge cap)
+    // Roof beam — just above the slope, closes the top edge without dominating
     const beam = new THREE.Mesh(
-      new THREE.BoxGeometry(segLen, 0.6, 1.4),
+      new THREE.BoxGeometry(segLen, 0.8, 1.6),
       roofMat
     );
-    const beamOutOut = panelDepth + 0.5;
+    const beamOut = panelDepth - 0.2;
     beam.position.set(
-      cx + Math.cos(angle - Math.PI / 2) * beamOutOut,
-      panelHeight + 1.2,
-      cz + Math.sin(angle - Math.PI / 2) * beamOutOut
+      cx + Math.cos(angle - Math.PI / 2) * beamOut,
+      panelHeight + 1.6,
+      cz + Math.sin(angle - Math.PI / 2) * beamOut
     );
     beam.rotation.y = -angle + Math.PI / 2;
     beam.castShadow = true;
@@ -587,29 +587,66 @@ function buildStadiumPath(path, halfX, radius) {
 }
 function standsGroup_addBanner(mesh) { scene.add(mesh); }
 
-// Generate a crowd texture procedurally — densely packed colored speckle pattern.
+// Generate a crowd texture procedurally — person-shaped silhouettes on tiered rows.
 function makeCrowdTexture() {
   const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 256;
+  c.width = 1024;
+  c.height = 512;
   const cx = c.getContext('2d');
-  cx.fillStyle = '#7a7a8a';
+  // Base concrete row background
+  cx.fillStyle = '#5a5862';
   cx.fillRect(0, 0, c.width, c.height);
-  const palette = ['#d63a3a', '#f5d76e', '#3a8ec8', '#7ee27e', '#e85a1a', '#b070d8', '#eeeeee', '#aa5533', '#f0a0a0', '#a0c8e8', '#ffcc33'];
-  // Dense crowd: ~25000 packed colored rectangles
-  for (let i = 0; i < 25000; i++) {
-    cx.fillStyle = palette[Math.floor(Math.random() * palette.length)];
-    const x = Math.random() * c.width;
-    const y = Math.random() * c.height;
-    cx.fillRect(x, y, 5, 6);
+
+  // Apparel palette — slightly muted so it doesn't blow out
+  const palette = [
+    '#c83a3a', '#d4733a', '#d4a83a', '#3a8ec8', '#3a5ec8',
+    '#3aa83a', '#7a4ab8', '#222222', '#dcdcdc', '#8a5a3a',
+    '#e8c895', '#a04050', '#3a8888', '#b86a30'
+  ];
+  // Skin palette — head dots
+  const skin = ['#e8c39a', '#caa37a', '#8a5e3a', '#f2d4b0', '#a07650'];
+
+  const rows = 18;
+  const rowH = c.height / rows;
+  const personW = 8;
+  const headR = 2.4;
+
+  // Each row is a tier of seats — alternating slightly darker bands suggest steps.
+  for (let r = 0; r < rows; r++) {
+    const y = r * rowH;
+    // Row floor shadow
+    cx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    cx.fillRect(0, y, c.width, 2);
+    // Subtle row band tinting
+    cx.fillStyle = r % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.05)';
+    cx.fillRect(0, y + 2, c.width, rowH - 2);
+
+    // Pack people across the row
+    const peoplePerRow = Math.floor(c.width / (personW + 1));
+    for (let i = 0; i < peoplePerRow; i++) {
+      // 5% chance to leave a seat empty
+      if (Math.random() < 0.05) continue;
+      const px = i * (personW + 1) + Math.random() * 1.5;
+      // Body
+      const body = palette[Math.floor(Math.random() * palette.length)];
+      const bodyH = rowH - 8;
+      cx.fillStyle = body;
+      cx.fillRect(px, y + 6, personW, bodyH);
+      // Head
+      cx.fillStyle = skin[Math.floor(Math.random() * skin.length)];
+      cx.beginPath();
+      cx.arc(px + personW / 2, y + 4, headR, 0, Math.PI * 2);
+      cx.fill();
+    }
   }
-  // Row shadows to imply seating tiers
-  cx.fillStyle = 'rgba(0,0,0,0.12)';
-  for (let r = 0; r < 12; r++) {
-    cx.fillRect(0, r * 22 + 18, c.width, 3);
-  }
+
+  // Slight overall darken so it doesn't look TOO bright
+  cx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+  cx.fillRect(0, 0, c.width, c.height);
+
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
   return tex;
 }
 
