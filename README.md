@@ -4,7 +4,9 @@ A polished 2D side-scrolling browser game built for ENGR 5513 — Applied AI in 
 
 **Theme:** An American Weekend Vacation — Coast to Coast.
 
-> Marty's been heads-down shipping for eleven months. Today his PTO finally cleared. He throws a duffel in the convertible, points it west, and drives. Dodge the potholes, duck the low signs, grab roadside snacks. Don't run out of gas before you reach the ocean.
+## Protagonist & Motivation
+
+You play **Marty**, a software engineer who's been heads-down shipping for eleven months straight. Today his PTO finally cleared. He throws a duffel in his red convertible, points it west, and drives. The goal is simple: dodge the potholes, duck the low STOP signs, grab roadside snacks and fuel cans, and don't run out of gas before you reach the ocean. The trip takes him through four American biomes — city at dawn, pine forest in the morning, scorched desert in the afternoon, and the Pacific coast at sunset.
 
 ## Play
 
@@ -25,6 +27,7 @@ python -m http.server 8090
 | `D` / `→` | Accelerate |
 | `A` / `←` | Brake |
 | `P` / `Esc` | Pause |
+| `M` | Mute / unmute audio |
 | `?` | Toggle controls overlay |
 | `Enter` | Confirm on menus |
 
