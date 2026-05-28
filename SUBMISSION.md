@@ -8,6 +8,6 @@ Technically, the game is built from scratch in vanilla JavaScript and HTML5 Canv
 
 The standout feature is **Ghost Race mode**: every run records replay telemetry, saves a transparent ghost car locally, and lets players copy/paste shareable JSON so a classmate can race their route asynchronously. That gives the project a replay challenge system on top of the normal arcade run. The game also includes four biome stages, pit stops, semi-truck events, bird flocks, combo scoring, persistent achievements, and local replay persistence.
 
-Repo: https://github.com/fwwright1001-coder/weekend-road-trip
+Play it live: https://fwwright1001-coder.github.io/weekend-road-trip/
 
-Optional live link if GitHub Pages is enabled: https://fwwright1001-coder.github.io/weekend-road-trip/
+Repo: https://github.com/fwwright1001-coder/weekend-road-trip
