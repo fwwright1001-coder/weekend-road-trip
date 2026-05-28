@@ -28,8 +28,8 @@
   const W = 960;
   const H = 540;
   const GROUND_Y = 432;      // top of road surface
-  const GRAVITY = 0.85;
-  const JUMP_V = -14.5;
+  const GRAVITY = 0.78;
+  const JUMP_V = -16;
   const PLAYER_X = 170;
   const BASE_SPEED = 5;
   const MAX_SPEED = 9.5;
@@ -219,7 +219,7 @@
     // mini-events
     semis: [],
     nextSemiAt: 8,
-    nextPitstopAt: 1400,
+    nextPitstopAt: 2200,
     // birds
     birds: [],
     nextBirdAt: 3,
@@ -368,10 +368,11 @@
     muted: (() => { try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; } })(),
 
     init() {
-      if (this.ctx) return;
+      if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
       try {
         const AC = window.AudioContext || window.webkitAudioContext;
         this.ctx = new AC();
+        if (this.ctx.state === 'suspended') this.ctx.resume();
         this.master = this.ctx.createGain();
         this.master.gain.value = this.muted ? 0 : 0.35;
         this.master.connect(this.ctx.destination);
@@ -527,6 +528,11 @@
     if (state.screen === SCREEN.GHOST) renderGhostScreen();
     if (state.screen === SCREEN.SETTINGS) renderSettings();
     if (state.screen === SCREEN.INITIALS) renderInitials();
+    // Quiet the engine drone whenever we leave active play (e.g. pause).
+    if (audio.engineOsc && audio.engineGain && audio.ctx) {
+      const target = state.screen === SCREEN.PLAYING ? 0.18 : 0;
+      audio.engineGain.gain.setTargetAtTime(target, audio.ctx.currentTime, 0.05);
+    }
     updateGhostTitleStatus();
   }
   function openHelp() {
@@ -552,6 +558,9 @@
     (KEYMAP[action] && KEYMAP[action].some((code) => state.keys.has(code))) || !!state.pad[action];
 
   window.addEventListener('keydown', (e) => {
+    // Don't hijack keys while typing in a form field (e.g. the ghost JSON box).
+    const tag = e.target && e.target.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT') return;
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
       e.preventDefault();
     }
@@ -990,8 +999,11 @@
     }
   }
   function updatePlayer(dt) {
-    state.player.vy += GRAVITY;
-    state.player.y += state.player.vy;
+    // Frame-rate-independent vertical physics: scale by 60fps-equivalent steps
+    // so hang time is identical on 60Hz and 144Hz displays.
+    const f = dt * 60;
+    state.player.vy += GRAVITY * f;
+    state.player.y += state.player.vy * f;
     if (state.player.y >= GROUND_Y) {
       const wasJumping = state.player.jumping;
       state.player.y = GROUND_Y;
@@ -1004,7 +1016,7 @@
     // gentle body wobble — sells the suspension
     state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
     // wheel rotation
-    state.player.wheelAngle += state.speed * 0.18;
+    state.player.wheelAngle += state.speed * 0.18 * f;
     // braking/accel tilt
     const wantAccel = actionDown('accel');
     const wantBrake = actionDown('brake');
