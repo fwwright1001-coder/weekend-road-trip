@@ -187,6 +187,9 @@ html, body {
   backdrop-filter: blur(10px);
   box-shadow: var(--shadow);
 }
+.screen-wide {
+  max-width: 720px;
+}
 
 .screen h1 {
   font-size: 36px;
@@ -287,6 +290,14 @@ button.cta:hover {
   flex-wrap: wrap;
 }
 
+.ghost-status {
+  min-height: 18px;
+  margin-top: 10px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--blue);
+}
+
 .credit {
   margin-top: 18px;
   font-size: 10px;
@@ -347,6 +358,85 @@ button.cta:hover {
   padding: 14px 0;
 }
 
+.achievements-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 16px;
+  text-align: left;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.achievement {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.04);
+}
+.achievement.unlocked {
+  border-color: rgba(245, 215, 110, 0.55);
+  background: rgba(245, 215, 110, 0.08);
+}
+.achievement-title {
+  color: var(--gold);
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 1px;
+  margin-bottom: 3px;
+}
+.achievement-desc {
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ghost-payload {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.35);
+  color: var(--text);
+  padding: 10px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.ghost-payload:focus {
+  border-color: var(--gold);
+  outline: none;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  margin: 10px auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--text);
+  text-align: left;
+}
+.setting-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--gold);
+}
+
+body.colorblind {
+  --gold: #ffd23f;
+  --gold-bright: #fff2a8;
+  --red: #d55e00;
+  --blue: #0072b2;
+  --good: #009e73;
+  --bad: #cc79a7;
+  --panel-border: rgba(255, 210, 63, 0.7);
+}
+
 .help-table {
   margin: 12px auto;
   border-collapse: collapse;
@@ -363,4 +453,14 @@ button.cta:hover {
 .help-table td:last-child {
   color: var(--text);
   text-align: left;
+}
+
+@media (max-width: 700px) {
+  .achievements-list {
+    grid-template-columns: 1fr;
+    max-height: 220px;
+  }
+  .screen {
+    padding: 22px 20px;
+  }
 }

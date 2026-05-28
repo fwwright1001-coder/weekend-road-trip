@@ -56,8 +56,12 @@
           <button class="cta" data-action="start">START THE TRIP</button>
           <div class="menu-actions">
             <button data-action="scores">HIGH SCORES</button>
+            <button data-action="achievements">ACHIEVEMENTS</button>
+            <button data-action="ghost">GHOST RACE</button>
+            <button data-action="settings">SETTINGS</button>
             <button data-action="help">CONTROLS</button>
           </div>
+          <p class="ghost-status" id="ghost-title-status">No ghost loaded yet.</p>
           <p class="credit">ENGR 5513 — Forrest Wright — Lipscomb MSAI 2026</p>
         </div>
 
@@ -66,6 +70,7 @@
           <h2>PAUSED</h2>
           <p class="muted">The road can wait. Take a breath.</p>
           <button class="cta" data-action="resume">RESUME</button>
+          <button data-action="settings">SETTINGS</button>
           <button data-action="quit">QUIT TO MENU</button>
         </div>
 
@@ -109,6 +114,49 @@
           <button class="cta" data-action="return">RETURN</button>
         </div>
 
+        <!-- Achievements -->
+        <div class="screen screen-wide hidden" id="screen-achievements">
+          <h2>ACHIEVEMENTS</h2>
+          <div id="achievements-list" class="achievements-list"></div>
+          <button class="cta" data-action="return">RETURN</button>
+        </div>
+
+        <!-- Ghost Race -->
+        <div class="screen screen-wide hidden" id="screen-ghost">
+          <h2>GHOST RACE</h2>
+          <p class="story-short" id="ghost-summary">
+            Finish a run to save a transparent replay car. Paste a classmate's
+            ghost JSON here to race their line.
+          </p>
+          <textarea id="ghost-payload" class="ghost-payload" spellcheck="false" aria-label="Ghost replay JSON"></textarea>
+          <div class="menu-actions">
+            <button class="cta" data-action="copy-ghost">COPY GHOST</button>
+            <button data-action="load-ghost">LOAD GHOST</button>
+            <button data-action="clear-ghost">CLEAR</button>
+          </div>
+          <p class="muted" id="ghost-message"></p>
+          <button data-action="return">RETURN</button>
+        </div>
+
+        <!-- Settings -->
+        <div class="screen hidden" id="screen-settings">
+          <h2>SETTINGS</h2>
+          <label class="setting-row">
+            <input type="checkbox" id="setting-shake" data-setting="screenShake" />
+            <span>Screen shake</span>
+          </label>
+          <label class="setting-row">
+            <input type="checkbox" id="setting-colorblind" data-setting="colorblind" />
+            <span>High-contrast colorblind palette</span>
+          </label>
+          <label class="setting-row">
+            <input type="checkbox" id="setting-ghost" data-setting="ghostVisible" />
+            <span>Show ghost replay car</span>
+          </label>
+          <p class="muted">Keyboard and gamepad are both active. A / Space jumps, B / down ducks, triggers brake/accelerate.</p>
+          <button class="cta" data-action="return">RETURN</button>
+        </div>
+
         <!-- Help -->
         <div class="screen hidden" id="screen-help">
           <h2>CONTROLS</h2>
@@ -119,6 +167,7 @@
             <tr><td>A / ←</td><td>Brake</td></tr>
             <tr><td>P / ESC</td><td>Pause</td></tr>
             <tr><td>M</td><td>Mute / unmute audio</td></tr>
+            <tr><td>GAMEPAD</td><td>A jump, B duck, triggers or D-pad drive</td></tr>
             <tr><td>?</td><td>Toggle this help</td></tr>
             <tr><td>ENTER</td><td>Confirm on menus</td></tr>
           </table>
