@@ -30,6 +30,7 @@ python -m http.server 8090
 | `M` | Mute / unmute audio |
 | `?` | Toggle controls overlay |
 | `Enter` | Confirm on menus |
+| Gamepad | A jump, B/down duck, triggers or D-pad drive |
 
 ## Game systems
 
@@ -45,12 +46,20 @@ python -m http.server 8090
 - **Health/fuel** depletes over time and on hits; refilled by fuel cans
 - **Win** when you reach the coast (6000 distance units); **lose** when your tank hits zero
 - **High scores** with 3-character editable initials, top 5, persisted to `localStorage`
+- **18 in-game achievements** with unlock toasts and a persistent achievements gallery
+- **Ghost Race mode** records replay telemetry, saves a local ghost, and exports/imports shareable JSON so another player can race your transparent ghost car
+- **Gamepad support** through the browser Gamepad API in addition to keyboard controls
+- **Accessibility/settings panel** with screen-shake toggle, high-contrast colorblind palette, and ghost visibility toggle
+- **Local persistence** for scores, achievements, settings, mute state, and the current ghost replay
 
-## Three main screens (per assignment)
+## Main screens
 
 1. **Title screen** — story, START button, high-score & controls access
 2. **Gameplay screen** — the actual side-scroller with HUD overlays
 3. **High scores screen** — top 5 leaderboard with initials, scores, dates
+4. **Achievements screen** — persistent checklist of unlocked skill goals
+5. **Ghost Race screen** — copy, paste, load, and clear replay ghost JSON
+6. **Settings screen** — accessibility and replay visibility toggles
 
 Plus paused / game-over / win / initials-entry / help screens as needed.
 

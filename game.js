@@ -9,13 +9,14 @@
  *
  * Architecture (single-file, no dependencies, no build step):
  *   - Canvas 2D rendering, requestAnimationFrame loop
- *   - State machine: title, playing, paused, gameover, win, initials, scores, help
+ *   - State machine: title, playing, paused, gameover, win, initials, scores,
+ *     achievements, settings, ghost race, help
  *   - HTML/CSS overlays handle all menus + HUD (crisp typography)
  *   - 5-layer parallax + procedural per-biome scenery
  *   - Obstacle/collectible spawner + AABB collision
  *   - Particle pool (smoke, sparks, dust, pickup bursts)
  *   - Screen shake on impact
- *   - High scores persisted to localStorage with 3-char initials
+ *   - High scores, achievements, settings, and ghost replays persisted to localStorage
  * ============================================================ */
 
 (() => {
@@ -43,7 +44,12 @@
   const FUEL_PICKUP_REFILL = 22;
   const BIOME_BONUS = 500;
   const STORAGE_KEY = 'wrt.highscores.v2';
+  const SETTINGS_KEY = 'wrt.settings.v1';
+  const ACHIEVEMENTS_KEY = 'wrt.achievements.v1';
+  const GHOST_KEY = 'wrt.ghost.v1';
   const MAX_SCORES = 5;
+  const GHOST_SAMPLE_STEP = 0.08;
+  const GHOST_DISTANCE_SCALE = 0.28;
 
   // Each biome covers a stretch of the road. Total trip = 6000 units.
   // Each biome has its own palette (sky, sun, ground) and time-of-day.
@@ -124,8 +130,38 @@
     WIN: 'win',
     INITIALS: 'initials',
     SCORES: 'scores',
+    ACHIEVEMENTS: 'achievements',
+    GHOST: 'ghost',
+    SETTINGS: 'settings',
     HELP: 'help'
   };
+
+  const DEFAULT_SETTINGS = {
+    screenShake: true,
+    colorblind: false,
+    ghostVisible: true
+  };
+
+  const ACHIEVEMENTS = [
+    { id: 'start', title: 'PTO Approved', desc: 'Start a weekend run.' },
+    { id: 'first-jump', title: 'Clearance Check', desc: 'Jump over your first hazard.' },
+    { id: 'first-hit', title: 'Rental Insurance', desc: 'Survive your first collision.' },
+    { id: 'snack', title: 'Roadside Calories', desc: 'Collect a snack pickup.' },
+    { id: 'fuel', title: 'Tank Top-Off', desc: 'Collect a fuel can.' },
+    { id: 'pitstop', title: 'Full-Service Stop', desc: 'Pull through a pit stop.' },
+    { id: 'combo-5', title: 'Perfect Snack Line', desc: 'Build a 5x pickup combo.' },
+    { id: 'max-speed', title: 'Cruise Control Hero', desc: 'Reach top speed.' },
+    { id: 'low-fuel', title: 'Running on Fumes', desc: 'Keep driving below 15 percent fuel.' },
+    { id: 'forest', title: 'Into the Pines', desc: 'Reach the forest biome.' },
+    { id: 'desert', title: 'Desert Heat', desc: 'Reach the desert biome.' },
+    { id: 'coast', title: 'Coastbound', desc: 'Reach the coast biome.' },
+    { id: 'halfway', title: 'Halfway There', desc: 'Drive past the midpoint.' },
+    { id: 'score-3000', title: 'Scoreboard Material', desc: 'Score at least 3,000 points.' },
+    { id: 'finish', title: 'Ocean View', desc: 'Finish the coast-to-coast trip.' },
+    { id: 'clean-finish', title: 'No-Deductible Drive', desc: 'Finish without hitting an obstacle.' },
+    { id: 'ghost-save', title: 'Ghost Writer', desc: 'Save a replay ghost from a run.' },
+    { id: 'ghost-race', title: 'Race the Replay', desc: 'Start a run with a ghost loaded.' }
+  ];
 
   // ============================================================
   // STATE
@@ -137,6 +173,12 @@
     screen: SCREEN.TITLE,
     prevScreen: SCREEN.TITLE,
     keys: new Set(),
+    pad: {},
+    padPrev: {},
+    padConnected: false,
+    settings: loadSettings(),
+    achievements: loadAchievements(),
+    achievementToast: null,
     // gameplay
     distance: 0,
     score: 0,
@@ -171,6 +213,8 @@
     comboPopupT: 0,
     // floating "+50" texts
     scorePopups: [],
+    runTime: 0,
+    runStats: { hits: 0, pickups: 0, fuel: 0, snacks: 0, pitstops: 0 },
     // mini-events
     semis: [],
     nextSemiAt: 8,
@@ -178,6 +222,11 @@
     // birds
     birds: [],
     nextBirdAt: 3,
+    // asynchronous ghost race
+    ghostLoaded: loadGhost(),
+    ghostRecording: null,
+    ghostSampleTimer: 0,
+    ghostMessage: '',
     // scores
     scores: []
   };
@@ -216,6 +265,91 @@
     state.scores.sort((a, b) => b.score - a.score);
     state.scores = state.scores.slice(0, MAX_SCORES);
     saveScores(state.scores);
+  }
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return { ...DEFAULT_SETTINGS, ...parsed };
+    } catch (e) {
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+    } catch (e) {
+      // Settings are optional; defaults still work.
+    }
+  }
+  function loadAchievements() {
+    try {
+      const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function saveAchievements() {
+    try {
+      localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(state.achievements));
+    } catch (e) {
+      // localStorage unavailable: achievements still unlock for this session.
+    }
+  }
+  function achievementById(id) {
+    return ACHIEVEMENTS.find((a) => a.id === id);
+  }
+  function unlockAchievement(id) {
+    if (state.achievements[id]) return;
+    const item = achievementById(id);
+    if (!item) return;
+    state.achievements[id] = new Date().toISOString();
+    state.achievementToast = { title: item.title, t: 3.0 };
+    saveAchievements();
+    if (state.screen === SCREEN.ACHIEVEMENTS) renderAchievementsList();
+  }
+
+  function loadGhost() {
+    try {
+      const raw = localStorage.getItem(GHOST_KEY);
+      return raw ? normalizeGhost(JSON.parse(raw)) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function saveGhost(ghost) {
+    try {
+      localStorage.setItem(GHOST_KEY, JSON.stringify(ghost));
+    } catch (e) {
+      // Ghost race export still works through the text box if storage is blocked.
+    }
+  }
+  function normalizeGhost(data) {
+    if (!data || data.version !== 1 || data.game !== 'Weekend Road Trip') return null;
+    if (!Array.isArray(data.frames) || data.frames.length < 2) return null;
+    const frames = data.frames
+      .filter((f) => Array.isArray(f) && f.length >= 5)
+      .map((f) => [
+        Number(f[0]) || 0,
+        Number(f[1]) || 0,
+        Number(f[2]) || GROUND_Y,
+        Number(f[3]) || BASE_SPEED,
+        Number(f[4]) || 0
+      ]);
+    if (frames.length < 2) return null;
+    return {
+      version: 1,
+      game: 'Weekend Road Trip',
+      created: String(data.created || new Date().toISOString()),
+      outcome: data.outcome === 'win' ? 'win' : 'gameover',
+      score: Math.floor(Number(data.score) || 0),
+      distance: Math.max(0, Number(data.distance) || frames[frames.length - 1][1]),
+      duration: Math.max(0, Number(data.duration) || frames[frames.length - 1][0]),
+      frames
+    };
   }
 
   // ============================================================
@@ -357,6 +491,9 @@
     [SCREEN.WIN]: document.getElementById('screen-win'),
     [SCREEN.INITIALS]: document.getElementById('screen-initials'),
     [SCREEN.SCORES]: document.getElementById('screen-scores'),
+    [SCREEN.ACHIEVEMENTS]: document.getElementById('screen-achievements'),
+    [SCREEN.GHOST]: document.getElementById('screen-ghost'),
+    [SCREEN.SETTINGS]: document.getElementById('screen-settings'),
     [SCREEN.HELP]: document.getElementById('screen-help')
   };
   const hudScore = document.getElementById('hud-score');
@@ -364,6 +501,11 @@
   const hudTrip = document.getElementById('hud-trip');
   const hudMph = document.getElementById('hud-mph');
   const hudFuel = document.getElementById('hud-fuel');
+  const ghostTitleStatus = document.getElementById('ghost-title-status');
+  const ghostPayloadEl = document.getElementById('ghost-payload');
+  const ghostSummaryEl = document.getElementById('ghost-summary');
+  const ghostMessageEl = document.getElementById('ghost-message');
+  const settingsInputs = document.querySelectorAll('[data-setting]');
 
   // ============================================================
   // SCREEN MANAGEMENT
@@ -380,7 +522,11 @@
     hudEl.classList.toggle('hidden',
       state.screen !== SCREEN.PLAYING && state.screen !== SCREEN.PAUSED);
     if (state.screen === SCREEN.SCORES) renderScoresList();
+    if (state.screen === SCREEN.ACHIEVEMENTS) renderAchievementsList();
+    if (state.screen === SCREEN.GHOST) renderGhostScreen();
+    if (state.screen === SCREEN.SETTINGS) renderSettings();
     if (state.screen === SCREEN.INITIALS) renderInitials();
+    updateGhostTitleStatus();
   }
   function openHelp() {
     state.prevScreen = state.screen;
@@ -401,6 +547,8 @@
     help: ['Slash']
   };
   const isAction = (action, code) => KEYMAP[action] && KEYMAP[action].includes(code);
+  const actionDown = (action) =>
+    (KEYMAP[action] && KEYMAP[action].some((code) => state.keys.has(code))) || !!state.pad[action];
 
   window.addEventListener('keydown', (e) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
@@ -420,6 +568,9 @@
       case SCREEN.TITLE:
         if (isAction('confirm', code)) startRun();
         else if (code === 'KeyH') show(SCREEN.SCORES);
+        else if (code === 'KeyA') show(SCREEN.ACHIEVEMENTS);
+        else if (code === 'KeyG') show(SCREEN.GHOST);
+        else if (code === 'KeyO') show(SCREEN.SETTINGS);
         else if (isAction('help', code)) openHelp();
         break;
       case SCREEN.PLAYING:
@@ -441,6 +592,13 @@
         break;
       case SCREEN.SCORES:
         if (isAction('confirm', code) || code === 'KeyR') show(SCREEN.TITLE);
+        break;
+      case SCREEN.ACHIEVEMENTS:
+      case SCREEN.GHOST:
+      case SCREEN.SETTINGS:
+        if (isAction('confirm', code) || isAction('pause', code)) {
+          show(state.prevScreen === state.screen ? SCREEN.TITLE : state.prevScreen);
+        }
         break;
       case SCREEN.HELP:
         if (isAction('help', code) || isAction('confirm', code) || isAction('pause', code)) {
@@ -479,18 +637,102 @@
     return String.fromCharCode(n);
   }
 
+  function pollGamepad() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gp = Array.from(pads).find(Boolean);
+    if (!gp) {
+      state.pad = {};
+      state.padPrev = {};
+      state.padConnected = false;
+      return;
+    }
+
+    const b = (idx) => !!(gp.buttons[idx] && gp.buttons[idx].pressed);
+    const axisX = gp.axes[0] || 0;
+    const axisY = gp.axes[1] || 0;
+    const triggerBrake = gp.buttons[6] ? gp.buttons[6].value > 0.2 : false;
+    const triggerAccel = gp.buttons[7] ? gp.buttons[7].value > 0.2 : false;
+    const next = {
+      jump: b(0) || b(12),
+      duck: b(1) || b(13) || axisY > 0.45,
+      accel: triggerAccel || b(15) || axisX > 0.45,
+      brake: triggerBrake || b(14) || axisX < -0.45,
+      confirm: b(0),
+      pause: b(9),
+      help: b(8)
+    };
+
+    const prev = state.pad;
+    state.padConnected = true;
+    ['jump', 'confirm', 'pause', 'help'].forEach((action) => {
+      if (next[action] && !prev[action]) handlePadAction(action);
+    });
+    state.padPrev = prev;
+    state.pad = next;
+  }
+
+  function handlePadAction(action) {
+    switch (state.screen) {
+      case SCREEN.TITLE:
+        if (action === 'confirm') startRun();
+        if (action === 'help') openHelp();
+        break;
+      case SCREEN.PLAYING:
+        if (action === 'jump') tryJump();
+        if (action === 'pause') show(SCREEN.PAUSED);
+        if (action === 'help') openHelp();
+        break;
+      case SCREEN.PAUSED:
+        if (action === 'confirm' || action === 'pause') show(SCREEN.PLAYING);
+        break;
+      case SCREEN.GAMEOVER:
+      case SCREEN.WIN:
+        if (action === 'confirm') afterRun();
+        break;
+      case SCREEN.SCORES:
+      case SCREEN.ACHIEVEMENTS:
+      case SCREEN.GHOST:
+      case SCREEN.SETTINGS:
+      case SCREEN.HELP:
+        if (action === 'confirm' || action === 'pause') {
+          show(state.prevScreen === state.screen ? SCREEN.TITLE : state.prevScreen);
+        }
+        break;
+    }
+  }
+
   // Button wiring (mouse parity with keyboard)
   document.querySelectorAll('[data-action]').forEach((btn) => {
     btn.addEventListener('click', () => {
       switch (btn.dataset.action) {
         case 'start': startRun(); break;
         case 'scores': show(SCREEN.SCORES); break;
+        case 'achievements': show(SCREEN.ACHIEVEMENTS); break;
+        case 'ghost': show(SCREEN.GHOST); break;
+        case 'settings': show(SCREEN.SETTINGS); break;
         case 'help': openHelp(); break;
         case 'resume': show(SCREEN.PLAYING); break;
         case 'quit': audio.stopEngine(); show(SCREEN.TITLE); break;
         case 'continue': afterRun(); break;
-        case 'return': show(SCREEN.TITLE); break;
+        case 'copy-ghost': copyGhostPayload(); break;
+        case 'load-ghost': loadGhostFromPayload(); break;
+        case 'clear-ghost': clearGhostReplay(); break;
+        case 'return':
+          if ([SCREEN.ACHIEVEMENTS, SCREEN.GHOST, SCREEN.SETTINGS].includes(state.screen)) {
+            show(state.prevScreen === state.screen ? SCREEN.TITLE : state.prevScreen);
+          } else {
+            show(SCREEN.TITLE);
+          }
+          break;
       }
+    });
+  });
+
+  settingsInputs.forEach((input) => {
+    input.addEventListener('change', () => {
+      state.settings[input.dataset.setting] = input.checked;
+      saveSettings();
+      applySettings();
     });
   });
 
@@ -523,11 +765,17 @@
     state.comboTimer = 0;
     state.comboPopupT = 0;
     state.scorePopups = [];
+    state.runTime = 0;
+    state.runStats = { hits: 0, pickups: 0, fuel: 0, snacks: 0, pitstops: 0 };
     state.semis = [];
     state.nextSemiAt = 8;
     state.nextPitstopAt = 1400;
     state.birds = [];
     state.nextBirdAt = 3;
+    state.ghostRecording = makeGhostRecording();
+    state.ghostSampleTimer = 0;
+    if (state.ghostLoaded) unlockAchievement('ghost-race');
+    unlockAchievement('start');
     audio.init();
     audio.startEngine();
     show(SCREEN.PLAYING);
@@ -569,6 +817,160 @@
     ).join('');
     document.getElementById('initials-score').textContent = pad(state.pendingScore, 6);
   }
+  function renderAchievementsList() {
+    const el = document.getElementById('achievements-list');
+    if (!el) return;
+    el.innerHTML = '';
+    ACHIEVEMENTS.forEach((item) => {
+      const card = document.createElement('div');
+      const unlocked = !!state.achievements[item.id];
+      card.className = unlocked ? 'achievement unlocked' : 'achievement';
+
+      const title = document.createElement('div');
+      title.className = 'achievement-title';
+      title.textContent = `${unlocked ? 'UNLOCKED' : 'LOCKED'} - ${item.title}`;
+
+      const desc = document.createElement('div');
+      desc.className = 'achievement-desc';
+      desc.textContent = item.desc;
+
+      card.appendChild(title);
+      card.appendChild(desc);
+      el.appendChild(card);
+    });
+  }
+  function renderSettings() {
+    settingsInputs.forEach((input) => {
+      input.checked = !!state.settings[input.dataset.setting];
+    });
+    applySettings();
+  }
+  function applySettings() {
+    document.body.classList.toggle('colorblind', !!state.settings.colorblind);
+  }
+  function updateGhostTitleStatus() {
+    if (!ghostTitleStatus) return;
+    const g = state.ghostLoaded;
+    if (!g) {
+      ghostTitleStatus.textContent = 'No ghost loaded yet.';
+      return;
+    }
+    const pct = Math.min(100, Math.round((g.distance / TRIP_TOTAL) * 100));
+    ghostTitleStatus.textContent =
+      `Ghost loaded: ${pct}% trip, ${pad(g.score, 6)} points, ${g.duration.toFixed(1)}s.`;
+  }
+  function ghostPayload() {
+    return state.ghostLoaded ? JSON.stringify(state.ghostLoaded) : '';
+  }
+  function renderGhostScreen() {
+    if (!ghostPayloadEl || !ghostSummaryEl || !ghostMessageEl) return;
+    const g = state.ghostLoaded;
+    if (g) {
+      const pct = Math.min(100, Math.round((g.distance / TRIP_TOTAL) * 100));
+      ghostSummaryEl.textContent =
+        `Loaded ghost: ${pct}% trip, ${pad(g.score, 6)} points, ${g.duration.toFixed(1)} seconds. Start the trip to race it.`;
+      ghostPayloadEl.value = ghostPayload();
+    } else {
+      ghostSummaryEl.textContent =
+        'Finish a run to save a transparent replay car. Paste a classmate\'s ghost JSON here to race their line.';
+      if (!ghostPayloadEl.value.trim()) ghostPayloadEl.value = '';
+    }
+    ghostMessageEl.textContent = state.ghostMessage || '';
+  }
+  function copyGhostPayload() {
+    const payload = ghostPayload();
+    if (!payload) {
+      state.ghostMessage = 'No ghost saved yet. Finish a run first.';
+      renderGhostScreen();
+      return;
+    }
+    ghostPayloadEl.value = payload;
+    ghostPayloadEl.select();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(payload)
+        .then(() => {
+          state.ghostMessage = 'Ghost JSON copied to clipboard.';
+          renderGhostScreen();
+        })
+        .catch(() => {
+          state.ghostMessage = 'Ghost JSON is selected and ready to copy.';
+          renderGhostScreen();
+        });
+    } else {
+      state.ghostMessage = 'Ghost JSON is selected and ready to copy.';
+      renderGhostScreen();
+    }
+  }
+  function loadGhostFromPayload() {
+    try {
+      const ghost = normalizeGhost(JSON.parse(ghostPayloadEl.value));
+      if (!ghost) throw new Error('Invalid ghost payload');
+      state.ghostLoaded = ghost;
+      saveGhost(ghost);
+      state.ghostMessage = 'Ghost loaded. Start the trip to race it.';
+      unlockAchievement('ghost-race');
+    } catch (e) {
+      state.ghostMessage = 'That ghost JSON could not be loaded.';
+    }
+    renderGhostScreen();
+    updateGhostTitleStatus();
+  }
+  function clearGhostReplay() {
+    try { localStorage.removeItem(GHOST_KEY); } catch (e) {}
+    state.ghostLoaded = null;
+    if (ghostPayloadEl) ghostPayloadEl.value = '';
+    state.ghostMessage = 'Ghost replay cleared.';
+    renderGhostScreen();
+    updateGhostTitleStatus();
+  }
+  function makeGhostRecording() {
+    return {
+      version: 1,
+      game: 'Weekend Road Trip',
+      created: new Date().toISOString(),
+      outcome: 'gameover',
+      score: 0,
+      distance: 0,
+      duration: 0,
+      frames: []
+    };
+  }
+  function ghostControlsMask() {
+    return (actionDown('jump') ? 1 : 0) |
+      (actionDown('duck') ? 2 : 0) |
+      (actionDown('accel') ? 4 : 0) |
+      (actionDown('brake') ? 8 : 0);
+  }
+  function recordGhostFrame(force = false) {
+    if (!state.ghostRecording) return;
+    if (!force && state.ghostSampleTimer > 0) return;
+    state.ghostSampleTimer = GHOST_SAMPLE_STEP;
+    state.ghostRecording.frames.push([
+      Number(state.runTime.toFixed(2)),
+      Number(state.distance.toFixed(1)),
+      Number(state.player.y.toFixed(1)),
+      Number(state.speed.toFixed(2)),
+      ghostControlsMask()
+    ]);
+  }
+  function finalizeGhost(outcome) {
+    if (!state.ghostRecording || state.ghostRecording.frames.length < 2) return;
+    recordGhostFrame(true);
+    const ghost = state.ghostRecording;
+    ghost.outcome = outcome;
+    ghost.score = Math.floor(state.pendingScore || state.score);
+    ghost.distance = Number(state.distance.toFixed(1));
+    ghost.duration = Number(state.runTime.toFixed(2));
+    const old = state.ghostLoaded;
+    const isBetter = !old || ghost.distance > old.distance || ghost.score > old.score || outcome === 'win';
+    if (isBetter && ghost.distance > 300) {
+      state.ghostLoaded = normalizeGhost(ghost);
+      saveGhost(state.ghostLoaded);
+      state.ghostMessage = 'Latest run saved as your ghost replay.';
+      unlockAchievement('ghost-save');
+      updateGhostTitleStatus();
+    }
+  }
   function pad(n, w) {
     const s = String(Math.floor(n));
     return s.length >= w ? s : '0'.repeat(w - s.length) + s;
@@ -583,6 +985,7 @@
       state.player.jumping = true;
       spawnDust(PLAYER_X + 30, GROUND_Y + 6, 8);
       audio.playJump();
+      unlockAchievement('first-jump');
     }
   }
   function updatePlayer(dt) {
@@ -602,8 +1005,8 @@
     // wheel rotation
     state.player.wheelAngle += state.speed * 0.18;
     // braking/accel tilt
-    const wantAccel = state.keys.has('KeyD') || state.keys.has('ArrowRight');
-    const wantBrake = state.keys.has('KeyA') || state.keys.has('ArrowLeft');
+    const wantAccel = actionDown('accel');
+    const wantBrake = actionDown('brake');
     const targetTilt = wantAccel ? -0.04 : wantBrake ? 0.06 : 0;
     state.player.tilt += (targetTilt - state.player.tilt) * 0.12;
   }
@@ -766,12 +1169,14 @@
       if (rectsOverlap(pb, o)) {
         o.hit = true;
         state.fuel -= HIT_FUEL_PENALTY;
+        state.runStats.hits += 1;
         state.flashTimer = 0.3;
         screenShake(10, 0.35);
         spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
         spawnScorePopup(o.x + o.w / 2, o.y - 10, '-' + HIT_FUEL_PENALTY + ' FUEL', '#ff6b3a');
         state.combo = 0; // hit breaks combo
         audio.playHit();
+        unlockAchievement('first-hit');
       }
     }
     for (const c of state.collectibles) {
@@ -782,28 +1187,36 @@
         state.combo = Math.min(COMBO_MAX, state.combo + 1);
         state.comboTimer = COMBO_WINDOW;
         state.comboPopupT = 0.6;
+        state.runStats.pickups += 1;
+        if (state.combo >= COMBO_MAX) unlockAchievement('combo-5');
         const mult = state.combo;
         if (c.type === 'fuel') {
+          state.runStats.fuel += 1;
           const pts = FUEL_PICKUP_BONUS * mult;
           state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
           audio.playFuel();
+          unlockAchievement('fuel');
         } else if (c.type === 'pitstop') {
           // Full refuel + chunky bonus
+          state.runStats.pitstops += 1;
           state.fuel = FUEL_MAX;
           const pts = 500 * mult;
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `PIT STOP!  +${pts}`, '#7ee27e');
           audio.playBiome(); // celebratory arpeggio
+          unlockAchievement('pitstop');
         } else {
+          state.runStats.snacks += 1;
           const pts = SNACK_POINTS * mult;
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
           spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#f5d76e');
           audio.playSnack();
+          unlockAchievement('snack');
         }
       }
     }
@@ -943,11 +1356,12 @@
   // SCREEN SHAKE
   // ============================================================
   function screenShake(mag, duration) {
+    if (!state.settings.screenShake) return;
     state.shakeMag = mag;
     state.shakeT = duration;
   }
   function shakeOffset() {
-    if (state.shakeT <= 0) return { x: 0, y: 0 };
+    if (!state.settings.screenShake || state.shakeT <= 0) return { x: 0, y: 0 };
     const t = state.shakeT / 0.35;
     return {
       x: (Math.random() - 0.5) * state.shakeMag * t,
@@ -1052,6 +1466,9 @@
     const g = parseInt(h.slice(2, 4), 16);
     const b = parseInt(h.slice(4, 6), 16);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  function gameColor(normal, highContrast) {
+    return state.settings.colorblind ? highContrast : normal;
   }
 
   function drawClouds(biome) {
@@ -1301,6 +1718,86 @@
   // ============================================================
   // RENDERING — entities
   // ============================================================
+  function currentGhostFrame() {
+    const g = state.ghostLoaded;
+    if (!g || !state.settings.ghostVisible || state.screen !== SCREEN.PLAYING) return null;
+    const frames = g.frames;
+    if (!frames || frames.length < 2) return null;
+    const t = state.runTime;
+    let lo = 0;
+    let hi = frames.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (frames[mid][0] < t) lo = mid + 1;
+      else hi = mid;
+    }
+    const b = frames[Math.min(lo, frames.length - 1)];
+    const a = frames[Math.max(0, lo - 1)];
+    const span = Math.max(0.001, b[0] - a[0]);
+    const mix = Math.max(0, Math.min(1, (t - a[0]) / span));
+    return [
+      a[0] + (b[0] - a[0]) * mix,
+      a[1] + (b[1] - a[1]) * mix,
+      a[2] + (b[2] - a[2]) * mix,
+      a[3] + (b[3] - a[3]) * mix,
+      mix < 0.5 ? a[4] : b[4]
+    ];
+  }
+
+  function drawGhostPlayer() {
+    const frame = currentGhostFrame();
+    if (!frame) return;
+    const ghostDistance = frame[1];
+    const diff = ghostDistance - state.distance;
+    const x = PLAYER_X + diff * GHOST_DISTANCE_SCALE;
+    if (x < -90 || x > W + 90) {
+      drawGhostArrow(diff);
+      return;
+    }
+
+    const y = frame[2];
+    const ducking = !!(frame[4] & 2);
+    const h = ducking ? 34 : 52;
+    const w = 78;
+    const top = y - h + 10;
+
+    ctx.save();
+    ctx.globalAlpha = 0.42;
+    ctx.setLineDash([6, 5]);
+    ctx.fillStyle = gameColor('#9be7ff', '#f0e442');
+    ctx.strokeStyle = gameColor('#ffffff', '#0072b2');
+    ctx.lineWidth = 2;
+    roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = gameColor('#d8f7ff', '#fff7a8');
+    ctx.fillRect(x + 18, top + 3, 34, 12);
+    ctx.beginPath();
+    ctx.arc(x + 18, top + h - 2, 9, 0, Math.PI * 2);
+    ctx.arc(x + w - 18, top + h - 2, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.82;
+    ctx.font = 'bold 10px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('GHOST', x + w / 2, top - 3);
+    ctx.restore();
+  }
+
+  function drawGhostArrow(diff) {
+    if (!state.settings.ghostVisible) return;
+    ctx.save();
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = gameColor('#9be7ff', '#f0e442');
+    ctx.font = 'bold 12px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = diff > 0 ? 'right' : 'left';
+    ctx.textBaseline = 'middle';
+    const label = `GHOST ${diff > 0 ? '+' : ''}${Math.round(diff)}`;
+    ctx.fillText(label, diff > 0 ? W - 18 : 18, 96);
+    ctx.restore();
+  }
+
   function drawPlayer() {
     const { y, ducking, jumping, tilt, wheelAngle, bob } = state.player;
     const w = 80;
@@ -1460,16 +1957,19 @@
       const float = Math.sin(c.bob) * 4;
       const y = c.y + float;
       if (c.type === 'fuel') {
+        const fuelGlow = gameColor('rgba(126, 226, 126, 0.35)', 'rgba(0, 114, 178, 0.38)');
+        const fuelBody = gameColor('#2a7a2a', '#005f8f');
+        const fuelStroke = gameColor('#7ee27e', '#56b4e9');
         // Glow
-        ctx.fillStyle = 'rgba(126, 226, 126, 0.35)';
+        ctx.fillStyle = fuelGlow;
         ctx.beginPath();
         ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w * 0.7, 0, Math.PI * 2);
         ctx.fill();
         // Can
-        ctx.fillStyle = '#2a7a2a';
+        ctx.fillStyle = fuelBody;
         roundRect(ctx, c.x, y, c.w, c.h, 3);
         ctx.fill();
-        ctx.strokeStyle = '#7ee27e';
+        ctx.strokeStyle = fuelStroke;
         ctx.lineWidth = 2;
         ctx.stroke();
         // F letter
@@ -1480,18 +1980,21 @@
         ctx.fillText('F', c.x + c.w / 2, y + c.h / 2);
       } else {
         // Snack — yellow coin
-        ctx.fillStyle = 'rgba(245, 215, 110, 0.4)';
+        const snackGlow = gameColor('rgba(245, 215, 110, 0.4)', 'rgba(255, 210, 63, 0.42)');
+        const snackBody = gameColor('#f5d76e', '#ffd23f');
+        const snackStroke = gameColor('#a86a1a', '#7a4b00');
+        ctx.fillStyle = snackGlow;
         ctx.beginPath();
         ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w * 0.65, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#f5d76e';
+        ctx.fillStyle = snackBody;
         ctx.beginPath();
         ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w / 2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = '#a86a1a';
+        ctx.strokeStyle = snackStroke;
         ctx.lineWidth = 2;
         ctx.stroke();
-        ctx.fillStyle = '#a86a1a';
+        ctx.fillStyle = snackStroke;
         ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1681,6 +2184,13 @@
     hudTrip.style.width = `${Math.min(100, (state.distance / TRIP_TOTAL) * 100)}%`;
   }
 
+  function checkProgressAchievements() {
+    if (state.speed >= MAX_SPEED - 0.05) unlockAchievement('max-speed');
+    if (state.fuel > 0 && state.fuel <= 15) unlockAchievement('low-fuel');
+    if (state.distance >= TRIP_TOTAL * 0.5) unlockAchievement('halfway');
+    if (state.score >= 3000) unlockAchievement('score-3000');
+  }
+
   // ============================================================
   // GAMEPLAY UPDATE
   // ============================================================
@@ -1689,8 +2199,9 @@
 
   function updateGame(dt) {
     // Speed input
-    const wantAccel = state.keys.has('KeyD') || state.keys.has('ArrowRight');
-    const wantBrake = state.keys.has('KeyA') || state.keys.has('ArrowLeft');
+    state.player.ducking = actionDown('duck');
+    const wantAccel = actionDown('accel');
+    const wantBrake = actionDown('brake');
     if (wantAccel) state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
     else if (wantBrake) state.speed = Math.max(BASE_SPEED * 0.5, state.speed - SPEED_BRAKE);
     else {
@@ -1707,6 +2218,9 @@
     state.distance += state.speed * dt * 60;
     state.score += state.speed * dt * 8;        // small distance score
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
+    state.runTime += dt;
+    state.ghostSampleTimer -= dt;
+    recordGhostFrame();
     state.flashTimer = Math.max(0, state.flashTimer - dt);
     state.shakeT = Math.max(0, state.shakeT - dt);
     state.bannerT = Math.max(0, (state.bannerT || 0) - dt);
@@ -1723,7 +2237,11 @@
       state.score += BIOME_BONUS;
       state._lastBiomeIdx = state.biomeIdx;
       audio.playBiome();
+      if (b.name === 'FOREST') unlockAchievement('forest');
+      if (b.name === 'DESERT') unlockAchievement('desert');
+      if (b.name === 'COAST') unlockAchievement('coast');
     }
+    checkProgressAchievements();
 
     // Engine pitch follows speed
     audio.updateEngine((state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
@@ -1738,10 +2256,14 @@
     // Win/lose
     if (state.distance >= TRIP_TOTAL) {
       state.pendingScore = state.score;
+      finalizeGhost('win');
       audio.stopEngine();
       audio.playWin();
+      unlockAchievement('finish');
+      if (state.runStats.hits === 0) unlockAchievement('clean-finish');
       show(SCREEN.WIN);
       document.getElementById('win-score').textContent = pad(state.score, 6);
+      return;
     }
     if (state.fuel <= 0) {
       state.fuel = 0;
@@ -1750,6 +2272,7 @@
       document.getElementById('go-summary').textContent =
         `You made it ${pct}% of the way before the tank ran dry.`;
       document.getElementById('go-score').textContent = pad(state.score, 6);
+      finalizeGhost('gameover');
       audio.stopEngine();
       audio.playLose();
       show(SCREEN.GAMEOVER);
@@ -1780,6 +2303,7 @@
       drawCollectibles();
       drawObstacles();
       drawSpeedLines();
+      drawGhostPlayer();
       drawPlayer();
       drawParticles();
       drawScorePopups();
@@ -1794,6 +2318,7 @@
       drawDamageFlash();
     }
     drawAudioBanner();
+    drawAchievementToast();
   }
 
   function drawAudioBanner() {
@@ -1815,18 +2340,45 @@
     ctx.restore();
   }
 
+  function drawAchievementToast() {
+    if (!state.achievementToast) return;
+    const a = Math.min(1, state.achievementToast.t * 2);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(12,14,24,0.9)';
+    const bw = 280, bh = 48;
+    ctx.fillRect(20, 20, bw, bh);
+    ctx.strokeStyle = '#f5d76e';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(20, 20, bw, bh);
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = 'bold 11px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('ACHIEVEMENT UNLOCKED', 32, 29);
+    ctx.fillStyle = '#ececec';
+    ctx.font = 'bold 14px "JetBrains Mono", Consolas, monospace';
+    ctx.fillText(state.achievementToast.title, 32, 45);
+    ctx.restore();
+  }
+
   // ============================================================
   // MAIN LOOP
   // ============================================================
   function tick(time) {
     const dt = Math.min(0.05, (time - lastFrame) / 1000 || 0);
     lastFrame = time;
+    pollGamepad();
 
     if (state.screen === SCREEN.PLAYING) {
       updateGame(dt);
       updateHUD();
     }
     audioBanner.t = Math.max(0, audioBanner.t - dt);
+    if (state.achievementToast) {
+      state.achievementToast.t -= dt;
+      if (state.achievementToast.t <= 0) state.achievementToast = null;
+    }
 
     render();
     requestAnimationFrame(tick);
@@ -1838,6 +2390,7 @@
   state._lastBiomeIdx = 0;
   state.bannerT = 0;
   state.scores = loadScores();
+  applySettings();
   applyScreen();
   requestAnimationFrame(tick);
 })();
