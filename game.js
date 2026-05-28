@@ -38,7 +38,7 @@
   const SPEED_DRAG = 0.018;
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
-  const HIT_FUEL_PENALTY = 16;
+  const HIT_FUEL_PENALTY = 12;
   const SNACK_POINTS = 50;
   const FUEL_PICKUP_BONUS = 25;
   const FUEL_PICKUP_REFILL = 22;
@@ -51,7 +51,8 @@
   const GHOST_SAMPLE_STEP = 0.08;
   const GHOST_DISTANCE_SCALE = 0.28;
 
-  // Each biome covers a stretch of the road. Total trip = 6000 units.
+  // Each biome covers a stretch of the road. Total trip = 20000 units.
+  // Lengths are paced so each biome reads as a distinct "leg" of the drive.
   // Each biome has its own palette (sky, sun, ground) and time-of-day.
   //
   // === EXTENSION POINT: BIOMES ===
@@ -61,7 +62,7 @@
   const BIOMES = [
     {
       name: 'CITY',
-      end: 1500,
+      end: 5000,
       timeOfDay: 'dawn',
       sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],
       sunColor: '#fff0c0',
@@ -76,7 +77,7 @@
     },
     {
       name: 'FOREST',
-      end: 3000,
+      end: 10000,
       timeOfDay: 'morning',
       sky: ['#7ec3e8', '#bce0f0', '#e8f4ec'],
       sunColor: '#fff6d8',
@@ -91,7 +92,7 @@
     },
     {
       name: 'DESERT',
-      end: 4500,
+      end: 15000,
       timeOfDay: 'afternoon',
       sky: ['#f5b27a', '#f9d6a0', '#cce0e8'],
       sunColor: '#ffd680',
@@ -106,7 +107,7 @@
     },
     {
       name: 'COAST',
-      end: 6000,
+      end: 20000,
       timeOfDay: 'sunset',
       sky: ['#ff7e3a', '#ffb37a', '#ffd9a8'],
       sunColor: '#ffe0a0',
@@ -769,7 +770,7 @@
     state.runStats = { hits: 0, pickups: 0, fuel: 0, snacks: 0, pitstops: 0 };
     state.semis = [];
     state.nextSemiAt = 8;
-    state.nextPitstopAt = 1400;
+    state.nextPitstopAt = 2200;
     state.birds = [];
     state.nextBirdAt = 3;
     state.ghostRecording = makeGhostRecording();
@@ -1136,7 +1137,7 @@
     // Pit stop spawns at distance milestones
     if (state.distance >= state.nextPitstopAt) {
       state.collectibles.push(makePitstop());
-      state.nextPitstopAt += 1400 + Math.random() * 400;
+      state.nextPitstopAt += 4000 + Math.random() * 1500;
     }
 
     // Semi-truck spawns on a timer (faster than player, overtakes)
@@ -2139,21 +2140,65 @@
     }
     if (state.bannerT > 0) {
       const a = Math.min(1, state.bannerT * 1.5);
+      const leg = state.biomeIdx + 1;
+      const total = BIOMES.length;
       ctx.save();
       ctx.globalAlpha = a;
-      ctx.fillStyle = 'rgba(12, 14, 24, 0.7)';
-      const bw = 280, bh = 50;
-      ctx.fillRect((W - bw) / 2, 110, bw, bh);
+      ctx.fillStyle = 'rgba(12, 14, 24, 0.78)';
+      const bw = 300, bh = 70;
+      const bx = (W - bw) / 2, by = 96;
+      ctx.fillRect(bx, by, bw, bh);
       ctx.strokeStyle = '#f5d76e';
       ctx.lineWidth = 2;
-      ctx.strokeRect((W - bw) / 2, 110, bw, bh);
-      ctx.fillStyle = '#f5d76e';
-      ctx.font = 'bold 22px "JetBrains Mono", Consolas, monospace';
+      ctx.strokeRect(bx, by, bw, bh);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`▸  ${state.bannerText}  ◂`, W / 2, 135);
+      ctx.fillStyle = '#9fb6ff';
+      ctx.font = 'bold 13px "JetBrains Mono", Consolas, monospace';
+      ctx.fillText(`LEG ${leg} OF ${total}`, W / 2, by + 22);
+      ctx.fillStyle = '#f5d76e';
+      ctx.font = 'bold 24px "JetBrains Mono", Consolas, monospace';
+      ctx.fillText(`▸  ${state.bannerText}  ◂`, W / 2, by + 47);
       ctx.restore();
     }
+  }
+
+  // Checkered race gate that scrolls in during the final stretch of the coast.
+  function drawFinishLine() {
+    const ahead = TRIP_TOTAL - state.distance;
+    if (ahead > W - PLAYER_X + 60 || ahead < -140) return;
+    const x = PLAYER_X + ahead;
+    const top = GROUND_Y - 150;
+    const gateW = 76;
+    const sq = 13;
+    ctx.save();
+    // checkered banner across the top of the gate
+    const cols = Math.ceil(gateW / sq);
+    for (let i = 0; i < cols; i++) {
+      ctx.fillStyle = i % 2 === 0 ? '#fafafa' : '#15151c';
+      ctx.fillRect(x + i * sq, top, sq, 26);
+    }
+    ctx.strokeStyle = '#15151c';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, top, gateW, 26);
+    // posts
+    ctx.fillStyle = '#dcdce2';
+    ctx.fillRect(x - 6, top, 6, GROUND_Y - top);
+    ctx.fillRect(x + gateW, top, 6, GROUND_Y - top);
+    // label
+    ctx.fillStyle = '#15151c';
+    ctx.font = 'bold 12px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('FINISH', x + gateW / 2, top + 13);
+    // checkered strip painted across the road
+    for (let row = 0; row < 4; row++) {
+      for (let i = 0; i < cols + 1; i++) {
+        ctx.fillStyle = (i + row) % 2 === 0 ? '#fafafa' : '#15151c';
+        ctx.fillRect(x - 6 + i * sq, GROUND_Y + row * 6, sq, 6);
+      }
+    }
+    ctx.restore();
   }
 
   function roundRect(ctx, x, y, w, h, r) {
@@ -2175,7 +2220,7 @@
   function updateHUD() {
     const b = currentBiome();
     hudScore.textContent = pad(state.score, 6);
-    hudBiome.textContent = b.name;
+    hudBiome.textContent = `${b.name} ${state.biomeIdx + 1}/${BIOMES.length}`;
     hudMph.textContent = String(Math.round(state.speed * 12));
     const fuelFrac = Math.max(0, state.fuel) / FUEL_MAX;
     hudFuel.style.width = `${fuelFrac * 100}%`;
@@ -2263,6 +2308,19 @@
       if (state.runStats.hits === 0) unlockAchievement('clean-finish');
       show(SCREEN.WIN);
       document.getElementById('win-score').textContent = pad(state.score, 6);
+      const rs = state.runStats;
+      const secs = Math.round(state.runTime);
+      const timeStr = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      const cleanLine = rs.hits === 0
+        ? '<div class="stat stat-clean">CLEAN RUN — no deductible!</div>'
+        : '';
+      document.getElementById('win-stats').innerHTML =
+        `<div class="stat"><span>TIME</span><b>${timeStr}</b></div>` +
+        `<div class="stat"><span>SNACKS</span><b>${rs.snacks}</b></div>` +
+        `<div class="stat"><span>FUEL CANS</span><b>${rs.fuel}</b></div>` +
+        `<div class="stat"><span>PIT STOPS</span><b>${rs.pitstops}</b></div>` +
+        `<div class="stat"><span>HITS</span><b>${rs.hits}</b></div>` +
+        cleanLine;
       return;
     }
     if (state.fuel <= 0) {
@@ -2302,6 +2360,7 @@
       drawSemis();
       drawCollectibles();
       drawObstacles();
+      drawFinishLine();
       drawSpeedLines();
       drawGhostPlayer();
       drawPlayer();
