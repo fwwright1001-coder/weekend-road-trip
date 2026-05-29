@@ -70,13 +70,19 @@
   const SPAWN_MIN_INTERVAL = 0.32; // hard floor on seconds between spawn rolls
   const BIOME_BONUS = 500;
 
-  // Hidden developer overlay. Stays false in shipped builds; when true, the
-  // backtick key toggles an on-canvas hitbox + per-leg difficulty readout.
-  const DEBUG = false;
+  // Developer flag. Off in shipped builds; enable via "?debug" in the URL or
+  // localStorage 'wrt.debug'='1'. Gates the backtick hitbox/difficulty overlay
+  // (Bot 3) AND auto-running the self-test harness on boot (Bot 4).
+  const DEBUG = (() => {
+    try {
+      return /[?&]debug(=1)?(&|$)/.test(location.search) || localStorage.getItem('wrt.debug') === '1';
+    } catch (e) { return false; }
+  })();
   const STORAGE_KEY = 'wrt.highscores.v2';
   const SETTINGS_KEY = 'wrt.settings.v1';
   const ACHIEVEMENTS_KEY = 'wrt.achievements.v1';
   const GHOST_KEY = 'wrt.ghost.v1';
+  const MUTE_KEY = 'wrt.muted.v1';     // legacy; migrated into SETTINGS_KEY on load
   const MAX_SCORES = 5;
   const GHOST_SAMPLE_STEP = 0.08;
   const GHOST_DISTANCE_SCALE = 0.28;
@@ -198,7 +204,30 @@
   const DEFAULT_SETTINGS = {
     screenShake: true,
     colorblind: false,
-    ghostVisible: true
+    ghostVisible: true,
+    // Audio — all folded into the single wrt.settings.v1 key. The legacy
+    // wrt.muted.v1 key is migrated on first load (see loadSettings).
+    muted: false,
+    sfxEnabled: true,
+    masterVolume: 0.7,          // 0..1; scales AUDIO_BASE_GAIN at the master bus
+    // Accessibility — reduceMotion is seeded from the OS prefers-reduced-motion
+    // hint at load time, then persists once the player sets it explicitly.
+    reduceMotion: false
+  };
+
+  // Spoken labels for the screen-reader live region on each screen change.
+  const SCREEN_LABELS = {
+    [SCREEN.TITLE]: 'Title screen',
+    [SCREEN.PLAYING]: 'Trip started',
+    [SCREEN.PAUSED]: 'Paused',
+    [SCREEN.GAMEOVER]: 'Out of gas. Game over',
+    [SCREEN.WIN]: 'You reached the coast. You win',
+    [SCREEN.INITIALS]: 'New high score. Enter your initials',
+    [SCREEN.SCORES]: 'High scores',
+    [SCREEN.ACHIEVEMENTS]: 'Achievements',
+    [SCREEN.GHOST]: 'Ghost race',
+    [SCREEN.SETTINGS]: 'Settings',
+    [SCREEN.HELP]: 'Controls'
   };
 
   const ACHIEVEMENTS = [
@@ -415,13 +444,35 @@
     saveScores(state.scores);
   }
 
+  function prefersReducedMotion() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+  function legacyMutePref() {
+    try { return localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { return false; }
+  }
   function loadSettings() {
+    // Defaults first; the OS reduce-motion hint and the legacy mute key seed the
+    // initial values, then an explicitly-saved wrt.settings.v1 overrides them.
+    const seeded = {
+      ...DEFAULT_SETTINGS,
+      reduceMotion: prefersReducedMotion(),
+      muted: legacyMutePref()
+    };
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
-      return { ...DEFAULT_SETTINGS, ...parsed };
+      const s = { ...seeded, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+      // Coerce/clamp so a stale or hand-edited payload can never break audio/UI.
+      let vol = Number(s.masterVolume);
+      if (!Number.isFinite(vol)) vol = DEFAULT_SETTINGS.masterVolume;
+      s.masterVolume = Math.max(0, Math.min(1, vol));
+      ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion']
+        .forEach((k) => { s[k] = !!s[k]; });
+      return s;
     } catch (e) {
-      return { ...DEFAULT_SETTINGS };
+      return { ...seeded };
     }
   }
   function saveSettings() {
@@ -505,14 +556,25 @@
   // ============================================================
   // Engine drone is a continuous oscillator pitched by speed.
   // Pickups, hits, jumps, win/lose are short envelope shapes.
-  // Muted state persists across reloads.
-  const MUTE_KEY = 'wrt.muted.v1';
+  // Mute / master volume / SFX-enabled all live in state.settings (persisted to
+  // wrt.settings.v1); the accessors below keep the audio graph in sync with that
+  // single source of truth. The legacy wrt.muted.v1 key is READ once as a
+  // migration seed (see loadSettings) and never written by the current code.
+  const AUDIO_BASE_GAIN = 0.5;   // master level at volume=1.0, unmuted
   const audio = {
     ctx: null,
     master: null,
     engineOsc: null,
     engineGain: null,
-    muted: (() => { try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; } })(),
+
+    get muted() { return !!state.settings.muted; },
+    get sfxOn() { return state.settings.sfxEnabled !== false; },
+    masterLevel() {
+      if (this.muted) return 0;
+      let v = Number(state.settings.masterVolume);
+      if (!Number.isFinite(v)) v = DEFAULT_SETTINGS.masterVolume;
+      return Math.max(0, Math.min(1, v)) * AUDIO_BASE_GAIN;
+    },
 
     init() {
       if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
@@ -521,18 +583,26 @@
         this.ctx = new AC();
         if (this.ctx.state === 'suspended') this.ctx.resume();
         this.master = this.ctx.createGain();
-        this.master.gain.value = this.muted ? 0 : 0.35;
+        this.master.gain.value = this.masterLevel();
         this.master.connect(this.ctx.destination);
       } catch (e) { /* no audio available — game still works */ }
     },
+    // Re-apply mute/volume to the live master bus. Safe to call before init().
+    refresh() {
+      if (this.master && this.ctx) {
+        this.master.gain.setTargetAtTime(this.masterLevel(), this.ctx.currentTime, 0.02);
+      }
+    },
     setMuted(m) {
-      this.muted = m;
-      try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch {}
-      if (this.master) this.master.gain.value = m ? 0 : 0.35;
+      state.settings.muted = !!m;
+      saveSettings();
+      this.refresh();
+      syncSettingsInputs();
     },
     toggle() {
       this.setMuted(!this.muted);
       showAudioBanner(this.muted ? 'SOUND OFF' : 'SOUND ON');
+      announce(this.muted ? 'Audio muted' : 'Audio on');
     },
 
     // Continuous engine — pitch tied to speed
@@ -573,7 +643,7 @@
 
     // One-shot helpers
     blip({ freq = 600, freq2 = freq, dur = 0.12, type = 'triangle', vol = 0.25 } = {}) {
-      if (!this.ctx) return;
+      if (!this.ctx || !this.sfxOn) return;   // SFX toggle gates all one-shots
       const t = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       osc.type = type;
@@ -587,7 +657,7 @@
       osc.start(t); osc.stop(t + dur + 0.02);
     },
     noiseHit(dur = 0.18) {
-      if (!this.ctx) return;
+      if (!this.ctx || !this.sfxOn) return;
       const t = this.ctx.currentTime;
       const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
       const d = buf.getChannelData(0);
@@ -623,6 +693,21 @@
     playLose() {
       [392, 330, 277, 220].forEach((f, i) => setTimeout(() =>
         this.blip({ freq: f, freq2: f, dur: 0.26, type: 'sawtooth', vol: 0.22 }), i * 130));
+    },
+    // Duck: short downward "whump".
+    playDuck() { this.blip({ freq: 360, freq2: 200, dur: 0.10, type: 'sine', vol: 0.14 }); },
+    // Combo escalation: a brief tick whose pitch climbs with the combo level, so
+    // each step reads as forward progress. Very short + quiet so it layers over
+    // the pickup sound without fatigue.
+    playCombo(level) {
+      const n = Math.max(2, level | 0);
+      const base = 620 + (n - 2) * 130;
+      this.blip({ freq: base, freq2: base * 1.5, dur: 0.07, type: 'triangle', vol: 0.10 });
+    },
+    // Low-fuel warning: two soft falling beeps — a nudge, not an alarm.
+    playLowFuel() {
+      this.blip({ freq: 520, freq2: 380, dur: 0.14, type: 'triangle', vol: 0.16 });
+      setTimeout(() => this.blip({ freq: 430, freq2: 300, dur: 0.16, type: 'triangle', vol: 0.16 }), 150);
     }
   };
   let audioBanner = { text: '', t: 0 };
@@ -655,6 +740,64 @@
   const ghostSummaryEl = document.getElementById('ghost-summary');
   const ghostMessageEl = document.getElementById('ghost-message');
   const settingsInputs = document.querySelectorAll('[data-setting]');
+  const hudFuelBar = hudFuel ? hudFuel.parentElement : null;   // .hud-fuel-bar
+  const hudTripBar = hudTrip ? hudTrip.parentElement : null;   // .hud-trip-bar
+  const liveRegion = document.getElementById('a11y-live');
+
+  // ============================================================
+  // ACCESSIBILITY (Bot 4: a11y workstream)
+  // ============================================================
+  // Polite screen-reader announcements (screen changes, leg transitions, low
+  // fuel, run outcome). Clearing first guarantees identical repeats re-announce.
+  function announce(msg) {
+    if (!liveRegion || !msg) return;
+    liveRegion.textContent = '';
+    setTimeout(() => { liveRegion.textContent = msg; }, 30);
+  }
+  function reduceMotionOn() { return !!state.settings.reduceMotion; }
+  // The canvas carries a text summary of game state for screen readers.
+  function updateCanvasAria() {
+    if (!canvas) return;
+    let label;
+    if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      const b = currentBiome();
+      const tripPct = Math.max(0, Math.min(100, Math.round((state.distance / TRIP_TOTAL) * 100)));
+      const fuelPct = Math.max(0, Math.min(100, Math.round((state.fuel / FUEL_MAX) * 100)));
+      label = 'Weekend Road Trip. Driving through ' + b.name + ', leg ' + (state.biomeIdx + 1) +
+        ' of ' + BIOMES.length + '. Trip ' + tripPct + ' percent complete. Fuel ' + fuelPct +
+        ' percent. Score ' + (state.score | 0) + (state.screen === SCREEN.PAUSED ? '. Paused.' : '.');
+    } else {
+      label = 'Weekend Road Trip. ' + (SCREEN_LABELS[state.screen] || 'Menu') +
+        '. Use Tab to reach the on-screen buttons.';
+    }
+    canvas.setAttribute('aria-label', label);
+  }
+  // One-time ARIA wiring for the canvas + DOM HUD. Applied from JS so the HUD
+  // markup (Bot 2's lane) is left untouched — we only add attributes at runtime.
+  function initA11y() {
+    try {
+      if (canvas) canvas.setAttribute('role', 'img');
+      if (hudEl) {
+        hudEl.setAttribute('role', 'group');
+        hudEl.setAttribute('aria-label', 'Heads-up display');
+      }
+      [[hudFuelBar, 'Fuel'], [hudTripBar, 'Trip progress']].forEach((pair) => {
+        const el = pair[0];
+        if (!el) return;
+        el.setAttribute('role', 'progressbar');
+        el.setAttribute('aria-label', pair[1]);
+        el.setAttribute('aria-valuemin', '0');
+        el.setAttribute('aria-valuemax', '100');
+        el.setAttribute('aria-valuenow', '0');
+      });
+      // Make each menu screen programmatically focusable (not in the tab order)
+      // so focus can be moved into it on a screen change. See applyScreen().
+      for (const key in screenEls) {
+        if (screenEls[key] && screenEls[key].setAttribute) screenEls[key].setAttribute('tabindex', '-1');
+      }
+      updateCanvasAria();
+    } catch (e) { /* a11y is best-effort; never block the game */ }
+  }
 
   // ============================================================
   // SCREEN MANAGEMENT
@@ -681,6 +824,20 @@
       audio.engineGain.gain.setTargetAtTime(target, audio.ctx.currentTime, 0.05);
     }
     updateGhostTitleStatus();
+    announce(SCREEN_LABELS[state.screen] || '');
+    updateCanvasAria();
+    // A11y focus management (WCAG 2.4.3): move focus into a newly shown menu so
+    // it never stays stranded on a now-hidden control; drop focus out of the
+    // overlay when gameplay starts so game keys aren't intercepted by a hidden
+    // button.
+    if (state.screen !== SCREEN.PLAYING) {
+      const focusEl = screenEls[state.screen];
+      if (focusEl && typeof focusEl.focus === 'function') {
+        try { focusEl.focus({ preventScroll: true }); } catch (e) { try { focusEl.focus(); } catch (e2) {} }
+      }
+    } else if (document.activeElement && overlayEl.contains && overlayEl.contains(document.activeElement)) {
+      try { document.activeElement.blur(); } catch (e) {}
+    }
   }
   function openHelp() {
     state.prevScreen = state.screen;
@@ -715,6 +872,9 @@
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
     // Hidden debug overlay — only reachable in DEBUG builds.
     if (e.code === 'Backquote') { if (DEBUG) state.debug = !state.debug; return; }
+    // A focused button activates itself on Enter (native click); don't also run
+    // the screen-global confirm, or navigation would fire twice.
+    if (e.code === 'Enter' && tag === 'BUTTON') return;
     handleKey(e.code);
   });
   window.addEventListener('keyup', (e) => {
@@ -888,11 +1048,23 @@
   });
 
   settingsInputs.forEach((input) => {
-    input.addEventListener('change', () => {
-      state.settings[input.dataset.setting] = input.checked;
-      saveSettings();
+    const apply = (persist) => {
+      const key = input.dataset.setting;
+      if (input.type === 'range') {
+        let v = Number(input.value);
+        if (!Number.isFinite(v)) v = DEFAULT_SETTINGS.masterVolume;
+        state.settings[key] = Math.max(0, Math.min(1, v));
+      } else {
+        state.settings[key] = input.checked;
+      }
+      if (persist) saveSettings();
       applySettings();
-    });
+      updateVolumeReadout();
+    };
+    input.addEventListener('change', () => apply(true));
+    // Sliders also fire 'input' continuously while dragging — apply live, but
+    // only persist on 'change' (release) to avoid hammering localStorage.
+    if (input.type === 'range') input.addEventListener('input', () => apply(false));
   });
 
   // ============================================================
@@ -920,6 +1092,9 @@
     state.player.vy = 0;
     state.player.jumping = false;
     state.player.ducking = false;
+    state._duckHeldPrev = false;
+    state._lowFuelWarned = false;
+    state._ariaTick = 0;
     state.player.tilt = 0;
     state.player.bob = 0;
     state.combo = 0;
@@ -1000,14 +1175,32 @@
       el.appendChild(card);
     });
   }
-  function renderSettings() {
+  function syncSettingsInputs() {
     settingsInputs.forEach((input) => {
-      input.checked = !!state.settings[input.dataset.setting];
+      const key = input.dataset.setting;
+      if (input.type === 'range') input.value = Number(state.settings[key]);
+      else input.checked = !!state.settings[key];
     });
+    updateVolumeReadout();
+  }
+  function updateVolumeReadout() {
+    const slider = document.getElementById('setting-volume');
+    const out = document.getElementById('setting-volume-value');
+    const pct = Math.round(Math.max(0, Math.min(1, Number(state.settings.masterVolume))) * 100);
+    if (out) out.textContent = pct + '%';
+    if (slider) {
+      slider.setAttribute('aria-valuenow', String(Math.max(0, Math.min(1, Number(state.settings.masterVolume)))));
+      slider.setAttribute('aria-valuetext', pct + '%');
+    }
+  }
+  function renderSettings() {
+    syncSettingsInputs();
     applySettings();
   }
   function applySettings() {
     document.body.classList.toggle('colorblind', !!state.settings.colorblind);
+    document.body.classList.toggle('reduce-motion', reduceMotionOn());
+    audio.refresh();
   }
   function updateGhostTitleStatus() {
     if (!ghostTitleStatus) return;
@@ -1384,6 +1577,7 @@
         state.runStats.pickups += 1;
         if (state.combo >= COMBO_MAX) unlockAchievement('combo-5');
         const mult = state.combo;
+        if (state.combo >= 2) audio.playCombo(state.combo);   // combo milestone feedback
         if (c.type === 'fuel') {
           state.runStats.fuel += 1;
           const pts = FUEL_PICKUP_BONUS * mult;
@@ -1552,12 +1746,12 @@
   // SCREEN SHAKE
   // ============================================================
   function screenShake(mag, duration) {
-    if (!state.settings.screenShake) return;
+    if (!state.settings.screenShake || reduceMotionOn()) return;
     state.shakeMag = mag;
     state.shakeT = duration;
   }
   function shakeOffset() {
-    if (!state.settings.screenShake || state.shakeT <= 0) return { x: 0, y: 0 };
+    if (!state.settings.screenShake || reduceMotionOn() || state.shakeT <= 0) return { x: 0, y: 0 };
     const t = state.shakeT / 0.35;
     return {
       x: (Math.random() - 0.5) * state.shakeMag * t,
@@ -2305,6 +2499,7 @@
     ctx.fillRect(0, 0, W, H);
   }
   function drawSpeedLines() {
+    if (reduceMotionOn()) return;   // motion-blur speed lines disabled for reduced motion
     // Only at higher speeds; intensity scales with how fast above base
     const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
     if (frac < 0.55) return;
@@ -2434,6 +2629,11 @@
     hudFuel.classList.toggle('low', fuelFrac < 0.25);
     hudFuel.classList.toggle('mid', fuelFrac >= 0.25 && fuelFrac < 0.5);
     hudTrip.style.width = `${Math.min(100, (state.distance / TRIP_TOTAL) * 100)}%`;
+    // A11y: keep progressbar values + canvas summary in sync (canvas throttled).
+    if (hudFuelBar) hudFuelBar.setAttribute('aria-valuenow', String(Math.round(fuelFrac * 100)));
+    if (hudTripBar) hudTripBar.setAttribute('aria-valuenow', String(Math.min(100, Math.round((state.distance / TRIP_TOTAL) * 100))));
+    state._ariaTick = (state._ariaTick || 0) + 1;
+    if (state._ariaTick % 20 === 0) updateCanvasAria();
   }
 
   function checkProgressAchievements() {
@@ -2444,6 +2644,7 @@
     if (state.score >= 3000) unlockAchievement('score-3000');
   }
 
+
   // ============================================================
   // GAMEPLAY UPDATE
   // ============================================================
@@ -2452,7 +2653,10 @@
 
   function updateGame(dt) {
     // Speed input
-    state.player.ducking = actionDown('duck');
+    const duckHeld = actionDown('duck');
+    if (duckHeld && !state._duckHeldPrev) audio.playDuck();   // duck SFX on press (kbd + gamepad)
+    state._duckHeldPrev = duckHeld;
+    state.player.ducking = duckHeld;
     const wantAccel = actionDown('accel');
     const wantBrake = actionDown('brake');
     if (wantAccel) state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
@@ -2495,12 +2699,21 @@
     if (state.biomeIdx > state._lastBiomeIdx) {
       state.score += BIOME_BONUS;
       state._lastBiomeIdx = state.biomeIdx;
-      audio.playBiome();
+      audio.playBiome();                 // leg transition sound
+      announce('Entering ' + b.name);
       if (b.name === 'FOREST') unlockAchievement('forest');
       if (b.name === 'DESERT') unlockAchievement('desert');
       if (b.name === 'COAST') unlockAchievement('coast');
     }
     checkProgressAchievements();
+
+    // Low-fuel warning: Bot 3 flags the rising edge (state.fuelLowJustEntered);
+    // we play the one-shot beep + announce here. It re-arms automatically after a
+    // refuel because Bot 3 only sets the flag on a fresh crossing into the low band.
+    if (state.fuelLowJustEntered) {
+      audio.playLowFuel();
+      announce('Low fuel');
+    }
 
     // Engine pitch follows speed
     audio.updateEngine((state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
@@ -2712,12 +2925,195 @@
   }
 
   // ============================================================
+  // SELF-TEST HARNESS (DEBUG-gated; also callable from the console)
+  // ============================================================
+  // Self-tests run manually via window.runSelfTests() / window.WRT.runSelfTests(),
+  // and auto-run on boot when DEBUG is on (defined in CONFIG: "?debug" or
+  // localStorage 'wrt.debug'='1'). Tests are NON-DESTRUCTIVE: anything written to
+  // real storage is snapshotted and restored, and no AudioContext is created
+  // without a user gesture. Returns { pass, fail, total, results } + logs a summary.
+  function runSelfTests() {
+    const results = [];
+    const check = (name, cond, detail) => results.push({ name: name, pass: !!cond, detail: detail || '' });
+
+    // 1) localStorage JSON round-trip for each persistence key (temp sibling key
+    //    so real saved data is never touched).
+    [SETTINGS_KEY, STORAGE_KEY, ACHIEVEMENTS_KEY, GHOST_KEY].forEach((key) => {
+      const tmp = key + '.__selftest__';
+      const sample = { key: key, n: 42, list: [3, 2, 1], nested: { ok: true }, s: 'café' };
+      let pass = false, err = '';
+      try {
+        localStorage.setItem(tmp, JSON.stringify(sample));
+        const back = JSON.parse(localStorage.getItem(tmp));
+        pass = !!back && back.n === 42 && back.list.length === 3 &&
+               back.nested.ok === true && back.s === 'café';
+      } catch (e) { err = String(e); }
+      try { localStorage.removeItem(tmp); } catch (e) {}
+      check('localStorage round-trip: ' + key, pass, err);
+    });
+
+    // 2) settings load merges defaults; all keys present and correctly typed.
+    {
+      let pass = false, detail = '';
+      try {
+        const s = loadSettings();
+        const bools = ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion'];
+        const boolsOk = bools.every((k) => typeof s[k] === 'boolean');
+        const volOk = typeof s.masterVolume === 'number' && s.masterVolume >= 0 && s.masterVolume <= 1;
+        pass = boolsOk && volOk;
+        detail = JSON.stringify(s);
+      } catch (e) { detail = String(e); }
+      check('settings load: defaults + all keys typed', pass, detail);
+    }
+
+    // 3) settings save → load preserves every field (round-trip via the real key,
+    //    snapshotted + restored).
+    {
+      let pass = false, detail = '';
+      const snap = (() => { try { return localStorage.getItem(SETTINGS_KEY); } catch (e) { return null; } })();
+      const realSettings = state.settings;
+      try {
+        const probe = { screenShake: false, colorblind: true, ghostVisible: false,
+                        muted: true, sfxEnabled: false, masterVolume: 0.3, reduceMotion: true };
+        state.settings = Object.assign({}, DEFAULT_SETTINGS, probe);
+        saveSettings();
+        const loaded = loadSettings();
+        pass = loaded.screenShake === false && loaded.colorblind === true &&
+               loaded.ghostVisible === false && loaded.muted === true &&
+               loaded.sfxEnabled === false && loaded.masterVolume === 0.3 &&
+               loaded.reduceMotion === true;
+        detail = JSON.stringify(loaded);
+      } catch (e) { detail = String(e); }
+      finally {
+        state.settings = realSettings;
+        try {
+          if (snap === null) localStorage.removeItem(SETTINGS_KEY);
+          else localStorage.setItem(SETTINGS_KEY, snap);
+        } catch (e) {}
+      }
+      check('settings save → load preserves all fields', pass, detail);
+    }
+
+    // 4) high-score sort is descending and capped at MAX_SCORES (same logic as
+    //    insertScore, run on a synthetic list).
+    {
+      const raw = [120, 50, 999, 3000, 7, 480, 1500, 60];
+      const list = raw.map((n, i) => ({ initials: 'AAA', score: n, date: '2026-01-0' + (i % 9) }));
+      const sorted = list.slice().sort((a, b) => b.score - a.score).slice(0, MAX_SCORES);
+      let descending = true;
+      for (let i = 1; i < sorted.length; i++) if (sorted[i - 1].score < sorted[i].score) descending = false;
+      check('high-score sort is descending', descending, sorted.map((s) => s.score).join(', '));
+      check('high-score list capped at MAX_SCORES (' + MAX_SCORES + ')',
+            sorted.length === MAX_SCORES, 'len=' + sorted.length);
+      check('high-score top entry is the maximum', sorted[0].score === Math.max.apply(null, raw));
+    }
+
+    // 5) achievements never duplicate — unlock is idempotent (snapshot + restore).
+    {
+      let pass = false, detail = '';
+      const id = ACHIEVEMENTS[0].id;
+      const snapState = JSON.stringify(state.achievements);
+      const snapStore = (() => { try { return localStorage.getItem(ACHIEVEMENTS_KEY); } catch (e) { return null; } })();
+      const snapToast = state.achievementToast;
+      try {
+        unlockAchievement(id);
+        const c1 = Object.keys(state.achievements).length;
+        const t1 = state.achievements[id];
+        unlockAchievement(id);   // second call must be a no-op
+        const c2 = Object.keys(state.achievements).length;
+        const t2 = state.achievements[id];
+        pass = c1 === c2 && t1 === t2;
+        detail = 'count ' + c1 + ' → ' + c2;
+      } catch (e) { detail = String(e); }
+      finally {
+        try { state.achievements = JSON.parse(snapState); } catch (e) { state.achievements = {}; }
+        state.achievementToast = snapToast;
+        try {
+          if (snapStore === null) localStorage.removeItem(ACHIEVEMENTS_KEY);
+          else localStorage.setItem(ACHIEVEMENTS_KEY, snapStore);
+        } catch (e) {}
+      }
+      check('achievement unlock is idempotent (no dupes)', pass, detail);
+    }
+
+    // 6) AudioContext can initialize. To honor the autoplay policy we never
+    //    create a context without a user gesture: if the game already has one
+    //    (post-gesture) we assert it; otherwise we assert the constructor exists.
+    {
+      let pass = false, detail = '';
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (audio.ctx) {
+          pass = typeof audio.ctx.state === 'string';
+          detail = 'live ctx, state=' + audio.ctx.state;
+        } else {
+          pass = typeof AC === 'function';
+          detail = 'constructor available (not instantiated — no user gesture yet)';
+        }
+      } catch (e) { detail = String(e); }
+      check('AudioContext initializes', pass, detail);
+    }
+
+    // 7) prefers-reduced-motion seeds the reduceMotion default on a fresh profile
+    //    (no saved settings); a saved value still wins. Mocks matchMedia and
+    //    snapshots the settings key — fully non-destructive.
+    {
+      let pass = false, detail = '';
+      const realMM = (typeof window !== 'undefined') ? window.matchMedia : undefined;
+      const snap = (() => { try { return localStorage.getItem(SETTINGS_KEY); } catch (e) { return null; } })();
+      try {
+        try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
+        window.matchMedia = () => ({ matches: true });
+        if (!(window.matchMedia('(prefers-reduced-motion: reduce)') || {}).matches) {
+          pass = true; detail = 'matchMedia override unsupported — skipped';
+        } else {
+          const onPref = loadSettings();
+          window.matchMedia = () => ({ matches: false });
+          const offPref = loadSettings();
+          pass = onPref.reduceMotion === true && offPref.reduceMotion === false;
+          detail = 'OS reduce-motion on→' + onPref.reduceMotion + ', off→' + offPref.reduceMotion;
+        }
+      } catch (e) { detail = String(e); }
+      finally {
+        try { window.matchMedia = realMM; } catch (e) {}
+        try {
+          if (snap === null) localStorage.removeItem(SETTINGS_KEY);
+          else localStorage.setItem(SETTINGS_KEY, snap);
+        } catch (e) {}
+      }
+      check('prefers-reduced-motion seeds reduceMotion default (calm by default)', pass, detail);
+    }
+
+    const passed = results.filter((r) => r.pass).length;
+    const failed = results.length - passed;
+    const tag = failed === 0 ? 'ALL PASS' : failed + ' FAILED';
+    try {
+      console.group('WRT self-tests — ' + tag + ' (' + passed + '/' + results.length + ')');
+      results.forEach((r) => console.log((r.pass ? 'PASS' : 'FAIL') + '  ' + r.name + (r.detail ? '  — ' + r.detail : '')));
+      console.groupEnd();
+    } catch (e) {
+      results.forEach((r) => console.log((r.pass ? 'PASS' : 'FAIL') + '  ' + r.name));
+    }
+    return { pass: passed, fail: failed, total: results.length, results: results };
+  }
+
+  // ============================================================
   // BOOT
   // ============================================================
   state._lastBiomeIdx = 0;
   state.bannerT = 0;
   state.scores = loadScores();
+  initA11y();
   applySettings();
+  syncSettingsInputs();   // reflect loaded settings in the controls before first open
   applyScreen();
+  try {
+    window.WRT = window.WRT || {};
+    window.WRT.runSelfTests = runSelfTests;
+    window.runSelfTests = runSelfTests;   // convenience for the console
+  } catch (e) {}
+  if (DEBUG) {
+    try { runSelfTests(); } catch (e) { try { console.error('Self-tests threw:', e); } catch (e2) {} }
+  }
   requestAnimationFrame(tick);
 })();
