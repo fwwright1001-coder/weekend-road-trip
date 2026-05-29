@@ -2401,27 +2401,62 @@
       const float = Math.sin(c.bob) * 4;
       const y = c.y + float;
       if (c.type === 'fuel') {
-        const fuelGlow = gameColor('rgba(126, 226, 126, 0.35)', 'rgba(0, 114, 178, 0.38)');
-        const fuelBody = gameColor('#2a7a2a', '#005f8f');
-        const fuelStroke = gameColor('#7ee27e', '#56b4e9');
-        // Glow
+        // Stereotypical NATO jerry can: red body with the signature embossed
+        // X-brace, a pour spout + cap, and a top carry-handle. Red in the default
+        // palette; the colorblind palette keeps it blue so it never reads as a
+        // hazard — and the unmistakable can SHAPE means fuel never relies on
+        // colour alone (accessibility: shape redundancy, not just hue).
+        const fuelGlow  = gameColor('rgba(220, 70, 55, 0.34)', 'rgba(0, 114, 178, 0.38)');
+        const fuelBody  = gameColor('#c0392b', '#005f8f');
+        const fuelShade = gameColor('#7d241b', '#00405c');
+        const fuelEdge  = gameColor('#e8897f', '#7fc7ef');
+        const metal     = '#9aa3ab';
+        const cx = c.x + c.w / 2;
+        // soft glow halo
         ctx.fillStyle = fuelGlow;
         ctx.beginPath();
-        ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w * 0.7, 0, Math.PI * 2);
+        ctx.arc(cx, y + c.h / 2, c.w * 0.72, 0, Math.PI * 2);
         ctx.fill();
-        // Can
+        // can geometry (body leaves headroom for the spout + handle)
+        const bx = c.x + c.w * 0.12, bw = c.w * 0.76;
+        const bTop = y + c.h * 0.22, bh = c.h * 0.76;
+        // pour spout (top-right), drawn first so the body overlaps its base
+        ctx.fillStyle = metal;
+        ctx.strokeStyle = fuelShade;
+        ctx.lineWidth = 1;
+        const sx = bx + bw * 0.66, sTop = bTop - c.h * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(sx, bTop);
+        ctx.lineTo(sx + c.w * 0.20, sTop);
+        ctx.lineTo(sx + c.w * 0.30, sTop + c.h * 0.06);
+        ctx.lineTo(sx + c.w * 0.12, bTop + c.h * 0.05);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        // body
         ctx.fillStyle = fuelBody;
-        roundRect(ctx, c.x, y, c.w, c.h, 3);
+        roundRect(ctx, bx, bTop, bw, bh, 2);
         ctx.fill();
-        ctx.strokeStyle = fuelStroke;
+        ctx.strokeStyle = fuelShade;
         ctx.lineWidth = 2;
         ctx.stroke();
-        // F letter
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('F', c.x + c.w / 2, y + c.h / 2);
+        // top carry-handle (arched strap straddling the body top)
+        ctx.strokeStyle = fuelShade;
+        ctx.lineWidth = Math.max(1.5, c.w * 0.07);
+        ctx.beginPath();
+        ctx.arc(bx + bw * 0.32, bTop, bw * 0.20, Math.PI, 0);
+        ctx.stroke();
+        // signature X-brace on an inset face panel
+        const ix = bx + bw * 0.15, iy = bTop + bh * 0.16;
+        const iw = bw * 0.70, ih = bh * 0.66;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = fuelShade;
+        ctx.strokeRect(ix, iy, iw, ih);
+        ctx.strokeStyle = fuelEdge;
+        ctx.lineWidth = Math.max(1.3, c.w * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(ix, iy); ctx.lineTo(ix + iw, iy + ih);
+        ctx.moveTo(ix + iw, iy); ctx.lineTo(ix, iy + ih);
+        ctx.stroke();
       } else {
         // Snack — yellow coin
         const snackGlow = gameColor('rgba(245, 215, 110, 0.4)', 'rgba(255, 210, 63, 0.42)');
