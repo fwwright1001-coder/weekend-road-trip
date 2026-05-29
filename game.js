@@ -231,7 +231,10 @@
     masterVolume: 0.7,          // 0..1; scales AUDIO_BASE_GAIN at the master bus
     // Accessibility — reduceMotion is seeded from the OS prefers-reduced-motion
     // hint at load time, then persists once the player sets it explicitly.
-    reduceMotion: false
+    reduceMotion: false,
+    // Cosmetic — swap the convertible for the GT racer body. Off by default so
+    // the "red convertible" story holds; an opt-in showcase.
+    gtMode: false
   };
 
   // Spoken labels for the screen-reader live region on each screen change.
@@ -488,7 +491,7 @@
       let vol = Number(s.masterVolume);
       if (!Number.isFinite(vol)) vol = DEFAULT_SETTINGS.masterVolume;
       s.masterVolume = Math.max(0, Math.min(1, vol));
-      ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion']
+      ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion', 'gtMode']
         .forEach((k) => { s[k] = !!s[k]; });
       return s;
     } catch (e) {
@@ -1170,6 +1173,7 @@
     state.player.tilt = 0;
     state.player.bob = 0;
     state.carStyle = pickCarStyle();   // fresh random livery each run
+    state.carNumber = 1 + Math.floor(Math.random() * 99);   // GT-mode door number
     state.combo = 0;
     state.comboTimer = 0;
     state.comboPopupT = 0;
@@ -1979,6 +1983,24 @@
     ctx.beginPath();
     ctx.arc(sunX, sunY, sunR * 3, 0, Math.PI * 2);
     ctx.fill();
+    // Crepuscular rays (static sunburst) — strongest at sunset, lighter at noon.
+    if (biome.timeOfDay === 'sunset' || biome.timeOfDay === 'afternoon') {
+      ctx.save();
+      ctx.translate(sunX, sunY);
+      ctx.globalAlpha = biome.timeOfDay === 'sunset' ? 0.13 : 0.07;
+      ctx.fillStyle = biome.sunColor;
+      const rays = 9;
+      for (let i = 0; i < rays; i++) {
+        ctx.rotate((Math.PI * 2) / rays);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(sunR * 5, -sunR * 0.5);
+        ctx.lineTo(sunR * 5, sunR * 0.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
     // disk
     ctx.fillStyle = biome.sunColor;
     ctx.beginPath();
@@ -2346,7 +2368,147 @@
     ctx.restore();
   }
 
+  // GT / Le Mans racer body — opt-in via Settings → "GT mode". Ported from the
+  // car-prototype (faces right, same 80px footprint + hitbox). Wheels are planted
+  // on Bot 3's ROAD_SURFACE_Y contact line (body-only bob); body colour comes from
+  // the per-run random livery, with a random door number.
+  function drawWheelGT(cx, cy, angle, r) {
+    r = r || 11;
+    const tg = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.2, cx, cy, r);
+    tg.addColorStop(0, '#2a2a2e'); tg.addColorStop(1, '#0c0c0e');
+    ctx.fillStyle = tg;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(cx, cy, r - 1, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#5a5a60';
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.62, 0, Math.PI * 2); ctx.fill();
+    const rg = ctx.createRadialGradient(cx - 2, cy - 2, 1, cx, cy, r * 0.55);
+    rg.addColorStop(0, '#f0f0f5'); rg.addColorStop(0.6, '#b8b8c0'); rg.addColorStop(1, '#7a7a82');
+    ctx.fillStyle = rg;
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+    ctx.strokeStyle = '#6a6a72'; ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) { ctx.rotate((Math.PI * 2) / 5); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(r * 0.46, 0); ctx.stroke(); }
+    ctx.restore();
+    ctx.fillStyle = '#d4a040';
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.16, 0, Math.PI * 2); ctx.fill();
+  }
+  function drawPlayerGT() {
+    const x = PLAYER_X, y = state.player.y, groundY = GROUND_Y;
+    const ducking = !!state.player.ducking, jumping = !!state.player.jumping;
+    const tilt = state.player.tilt || 0, wheelAngle = state.player.wheelAngle || 0, bob = state.player.bob || 0;
+    const color = state.carStyle.body, accent = '#15151c';
+    const number = state.carNumber != null ? state.carNumber : 7;
+    const w = 80, k = ducking ? 0.62 : 1, wheelR = ducking ? 11 : 12;
+    // Plant wheels on the contact line (rises with the jump); only the body bobs.
+    const lift = groundY - y, footY = ROAD_SURFACE_Y - lift, wheelY = footY - wheelR;
+    const xRearWheel = x + 20, xFrontWheel = x + 60;
+    const floorY = y + 2 + bob * 0.3, tailY = y - 14 * k + bob, deckY = y - 16 * k + bob;
+    const noseY = y - 11 * k + bob, hoodY = y - 18 * k + bob, canopyY = y - 28 * k + bob;
+    const wingY = y - 25 * k + bob, doorCY = y - 9 * k + bob;
+    // ground shadow (no tilt; scales with jump height)
+    ctx.save();
+    const shadowScale = jumping ? 0.5 + Math.min(1, (groundY - y) / 90) * 0.5 : 1;
+    ctx.fillStyle = `rgba(0,0,0,${0.32 * shadowScale})`;
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, ROAD_SURFACE_Y, (w / 2 + 5) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    const cx = x + w / 2, cyRot = y - 14 * k;
+    ctx.save();
+    ctx.translate(cx, cyRot); ctx.rotate(tilt); ctx.translate(-cx, -cyRot);
+    // rear wing
+    ctx.fillStyle = accent;
+    ctx.beginPath(); ctx.moveTo(x + 8, deckY); ctx.lineTo(x + 14, deckY); ctx.lineTo(x + 13, wingY + 3); ctx.lineTo(x + 9, wingY + 3); ctx.closePath(); ctx.fill();
+    roundRect(ctx, x + 2, wingY, 22, 3.2, 1.5); ctx.fill();
+    ctx.fillRect(x + 2, wingY - 2, 2.5, 7);
+    // wheels
+    drawWheelGT(xRearWheel, wheelY, wheelAngle, wheelR);
+    drawWheelGT(xFrontWheel, wheelY, wheelAngle, wheelR);
+    // body silhouette (low GT wedge)
+    ctx.beginPath();
+    ctx.moveTo(x + 3, floorY);
+    ctx.lineTo(x + 2, tailY);
+    ctx.quadraticCurveTo(x + 3, deckY, x + 18, deckY);
+    ctx.quadraticCurveTo(x + 30, canopyY, x + 42, hoodY);
+    ctx.quadraticCurveTo(x + 56, hoodY - 2, x + 72, noseY);
+    ctx.quadraticCurveTo(x + w, noseY + 1, x + w, y - 4 * k);
+    ctx.lineTo(x + w - 3, floorY);
+    ctx.closePath();
+    const bg = ctx.createLinearGradient(0, canopyY, 0, floorY);
+    bg.addColorStop(0, shade(color, 0.45));
+    bg.addColorStop(0.4, color);
+    bg.addColorStop(0.78, color);
+    bg.addColorStop(1, shade(color, -0.42));
+    ctx.fillStyle = bg; ctx.fill();
+    ctx.strokeStyle = shade(color, -0.55); ctx.lineWidth = 1; ctx.stroke();
+    // wheel-arch lips
+    ctx.strokeStyle = shade(color, -0.5); ctx.lineWidth = 1.5;
+    [xRearWheel, xFrontWheel].forEach((wx) => { ctx.beginPath(); ctx.arc(wx, wheelY - 1, wheelR + 3, Math.PI * 1.08, Math.PI * 1.92); ctx.stroke(); });
+    // splitter + dive plane
+    ctx.fillStyle = accent;
+    ctx.fillRect(x + w - 18, floorY - 1.5, 20, 3);
+    ctx.beginPath(); ctx.moveTo(x + w - 20, noseY + 4); ctx.lineTo(x + w - 8, noseY + 5); ctx.lineTo(x + w - 18, noseY + 7.5); ctx.closePath(); ctx.fill();
+    // diffuser fins
+    ctx.strokeStyle = accent; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(x + 5 + i * 4, floorY); ctx.lineTo(x + 7 + i * 4, floorY - 3.5); ctx.stroke(); }
+    // racing stripe
+    ctx.save(); ctx.globalAlpha = 0.92; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4.5 * k;
+    ctx.beginPath();
+    ctx.moveTo(x + 4, tailY + 1);
+    ctx.quadraticCurveTo(x + 3, deckY + 1, x + 18, deckY + 1.5);
+    ctx.quadraticCurveTo(x + 30, canopyY + 2.5, x + 42, hoodY + 2.5);
+    ctx.quadraticCurveTo(x + 56, hoodY, x + 74, noseY + 2);
+    ctx.stroke(); ctx.restore();
+    // cockpit glass
+    const gg = ctx.createLinearGradient(x + 24, canopyY, x + 44, hoodY);
+    gg.addColorStop(0, 'rgba(35,55,75,0.95)'); gg.addColorStop(0.5, 'rgba(120,170,210,0.92)'); gg.addColorStop(1, 'rgba(55,85,115,0.95)');
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.moveTo(x + 24, deckY - 1);
+    ctx.quadraticCurveTo(x + 31, canopyY + 1.5, x + 40, hoodY + 1);
+    ctx.lineTo(x + 38, hoodY + 4.5);
+    ctx.quadraticCurveTo(x + 30, canopyY + 5, x + 25, deckY + 2);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(x + 29, deckY); ctx.lineTo(x + 35, canopyY + 4); ctx.stroke();
+    // driver helmet
+    if (!ducking) {
+      ctx.fillStyle = '#f0f0f0';
+      ctx.beginPath(); ctx.arc(x + 33, hoodY + 1, 3.6, Math.PI, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = color; ctx.fillRect(x + 30, hoodY - 0.5, 7, 1.6);
+    }
+    // side mirror
+    ctx.fillStyle = accent; ctx.fillRect(x + 43, hoodY - 3, 4, 2.5);
+    // door roundel + number
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(x + 50, doorCY, 6 * k, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = accent;
+    ctx.font = `bold ${Math.round(8.5 * k)}px "JetBrains Mono", Consolas, monospace`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(number), x + 50, doorCY + 0.5);
+    // headlight pod + lens glow
+    const hl = ctx.createLinearGradient(x + w - 12, noseY, x + w - 12, noseY + 7);
+    hl.addColorStop(0, '#ffffff'); hl.addColorStop(1, '#fff2a8');
+    ctx.fillStyle = hl;
+    roundRect(ctx, x + w - 13, noseY + 1.5, 9, 5.5, 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,248,168,0.28)'; ctx.fillRect(x + w - 4, noseY + 2.5, 16, 3);
+    // rear light + exhaust tip
+    ctx.fillStyle = '#ff3a3a'; ctx.fillRect(x + 2, tailY + 1, 3, 4);
+    ctx.fillStyle = '#999'; ctx.fillRect(x + 1, floorY - 5, 4, 3);
+    // metallic top sheen
+    ctx.save(); ctx.globalAlpha = 0.16; ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(x + 44, hoodY + 1);
+    ctx.quadraticCurveTo(x + 60, hoodY - 1, x + 74, noseY + 1);
+    ctx.lineTo(x + 74, noseY + 4);
+    ctx.quadraticCurveTo(x + 60, hoodY + 2, x + 44, hoodY + 4);
+    ctx.closePath(); ctx.fill(); ctx.restore();
+    ctx.restore();
+  }
   function drawPlayer() {
+    if (state.settings.gtMode) { drawPlayerGT(); return; }
     const { y, ducking, jumping, tilt, wheelAngle, bob } = state.player;
     const w = 80;
     const h = ducking ? 36 : 56;
@@ -3212,7 +3374,7 @@
       let pass = false, detail = '';
       try {
         const s = loadSettings();
-        const bools = ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion'];
+        const bools = ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion', 'gtMode'];
         const boolsOk = bools.every((k) => typeof s[k] === 'boolean');
         const volOk = typeof s.masterVolume === 'number' && s.masterVolume >= 0 && s.masterVolume <= 1;
         pass = boolsOk && volOk;
