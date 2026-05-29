@@ -2543,15 +2543,20 @@
   function drawObstacles() {
     for (const o of state.obstacles) {
       if (o.type === 'pothole') {
-        // Cracked asphalt depression — crumbled rim, dark depth, radiating cracks.
+        // Cracked asphalt depression — high-contrast rim + depth + cracks, plus a
+        // dark outline so it stays readable against the warm dusk grade.
         const px = o.x + o.w / 2, py = o.y + o.h / 2;
         ctx.fillStyle = 'rgba(0,0,0,0.30)';
         ctx.beginPath();
-        ctx.ellipse(px, py + 3, o.w / 2 + 3, o.h / 2 + 3, 0, 0, Math.PI * 2);
+        ctx.ellipse(px, py + 3, o.w / 2 + 4, o.h / 2 + 4, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#3a3a40';   // crumbled rim
+        ctx.fillStyle = '#050507';   // dark contrast outline (reads on bright/orange)
         ctx.beginPath();
-        ctx.ellipse(px, py, o.w / 2 + 2, o.h / 2 + 2, 0, 0, Math.PI * 2);
+        ctx.ellipse(px, py, o.w / 2 + 4, o.h / 2 + 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#54545e';   // crumbled rim (lighter + wider than before)
+        ctx.beginPath();
+        ctx.ellipse(px, py, o.w / 2 + 2, o.h / 2 + 1.5, 0, 0, Math.PI * 2);
         ctx.fill();
         const hg = ctx.createRadialGradient(px, py - 2, 2, px, py, o.w / 2);
         hg.addColorStop(0, '#000');
@@ -2561,16 +2566,17 @@
         ctx.beginPath();
         ctx.ellipse(px, py, o.w / 2 - 2, o.h / 2 - 1, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = 'rgba(130,130,140,0.5)';  // near-rim catches light
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(180,180,195,0.85)';  // bright near-rim crescent (instant read)
+        ctx.lineWidth = 2.2;
         ctx.beginPath();
-        ctx.ellipse(px, py - 1, o.w / 2 - 3, o.h / 2 - 2, 0, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.ellipse(px, py - 1, o.w / 2 - 3, o.h / 2 - 2, 0, Math.PI * 1.02, Math.PI * 1.98);
         ctx.stroke();
-        ctx.strokeStyle = 'rgba(20,20,24,0.7)';     // cracks into the asphalt
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(8,8,10,0.9)';        // stronger cracks
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
-        ctx.moveTo(px - o.w / 2, py); ctx.lineTo(px - o.w / 2 - 8, py - 4);
-        ctx.moveTo(px + o.w / 2, py + 1); ctx.lineTo(px + o.w / 2 + 9, py + 3);
+        ctx.moveTo(px - o.w / 2, py); ctx.lineTo(px - o.w / 2 - 10, py - 5);
+        ctx.moveTo(px - o.w / 2 + 4, py + 2); ctx.lineTo(px - o.w / 2 - 6, py + 6);
+        ctx.moveTo(px + o.w / 2, py + 1); ctx.lineTo(px + o.w / 2 + 11, py + 4);
         ctx.stroke();
       } else if (o.type === 'cone') {
         // Traffic cone — weighted base, lit/shaded body, reflective bands.
@@ -2727,7 +2733,12 @@
     // A lively roadside station: pulsing welcome glow, a chase-blink marquee,
     // a flickering price display, a fuel hose, and a little attendant waving you
     // in. All motion eases off under reduce-motion (calm = steady lights/figure).
+    // Drawn ~1.3x around its bottom-centre for more presence/dwell — pure visual
+    // scale; the pickup hitbox (makePitstop) is unchanged.
     const x = c.x, y = c.y, t = state.runTime, calm = reduceMotionOn();
+    const _ox = c.x + c.w / 2, _oy = c.y + c.h;
+    ctx.save();
+    ctx.translate(_ox, _oy); ctx.scale(1.3, 1.3); ctx.translate(-_ox, -_oy);
     // pulsing welcome glow
     const glow = calm ? 0.30 : 0.24 + 0.12 * (0.5 + 0.5 * Math.sin(t * 3));
     ctx.fillStyle = `rgba(126, 226, 126, ${glow})`;
@@ -2787,6 +2798,7 @@
     ctx.font = 'bold 8px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('PIT STOP', x + c.w / 2, y + c.h - 2);
+    ctx.restore();
   }
 
   function drawSemis() {
@@ -2890,8 +2902,8 @@
       const wash = {
         dawn:      'rgba(255,150,90,0.05)',
         morning:   'rgba(120,170,255,0.045)',
-        afternoon: 'rgba(255,170,60,0.055)',
-        sunset:    'rgba(255,110,70,0.07)'
+        afternoon: 'rgba(255,170,60,0.048)',
+        sunset:    'rgba(255,110,70,0.058)'
       }[biome.timeOfDay];
       if (wash) { ctx.fillStyle = wash; ctx.fillRect(0, 0, W, H); }
     }
