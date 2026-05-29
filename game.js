@@ -813,6 +813,10 @@
     overlayEl.style.display = state.screen === SCREEN.PLAYING ? 'none' : 'grid';
     hudEl.classList.toggle('hidden',
       state.screen !== SCREEN.PLAYING && state.screen !== SCREEN.PAUSED);
+    // Mobile: show touch controls only during active play; release any held
+    // touch inputs when we leave PLAYING so an action can't stick (e.g. pause).
+    document.body.classList.toggle('playing', state.screen === SCREEN.PLAYING);
+    if (state.screen !== SCREEN.PLAYING) releaseTouchHolds();
     if (state.screen === SCREEN.SCORES) renderScoresList();
     if (state.screen === SCREEN.ACHIEVEMENTS) renderAchievementsList();
     if (state.screen === SCREEN.GHOST) renderGhostScreen();
@@ -881,6 +885,54 @@
     state.keys.delete(e.code);
     if (isAction('duck', e.code)) state.player.ducking = false;
   });
+
+  // ============================================================
+  // TOUCH CONTROLS (mobile)
+  // ============================================================
+  // On-screen buttons feed the SAME input path as the keyboard (state.keys /
+  // tryJump / show), so physics, balance, and every action handler stay
+  // identical. Shown only on coarse-pointer devices during play (see styles.css).
+  // Each button uses its own pointer events, so multi-touch (gas + jump) works.
+  const touchHeld = new Set();           // key codes currently held by a finger
+  function releaseTouchHolds() {
+    touchHeld.forEach((code) => state.keys.delete(code));
+    touchHeld.clear();
+    const tcEl = document.getElementById('touch-controls');
+    if (tcEl && tcEl.querySelectorAll) {
+      tcEl.querySelectorAll('.tc-btn.pressed').forEach((b) => b.classList.remove('pressed'));
+    }
+  }
+  (function bindTouchControls() {
+    const tcEl = document.getElementById('touch-controls');
+    if (!tcEl || !tcEl.querySelectorAll) return;
+    const HOLD = { duck: 'KeyS', accel: 'KeyD', brake: 'KeyA' };   // held actions -> key codes
+    tcEl.querySelectorAll('[data-tc]').forEach((btn) => {
+      const action = btn.dataset.tc;
+      const code = HOLD[action];
+      const down = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        audio.init();                                   // unlock audio on first touch
+        btn.classList.add('pressed');
+        if (action === 'jump') { if (state.screen === SCREEN.PLAYING) tryJump(); }
+        else if (action === 'pause') { if (state.screen === SCREEN.PLAYING) show(SCREEN.PAUSED); }
+        else if (code) { state.keys.add(code); touchHeld.add(code); }
+      };
+      const up = (e) => {
+        if (e && e.preventDefault && e.cancelable) e.preventDefault();
+        btn.classList.remove('pressed');
+        if (code) { state.keys.delete(code); touchHeld.delete(code); }
+      };
+      btn.addEventListener('pointerdown', down);
+      btn.addEventListener('pointerup', up);
+      btn.addEventListener('pointercancel', up);
+      btn.addEventListener('pointerleave', up);
+      btn.addEventListener('lostpointercapture', up);
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    });
+  })();
+  // Drop held inputs if the tab is backgrounded mid-press, so nothing sticks.
+  window.addEventListener('blur', releaseTouchHolds);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseTouchHolds(); });
 
   function handleKey(code) {
     switch (state.screen) {
