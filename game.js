@@ -231,10 +231,7 @@
     masterVolume: 0.7,          // 0..1; scales AUDIO_BASE_GAIN at the master bus
     // Accessibility — reduceMotion is seeded from the OS prefers-reduced-motion
     // hint at load time, then persists once the player sets it explicitly.
-    reduceMotion: false,
-    // Cosmetic — swap the convertible for the GT racer body. Off by default so
-    // the "red convertible" story holds; an opt-in showcase.
-    gtMode: false
+    reduceMotion: false
   };
 
   // Spoken labels for the screen-reader live region on each screen change.
@@ -491,7 +488,7 @@
       let vol = Number(s.masterVolume);
       if (!Number.isFinite(vol)) vol = DEFAULT_SETTINGS.masterVolume;
       s.masterVolume = Math.max(0, Math.min(1, vol));
-      ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion', 'gtMode']
+      ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion']
         .forEach((k) => { s[k] = !!s[k]; });
       return s;
     } catch (e) {
@@ -2368,7 +2365,7 @@
     ctx.restore();
   }
 
-  // GT / Le Mans racer body — opt-in via Settings → "GT mode". Ported from the
+  // Player car — GT / Le Mans racer body (the only car). Ported from the
   // car-prototype (faces right, same 80px footprint + hitbox). Wheels are planted
   // on Bot 3's ROAD_SURFACE_Y contact line (body-only bob); body colour comes from
   // the per-run random livery, with a random door number.
@@ -2508,139 +2505,7 @@
     ctx.restore();
   }
   function drawPlayer() {
-    if (state.settings.gtMode) { drawPlayerGT(); return; }
-    const { y, ducking, jumping, tilt, wheelAngle, bob } = state.player;
-    const w = 80;
-    const h = ducking ? 36 : 56;
-    const x = PLAYER_X;
-    // Tyres stay glued to the contact line; only the body carries the bob — so
-    // the car can never appear to float. (The old bob moved wheels + body
-    // together while the shadow stayed on the ground, which read as a hover at
-    // speed; now the wheels are locked to ROAD_SURFACE_Y and only the body bobs.)
-    const lift = GROUND_Y - y;                 // 0 at rest, >0 while airborne
-    const footY = ROAD_SURFACE_Y - lift;       // wheel-contact line, rises with the jump
-    const wheelY = footY - 10;                 // wheel radius 10 → tyre bottoms rest on footY
-    const top = wheelY + 2 - h + bob;          // body sits just above the wheels (+bob wobble)
-    const cy = top + h / 2;                    // tilt-rotation pivot
-
-    // Shadow stays on the road surface; it shrinks/lightens as the car climbs.
-    ctx.save();
-    const shadowScale = jumping ? 0.55 + Math.min(1, lift / 80) * 0.45 : 1;
-    ctx.fillStyle = `rgba(0,0,0,${0.35 * shadowScale})`;
-    ctx.beginPath();
-    ctx.ellipse(x + w / 2, ROAD_SURFACE_Y, (w / 2) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    ctx.save();
-    ctx.translate(x + w / 2, cy);
-    ctx.rotate(tilt);
-    ctx.translate(-(x + w / 2), -cy);
-    // Car body — per-run random livery (state.carStyle); red stays in the pool.
-    // Metallic vertical gradient: lighter hood -> livery colour -> darker sill,
-    // so the panel reads as curved and reflective.
-    const bodyGrad = ctx.createLinearGradient(x, top + 12, x, top + h - 2);
-    bodyGrad.addColorStop(0, shade(state.carStyle.body, 0.32));
-    bodyGrad.addColorStop(0.5, state.carStyle.body);
-    bodyGrad.addColorStop(1, shade(state.carStyle.body, -0.34));
-    ctx.fillStyle = bodyGrad;
-    roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
-    ctx.fill();
-    // Hood gradient highlight
-    const bodyG = ctx.createLinearGradient(x, top, x, top + h);
-    bodyG.addColorStop(0, 'rgba(255,255,255,0.25)');
-    bodyG.addColorStop(0.4, 'rgba(255,255,255,0)');
-    ctx.fillStyle = bodyG;
-    roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
-    ctx.fill();
-    // Stripe accent (livery-matched)
-    ctx.fillStyle = state.carStyle.stripe;
-    ctx.fillRect(x + 12, top + 24, w - 24, 4);
-    // Windshield
-    ctx.fillStyle = '#9cd0f0';
-    roundRect(ctx, x + 18, top + 2, 34, 14, 3);
-    ctx.fill();
-    // Windshield frame
-    ctx.strokeStyle = '#222';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    // Driver (head + visible torso)
-    if (!ducking) {
-      ctx.fillStyle = '#f4c891';
-      ctx.beginPath();
-      ctx.arc(x + 36, top + 8, 5, 0, Math.PI * 2);
-      ctx.fill();
-      // Sunglasses
-      ctx.fillStyle = '#111';
-      ctx.fillRect(x + 32, top + 6, 9, 2);
-    } else {
-      // ducked driver — just hair
-      ctx.fillStyle = '#3a2a1a';
-      ctx.fillRect(x + 32, top + 12, 12, 4);
-    }
-    // Headlights — bright lens + a soft radial glow spilling forward.
-    const hlx = x + w - 5, hly = top + 25;
-    const hlGlow = ctx.createRadialGradient(hlx + 6, hly, 1, hlx + 6, hly, 22);
-    hlGlow.addColorStop(0, 'rgba(255,248,168,0.7)');
-    hlGlow.addColorStop(1, 'rgba(255,248,168,0)');
-    ctx.fillStyle = hlGlow;
-    ctx.beginPath();
-    ctx.arc(hlx + 6, hly, 22, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff8c0';
-    ctx.fillRect(x + w - 8, top + 22, 6, 6);
-    // Door line
-    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x + 44, top + 14);
-    ctx.lineTo(x + 44, top + h - 4);
-    ctx.stroke();
-
-    // Wheels (with rotation indicator) — planted on the contact line computed above.
-    drawWheel(x + 18, wheelY, wheelAngle);
-    drawWheel(x + w - 18, wheelY, wheelAngle);
-
-    ctx.restore();
-  }
-  function drawWheel(cx, cy, angle) {
-    // Tyre + faint sidewall highlight.
-    ctx.fillStyle = '#0d0d0f';
-    ctx.beginPath();
-    ctx.arc(cx, cy, 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 9, Math.PI * 1.05, Math.PI * 1.75);
-    ctx.stroke();
-    // Machined alloy rim — radial gradient (bright hub -> dark edge).
-    const rimG = ctx.createRadialGradient(cx - 1.5, cy - 1.5, 0.5, cx, cy, 6.5);
-    rimG.addColorStop(0, '#e8e8ee');
-    rimG.addColorStop(0.6, '#9a9aa4');
-    rimG.addColorStop(1, '#55555e');
-    ctx.fillStyle = rimG;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 6.5, 0, Math.PI * 2);
-    ctx.fill();
-    // Five spokes (rotate to show motion) + gold centre-lock.
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(angle);
-    ctx.strokeStyle = 'rgba(40,40,48,0.85)';
-    ctx.lineWidth = 1.5;
-    for (let s = 0; s < 5; s++) {
-      ctx.rotate(Math.PI * 2 / 5);
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(0, -6);
-      ctx.stroke();
-    }
-    ctx.restore();
-    ctx.fillStyle = '#d9b24a';
-    ctx.beginPath();
-    ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
-    ctx.fill();
+    drawPlayerGT();   // the GT body is the only car now
   }
 
   function drawObstacles() {
@@ -3374,7 +3239,7 @@
       let pass = false, detail = '';
       try {
         const s = loadSettings();
-        const bools = ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion', 'gtMode'];
+        const bools = ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion'];
         const boolsOk = bools.every((k) => typeof s[k] === 'boolean');
         const volOk = typeof s.masterVolume === 'number' && s.masterVolume >= 0 && s.masterVolume <= 1;
         pass = boolsOk && volOk;
