@@ -1328,6 +1328,36 @@
   }
 
   // ============================================================
+  // HUD SAFE ZONE + TOAST PALETTE
+  // ------------------------------------------------------------
+  // The DOM HUD cards (SCORE/STAGE/TRIP top row + SPEEDO/FUEL bottom row, see
+  // index.html) sit in screen space over the canvas. Canvas-drawn toasts must
+  // never render inside those bands or they read as a glitch — the old COMBO
+  // toast drew at y=60, colliding with the TRIP card. All coordinates below are
+  // in the fixed VIEW_W x VIEW_H logical space Bot 1's render transform guarantees.
+  const HUD_SAFE_TOP = 88;            // bottom of the SCORE/STAGE/TRIP card band (+margin)
+  // COMBO toast sits in a clear band BELOW the card band AND the biome banner
+  // (the banner occupies y 96..166). Centered ~0.40*VIEW_H so that even at the
+  // toast's max pop scale (1.4x, yOff -8 → pill top ~COMBO_Y-37) it stays a
+  // dozen px clear of the banner bottom, and well above the car.
+  const COMBO_Y = Math.round(H * 0.40);   // = 216
+
+  // Colorblind palette for canvas toasts. We CONSUME the existing palette source
+  // (state.settings.colorblind — the same flag gameColor() reads); these
+  // high-contrast hexes mirror the body.colorblind CSS vars so canvas toasts and
+  // the DOM HUD stay in lockstep. The setting/persistence is owned upstream
+  // (accessibility); we only read it.
+  const TOAST_CB = {
+    '#7ee27e': '#009e73',   // good / gain  -> CB green
+    '#f5d76e': '#ffd23f',   // gold / score -> CB amber
+    '#ff6b3a': '#cc79a7',   // penalty      -> CB magenta
+  };
+  function toastColor(hex) {
+    if (!state.settings.colorblind) return hex;
+    return TOAST_CB[hex.toLowerCase()] || hex;
+  }
+
+  // ============================================================
   // SCORE POPUPS + COMBO
   // ============================================================
   function spawnScorePopup(x, y, text, color) {
@@ -1351,14 +1381,17 @@
     ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // Dark halo keeps popups legible over bright biome skies (desert/coast).
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 1;
     for (const p of state.scorePopups) {
-      const a = Math.min(1, p.life * 2);
-      ctx.globalAlpha = a;
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillText(p.text, p.x + 1, p.y + 1);
-      ctx.fillStyle = p.color;
-      ctx.fillText(p.text, p.x, p.y);
+      ctx.globalAlpha = Math.min(1, p.life * 2);
+      // Popups spawn at world objects (low on screen) and drift up; clamp so
+      // none can ever drift into the top DOM card band.
+      const py = Math.max(p.y, HUD_SAFE_TOP);
+      ctx.fillStyle = toastColor(p.color);
+      ctx.fillText(p.text, p.x, py);
     }
     ctx.restore();
   }
@@ -1367,16 +1400,25 @@
     const t = Math.min(1, state.comboPopupT * 2);
     const scale = 1 + (1 - t) * 0.4;
     const yOff = (1 - t) * -8;
+    const label = `COMBO  x${state.combo}`;
     ctx.save();
-    ctx.translate(W / 2, 60 + yOff);
+    ctx.translate(W / 2, COMBO_Y + yOff);
     ctx.scale(scale, scale);
     ctx.font = 'bold 26px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillText(`COMBO  x${state.combo}`, 1, 1);
-    ctx.fillStyle = '#f5d76e';
-    ctx.fillText(`COMBO  x${state.combo}`, 0, 0);
+    // Dark backplate pill — keeps the toast legible over bright skies
+    // (desert noon, coast sunset), matching the DOM card backplates.
+    const tw = ctx.measureText(label).width;
+    const bw = tw + 32, bh = 42;
+    ctx.fillStyle = 'rgba(12, 14, 24, 0.72)';
+    roundRect(ctx, -bw / 2, -bh / 2, bw, bh, 8);
+    ctx.fill();
+    ctx.strokeStyle = toastColor('#f5d76e');
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = toastColor('#f5d76e');
+    ctx.fillText(label, 0, 1);
     ctx.restore();
   }
 
@@ -2508,22 +2550,25 @@
   function drawAchievementToast() {
     if (!state.achievementToast) return;
     const a = Math.min(1, state.achievementToast.t * 2);
+    // Anchored just BELOW the top card band (old position y=20 overlapped the
+    // SCORE/STAGE cards). x range stays clear of the centered biome banner.
+    const bw = 280, bh = 48;
+    const bx = 20, by = HUD_SAFE_TOP + 4;
     ctx.save();
     ctx.globalAlpha = a;
     ctx.fillStyle = 'rgba(12,14,24,0.9)';
-    const bw = 280, bh = 48;
-    ctx.fillRect(20, 20, bw, bh);
-    ctx.strokeStyle = '#f5d76e';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = toastColor('#f5d76e');
     ctx.lineWidth = 1;
-    ctx.strokeRect(20, 20, bw, bh);
-    ctx.fillStyle = '#f5d76e';
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = toastColor('#f5d76e');
     ctx.font = 'bold 11px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText('ACHIEVEMENT UNLOCKED', 32, 29);
+    ctx.fillText('ACHIEVEMENT UNLOCKED', bx + 12, by + 9);
     ctx.fillStyle = '#ececec';
     ctx.font = 'bold 14px "JetBrains Mono", Consolas, monospace';
-    ctx.fillText(state.achievementToast.title, 32, 45);
+    ctx.fillText(state.achievementToast.title, bx + 12, by + 25);
     ctx.restore();
   }
 
