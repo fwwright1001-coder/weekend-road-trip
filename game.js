@@ -1807,16 +1807,29 @@
     }
   }
   function spawnPickupBurst(x, y, color) {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 12; i++) {
       state.particles.push({
         x, y,
-        vx: (Math.random() - 0.5) * 4,
-        vy: -1 - Math.random() * 4,
+        vx: (Math.random() - 0.5) * 5,
+        vy: -1 - Math.random() * 4.5,
         life: 0.7,
         max: 0.7,
         color,
         size: 3 + Math.random() * 2,
         gravity: 0.18
+      });
+    }
+    // Bright sparkle accents for a poppier collect.
+    for (let i = 0; i < 5; i++) {
+      state.particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 7,
+        vy: -2 - Math.random() * 5,
+        life: 0.5 + Math.random() * 0.3,
+        max: 0.85,
+        color: '#fffbe0',
+        size: 1.5 + Math.random() * 1.5,
+        gravity: 0.1
       });
     }
   }
@@ -1979,6 +1992,17 @@
     const b = parseInt(h.slice(4, 6), 16);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
+  // Lighten (amt>0) or darken (amt<0) a #rrggbb by a fraction; returns #rrggbb.
+  // Used for the car's metallic body gradient + machined wheel shading.
+  function shade(hex, amt) {
+    const h = hex.replace('#', '');
+    const f = (i) => {
+      const c = parseInt(h.slice(i, i + 2), 16);
+      const v = amt >= 0 ? c + (255 - c) * amt : c * (1 + amt);
+      return Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+    };
+    return '#' + f(0) + f(2) + f(4);
+  }
   function gameColor(normal, highContrast) {
     return state.settings.colorblind ? highContrast : normal;
   }
@@ -2023,6 +2047,18 @@
     ctx.lineTo(W, GROUND_Y);
     ctx.closePath();
     ctx.fill();
+  }
+
+  // Distance haze: a soft band of horizon light the far layers fade into, for
+  // aerial depth. Warmer at dawn/sunset. Uses the raw horizon sky colour.
+  function drawAtmosphere(biome) {
+    const horizon = Array.isArray(biome.sky) ? biome.sky[0] : biome.sky;
+    const top = GROUND_Y - 130;
+    const g = ctx.createLinearGradient(0, top, 0, GROUND_Y + 10);
+    g.addColorStop(0, hexToRgba(horizon, 0));
+    g.addColorStop(1, hexToRgba(horizon, biome.timeOfDay === 'sunset' ? 0.5 : 0.36));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, top, W, GROUND_Y - top + 10);
   }
 
   function drawMidScenery(biome) {
@@ -2339,7 +2375,13 @@
     ctx.rotate(tilt);
     ctx.translate(-(x + w / 2), -cy);
     // Car body — per-run random livery (state.carStyle); red stays in the pool.
-    ctx.fillStyle = state.carStyle.body;
+    // Metallic vertical gradient: lighter hood -> livery colour -> darker sill,
+    // so the panel reads as curved and reflective.
+    const bodyGrad = ctx.createLinearGradient(x, top + 12, x, top + h - 2);
+    bodyGrad.addColorStop(0, shade(state.carStyle.body, 0.32));
+    bodyGrad.addColorStop(0.5, state.carStyle.body);
+    bodyGrad.addColorStop(1, shade(state.carStyle.body, -0.34));
+    ctx.fillStyle = bodyGrad;
     roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
     ctx.fill();
     // Hood gradient highlight
@@ -2374,11 +2416,17 @@
       ctx.fillStyle = '#3a2a1a';
       ctx.fillRect(x + 32, top + 12, 12, 4);
     }
-    // Headlights
-    ctx.fillStyle = '#fff8a8';
+    // Headlights — bright lens + a soft radial glow spilling forward.
+    const hlx = x + w - 5, hly = top + 25;
+    const hlGlow = ctx.createRadialGradient(hlx + 6, hly, 1, hlx + 6, hly, 22);
+    hlGlow.addColorStop(0, 'rgba(255,248,168,0.7)');
+    hlGlow.addColorStop(1, 'rgba(255,248,168,0)');
+    ctx.fillStyle = hlGlow;
+    ctx.beginPath();
+    ctx.arc(hlx + 6, hly, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff8c0';
     ctx.fillRect(x + w - 8, top + 22, 6, 6);
-    ctx.fillStyle = 'rgba(255,248,168,0.25)';
-    ctx.fillRect(x + w - 4, top + 24, 18, 3);
     // Door line
     ctx.strokeStyle = 'rgba(0,0,0,0.3)';
     ctx.lineWidth = 1;
@@ -2394,23 +2442,43 @@
     ctx.restore();
   }
   function drawWheel(cx, cy, angle) {
-    ctx.fillStyle = '#111';
+    // Tyre + faint sidewall highlight.
+    ctx.fillStyle = '#0d0d0f';
     ctx.beginPath();
     ctx.arc(cx, cy, 10, 0, Math.PI * 2);
     ctx.fill();
-    // Rim
-    ctx.fillStyle = '#999';
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 9, Math.PI * 1.05, Math.PI * 1.75);
+    ctx.stroke();
+    // Machined alloy rim — radial gradient (bright hub -> dark edge).
+    const rimG = ctx.createRadialGradient(cx - 1.5, cy - 1.5, 0.5, cx, cy, 6.5);
+    rimG.addColorStop(0, '#e8e8ee');
+    rimG.addColorStop(0.6, '#9a9aa4');
+    rimG.addColorStop(1, '#55555e');
+    ctx.fillStyle = rimG;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6.5, 0, Math.PI * 2);
     ctx.fill();
-    // Spoke indicator (shows rotation)
+    // Five spokes (rotate to show motion) + gold centre-lock.
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(angle);
-    ctx.fillStyle = '#666';
-    ctx.fillRect(-1, -8, 2, 16);
-    ctx.fillRect(-8, -1, 16, 2);
+    ctx.strokeStyle = 'rgba(40,40,48,0.85)';
+    ctx.lineWidth = 1.5;
+    for (let s = 0; s < 5; s++) {
+      ctx.rotate(Math.PI * 2 / 5);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -6);
+      ctx.stroke();
+    }
     ctx.restore();
+    ctx.fillStyle = '#d9b24a';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   function drawObstacles() {
@@ -2682,6 +2750,35 @@
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
+  // Cinematic grade: soft vignette + a very subtle per-biome warm/cool wash.
+  // Static (no motion). Eased off under colorblind so it never muddies contrast.
+  function drawColorGrade(biome) {
+    const vg = ctx.createRadialGradient(W / 2, H / 2 - 30, H * 0.36, W / 2, H / 2, H * 0.82);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+    if (!state.settings.colorblind) {
+      const wash = {
+        dawn:      'rgba(255,150,90,0.05)',
+        morning:   'rgba(120,170,255,0.045)',
+        afternoon: 'rgba(255,170,60,0.055)',
+        sunset:    'rgba(255,110,70,0.07)'
+      }[biome.timeOfDay];
+      if (wash) { ctx.fillStyle = wash; ctx.fillRect(0, 0, W, H); }
+    }
+  }
+  // Pulsing red screen-edge glow while fuel is critical (Bot 3's state.fuelLow).
+  // Motion, so gated by reduce-motion — the steady HUD 'low' bar still shows.
+  function drawLowFuelPulse() {
+    if (!state.fuelLow || reduceMotionOn()) return;
+    const pulse = 0.16 + 0.16 * (0.5 + 0.5 * Math.sin(state.runTime * 6));
+    const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.46, W / 2, H / 2, H * 0.92);
+    g.addColorStop(0, 'rgba(220,40,30,0)');
+    g.addColorStop(1, `rgba(220,40,30,${pulse})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
   function drawBiomeBanner() {
     // Show biome name briefly when entering a new biome
     const b = currentBiome();
@@ -2932,6 +3029,7 @@
     drawClouds(b);
     drawBirds();
     drawFarMountains(b);
+    drawAtmosphere(b);
     drawMidScenery(b);
     drawGround(b);
     drawNearScenery(b);
@@ -2950,8 +3048,11 @@
 
     ctx.restore();
 
+    drawColorGrade(b);   // cinematic vignette + subtle per-biome grade (all screens)
+
     if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
       drawSpeedVignette();
+      drawLowFuelPulse();
       drawBiomeBanner();
       drawComboHud();
       drawDamageFlash();
