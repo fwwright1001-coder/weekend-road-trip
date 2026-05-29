@@ -2,6 +2,20 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-05-29 — Obstacle detail, smoother transitions, dynamic pit stops
+
+- **Obstacles redrawn** (visual only — hitboxes unchanged): potholes get a
+  crumbled rim, depth gradient, and radiating cracks; cones get a weighted base,
+  lit/shaded gradient body, and reflective bands; the overhead STOP sign gets a
+  gantry bar + brackets, a hazard-striped post, a beveled panel, corner bolts,
+  and shadowed text.
+- **Smoother leg transitions:** the mid-scenery now cross-fades between biomes
+  through the transition zone (instead of popping), and the mountain / ground /
+  grass / road / dash colours blend toward the next biome too.
+- **Dynamic pit stops:** pulsing welcome glow, a chase-blink marquee, a
+  flickering price display, a fuel hose, and a little attendant who bobs and
+  waves you in. All motion eases off under reduce-motion.
+
 ## 2026-05-29 — GT hero car + pass-2 polish
 
 - **New player car:** the boxy convertible is replaced by a low GT / Le Mans

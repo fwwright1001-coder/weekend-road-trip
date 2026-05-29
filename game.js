@@ -1939,6 +1939,12 @@
     }
     return 0;
   }
+  // Blend a single-colour biome prop toward the next biome across the transition
+  // zone, so scenery colours dissolve instead of snapping at a leg boundary.
+  function biomeColor(biome, prop) {
+    const bl = biomeBlend();
+    return bl > 0 ? lerpColor(biome[prop], nextBiome()[prop], bl) : biome[prop];
+  }
   function lerpColor(a, b, t) {
     const ah = a.replace('#', '');
     const bh = b.replace('#', '');
@@ -2069,7 +2075,7 @@
     // Slow-moving mountain silhouette layer (0.12x parallax)
     const off = state.distance * 0.12;
     const baseY = GROUND_Y - 70;
-    ctx.fillStyle = biome.mountainColor;
+    ctx.fillStyle = biomeColor(biome, 'mountainColor');
     ctx.beginPath();
     ctx.moveTo(0, GROUND_Y);
     for (let i = 0; i < 8; i++) {
@@ -2095,14 +2101,25 @@
     ctx.fillRect(0, top, W, GROUND_Y - top + 10);
   }
 
-  function drawMidScenery(biome) {
-    // Biome-specific mid layer (0.32x parallax)
-    const off = state.distance * 0.32;
-    switch (biome.name) {
-      case 'CITY':  drawCitySkyline(off); break;
+  function drawMidFor(name, off) {
+    switch (name) {
+      case 'CITY':   drawCitySkyline(off); break;
       case 'FOREST': drawForestMid(off); break;
       case 'DESERT': drawDesertMid(off); break;
       case 'COAST':  drawCoastMid(off); break;
+    }
+  }
+  function drawMidScenery(biome) {
+    // Biome-specific mid layer (0.32x parallax). Through a leg transition, cross-
+    // fade the current biome out and the next in, so the scenery dissolves
+    // smoothly instead of popping at the boundary.
+    const off = state.distance * 0.32;
+    const bl = biomeBlend();
+    if (bl > 0.001) {
+      ctx.save(); ctx.globalAlpha = 1 - bl; drawMidFor(biome.name, off); ctx.restore();
+      ctx.save(); ctx.globalAlpha = bl;     drawMidFor(nextBiome().name, off); ctx.restore();
+    } else {
+      drawMidFor(biome.name, off);
     }
   }
   function drawCitySkyline(off) {
@@ -2233,7 +2250,7 @@
   function drawNearScenery(biome) {
     // Near-ground details — fast parallax (0.7x)
     const off = state.distance * 0.7;
-    ctx.fillStyle = biome.grass;
+    ctx.fillStyle = biomeColor(biome, 'grass');
     // Grass tufts
     for (let i = 0; i < 28; i++) {
       const x = ((i * 50) - (off % 50)) - 25;
@@ -2270,17 +2287,17 @@
 
   function drawGround(biome) {
     // Grass strip
-    ctx.fillStyle = biome.grass;
+    ctx.fillStyle = biomeColor(biome, 'grass');
     ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
     // Road
-    ctx.fillStyle = biome.road;
+    ctx.fillStyle = biomeColor(biome, 'road');
     ctx.fillRect(0, GROUND_Y + 12, W, 62);
     // Road edge highlight
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(0, GROUND_Y + 12, W, 2);
     ctx.fillRect(0, GROUND_Y + 72, W, 2);
     // Dashed center line, scrolls with distance
-    ctx.fillStyle = biome.dashColor;
+    ctx.fillStyle = biomeColor(biome, 'dashColor');
     const dashW = 52;
     const gap = 32;
     const cycle = dashW + gap;
@@ -2526,51 +2543,93 @@
   function drawObstacles() {
     for (const o of state.obstacles) {
       if (o.type === 'pothole') {
-        // Pothole shadow ring
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        // Cracked asphalt depression — crumbled rim, dark depth, radiating cracks.
+        const px = o.x + o.w / 2, py = o.y + o.h / 2;
+        ctx.fillStyle = 'rgba(0,0,0,0.30)';
         ctx.beginPath();
-        ctx.ellipse(o.x + o.w / 2, o.y + o.h / 2 + 2, o.w / 2 + 2, o.h / 2 + 2, 0, 0, Math.PI * 2);
+        ctx.ellipse(px, py + 3, o.w / 2 + 3, o.h / 2 + 3, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#0a0a0e';
+        ctx.fillStyle = '#3a3a40';   // crumbled rim
         ctx.beginPath();
-        ctx.ellipse(o.x + o.w / 2, o.y + o.h / 2, o.w / 2, o.h / 2, 0, 0, Math.PI * 2);
+        ctx.ellipse(px, py, o.w / 2 + 2, o.h / 2 + 2, 0, 0, Math.PI * 2);
         ctx.fill();
+        const hg = ctx.createRadialGradient(px, py - 2, 2, px, py, o.w / 2);
+        hg.addColorStop(0, '#000');
+        hg.addColorStop(0.7, '#0a0a0e');
+        hg.addColorStop(1, '#1c1c22');
+        ctx.fillStyle = hg;
+        ctx.beginPath();
+        ctx.ellipse(px, py, o.w / 2 - 2, o.h / 2 - 1, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(130,130,140,0.5)';  // near-rim catches light
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(px, py - 1, o.w / 2 - 3, o.h / 2 - 2, 0, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(20,20,24,0.7)';     // cracks into the asphalt
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px - o.w / 2, py); ctx.lineTo(px - o.w / 2 - 8, py - 4);
+        ctx.moveTo(px + o.w / 2, py + 1); ctx.lineTo(px + o.w / 2 + 9, py + 3);
+        ctx.stroke();
       } else if (o.type === 'cone') {
-        // Shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        // Traffic cone — weighted base, lit/shaded body, reflective bands.
+        const cxm = o.x + o.w / 2, byb = o.y + o.h;
+        ctx.fillStyle = 'rgba(0,0,0,0.28)';
         ctx.beginPath();
-        ctx.ellipse(o.x + o.w / 2, o.y + o.h, o.w / 2 + 3, 4, 0, 0, Math.PI * 2);
+        ctx.ellipse(cxm, byb, o.w / 2 + 5, 4, 0, 0, Math.PI * 2);
         ctx.fill();
-        // Cone body
-        ctx.fillStyle = '#e85a1a';
+        ctx.fillStyle = '#17171b';   // base slab
+        roundRect(ctx, o.x - 4, byb - 5, o.w + 8, 6, 2);
+        ctx.fill();
+        const cg = ctx.createLinearGradient(o.x - 4, 0, o.x + o.w + 4, 0);
+        cg.addColorStop(0, '#ff7a3a'); cg.addColorStop(0.5, '#e85a1a'); cg.addColorStop(1, '#b8430f');
+        ctx.fillStyle = cg;
         ctx.beginPath();
-        ctx.moveTo(o.x + o.w / 2, o.y);
-        ctx.lineTo(o.x + o.w + 4, o.y + o.h);
-        ctx.lineTo(o.x - 4, o.y + o.h);
+        ctx.moveTo(cxm, o.y);
+        ctx.lineTo(o.x + o.w + 4, byb - 4);
+        ctx.lineTo(o.x - 4, byb - 4);
         ctx.closePath();
         ctx.fill();
-        // White stripes
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(o.x - 2, o.y + o.h - 14, o.w + 4, 4);
-        ctx.fillRect(o.x + 2, o.y + o.h - 22, o.w - 4, 3);
+        ctx.fillStyle = '#fdfdfd';   // reflective bands (trapezoids following the taper)
+        ctx.beginPath();
+        ctx.moveTo(cxm - 5, o.y + 13); ctx.lineTo(cxm + 5, o.y + 13);
+        ctx.lineTo(cxm + 7, o.y + 18); ctx.lineTo(cxm - 7, o.y + 18); ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(cxm - 9, o.y + 23); ctx.lineTo(cxm + 9, o.y + 23);
+        ctx.lineTo(cxm + 11, o.y + 28); ctx.lineTo(cxm - 11, o.y + 28); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';   // tip highlight
+        ctx.beginPath(); ctx.arc(cxm, o.y + 2, 2, 0, Math.PI * 2); ctx.fill();
       } else if (o.type === 'sign') {
-        // Vertical post (decorative — extends from panel bottom to the ground)
-        ctx.fillStyle = '#6a6a70';
-        ctx.fillRect(o.x + o.w / 2 - 2, o.y + o.h, 4, GROUND_Y - (o.y + o.h));
-        // Sign panel — hitbox-aligned (o.x..o.x+o.w, o.y..o.y+o.h)
-        ctx.fillStyle = '#d63a3a';
+        // Overhead low-clearance warning panel on a hazard-striped post (duck under).
+        const postX = o.x + o.w / 2 - 3;
+        ctx.fillStyle = '#5a5a62';
+        ctx.fillRect(postX, o.y + o.h, 6, GROUND_Y - (o.y + o.h));
+        for (let i = 0; i < 4; i++) {   // yellow/black hazard stripes near the base
+          ctx.fillStyle = i % 2 === 0 ? '#f5c518' : '#1a1a1e';
+          ctx.fillRect(postX, GROUND_Y - 8 - i * 8, 6, 8);
+        }
+        ctx.fillStyle = '#48484f';   // mounting gantry bar + brackets above the panel
+        ctx.fillRect(o.x - 4, o.y - 6, o.w + 8, 5);
+        ctx.fillRect(o.x + 8, o.y - 1, 4, 3);
+        ctx.fillRect(o.x + o.w - 12, o.y - 1, 4, 3);
+        const pg = ctx.createLinearGradient(0, o.y, 0, o.y + o.h);   // beveled red panel
+        pg.addColorStop(0, '#e8484a'); pg.addColorStop(1, '#b82a2a');
+        ctx.fillStyle = pg;
         roundRect(ctx, o.x, o.y, o.w, o.h, 4);
         ctx.fill();
-        // White inner border
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;   // reflective border
         roundRect(ctx, o.x + 3, o.y + 3, o.w - 6, o.h - 6, 3);
         ctx.stroke();
-        // STOP text
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';   // corner bolts
+        [[o.x + 7, o.y + 6], [o.x + o.w - 7, o.y + 6], [o.x + 7, o.y + o.h - 6], [o.x + o.w - 7, o.y + o.h - 6]]
+          .forEach((b) => { ctx.beginPath(); ctx.arc(b[0], b[1], 1.4, 0, Math.PI * 2); ctx.fill(); });
         ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillText('STOP', o.x + o.w / 2 + 1, o.y + o.h / 2 + 1);
+        ctx.fillStyle = '#fff';
         ctx.fillText('STOP', o.x + o.w / 2, o.y + o.h / 2);
       }
     }
@@ -2665,42 +2724,69 @@
     }
   }
   function drawPitstop(c) {
-    // A red-and-white awning over a fuel pump
-    const x = c.x, y = c.y;
-    // Glow
-    ctx.fillStyle = 'rgba(126, 226, 126, 0.35)';
+    // A lively roadside station: pulsing welcome glow, a chase-blink marquee,
+    // a flickering price display, a fuel hose, and a little attendant waving you
+    // in. All motion eases off under reduce-motion (calm = steady lights/figure).
+    const x = c.x, y = c.y, t = state.runTime, calm = reduceMotionOn();
+    // pulsing welcome glow
+    const glow = calm ? 0.30 : 0.24 + 0.12 * (0.5 + 0.5 * Math.sin(t * 3));
+    ctx.fillStyle = `rgba(126, 226, 126, ${glow})`;
     ctx.beginPath();
-    ctx.arc(x + c.w / 2, y + c.h / 2 + 8, c.w * 0.7, 0, Math.PI * 2);
+    ctx.arc(x + c.w / 2, y + c.h / 2 + 8, c.w * 0.72, 0, Math.PI * 2);
     ctx.fill();
-    // Posts
-    ctx.fillStyle = '#7a6a55';
+    // posts
+    ctx.fillStyle = '#6a5a48';
     ctx.fillRect(x + 4, y + 18, 4, c.h - 18);
     ctx.fillRect(x + c.w - 8, y + 18, 4, c.h - 18);
-    // Awning (red+white stripes)
+    // awning (red+white) + trim
     for (let i = 0; i < 6; i++) {
       ctx.fillStyle = i % 2 === 0 ? '#d63a3a' : '#fafafa';
       ctx.fillRect(x + i * (c.w / 6), y, c.w / 6 + 1, 14);
     }
-    // Awning trim
     ctx.fillStyle = '#3a3a40';
     ctx.fillRect(x, y + 14, c.w, 4);
-    // Pump body
-    ctx.fillStyle = '#3a7a3a';
+    // marquee bulbs along the trim — chase-blink
+    for (let i = 0; i < 7; i++) {
+      const bx = x + 6 + i * ((c.w - 12) / 6);
+      const on = calm ? (i % 2 === 0) : ((Math.floor(t * 6) + i) % 2 === 0);
+      ctx.fillStyle = on ? '#fff2a8' : '#6b5a2a';
+      ctx.beginPath(); ctx.arc(bx, y + 17, 2, 0, Math.PI * 2); ctx.fill();
+    }
+    // pump body
+    ctx.fillStyle = '#2f7a3a';
     roundRect(ctx, x + c.w / 2 - 12, y + 24, 24, c.h - 24, 3);
     ctx.fill();
-    // Pump face
-    ctx.fillStyle = '#fafafa';
-    ctx.fillRect(x + c.w / 2 - 8, y + 28, 16, 10);
-    // "$" sign
-    ctx.fillStyle = '#3a7a3a';
-    ctx.font = 'bold 11px "JetBrains Mono", Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('$$', x + c.w / 2, y + 33);
-    // Label
+    ctx.strokeStyle = '#1f5526'; ctx.lineWidth = 1; ctx.stroke();
+    // flickering price display
+    ctx.fillStyle = '#0d1f0c';
+    ctx.fillRect(x + c.w / 2 - 9, y + 28, 18, 9);
+    ctx.fillStyle = '#7cfc7c';
+    ctx.font = 'bold 8px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const price = calm ? '3.49' : '3.' + String(40 + (Math.floor(t * 3) % 9)).padStart(2, '0');
+    ctx.fillText(price, x + c.w / 2, y + 33);
+    // fuel hose from the pump
+    ctx.strokeStyle = '#1f1f24'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + c.w / 2 + 12, y + 32);
+    ctx.quadraticCurveTo(x + c.w - 6, y + 38, x + c.w - 9, y + c.h - 6);
+    ctx.stroke();
+    // attendant — bobs + waves you in
+    const wob = calm ? 0 : Math.sin(t * 4) * 1.4;
+    const ax = x + 13, ay = y + c.h - 16 + wob;
+    ctx.fillStyle = '#3a6aa8'; ctx.fillRect(ax - 3, ay, 6, 12);            // overalls
+    ctx.fillStyle = '#f4c891'; ctx.beginPath(); ctx.arc(ax, ay - 3, 3, 0, Math.PI * 2); ctx.fill(); // head
+    const wave = calm ? -0.5 : Math.sin(t * 9) * 0.5 - 0.3;               // waving arm
+    ctx.strokeStyle = '#3a6aa8'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ax + 2, ay + 3);
+    ctx.lineTo(ax + 4 + Math.cos(wave) * 5, ay + 1 + Math.sin(wave) * 5);
+    ctx.stroke();
+    // label
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 9px "JetBrains Mono", Consolas, monospace';
-    ctx.fillText('PIT STOP', x + c.w / 2, y + 50);
+    ctx.font = 'bold 8px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('PIT STOP', x + c.w / 2, y + c.h - 2);
   }
 
   function drawSemis() {
