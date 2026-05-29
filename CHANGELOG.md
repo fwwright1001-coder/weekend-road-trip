@@ -2,6 +2,17 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-05-29 — GT hero car + pass-2 polish
+
+- **New player car:** the boxy convertible is replaced by a low GT / Le Mans
+  racer body (metallic gradient, carbon splitter/diffuser, raked cockpit, rear
+  wing, machined alloy wheels + brake discs, door roundel). It's now the only
+  car. Wheels stay planted on the ROAD_SURFACE_Y contact line (no float; body-
+  only bob), the body uses the per-run random livery, and the door number is
+  randomised each run. Footprint + collision hitbox unchanged.
+- **Sunset godrays:** a soft static crepuscular sunburst at sunset/afternoon.
+- Story copy updated ("convertible" → "car") to match the new body.
+
 ## 2026-05-29 — Mobile, random livery & visual polish
 
 - **Mobile-friendly:** on-screen touch controls (gas/brake, duck/jump, pause)
