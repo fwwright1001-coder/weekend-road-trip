@@ -2,6 +2,23 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-05-29 — Mobile, random livery & visual polish
+
+- **Mobile-friendly:** on-screen touch controls (gas/brake, duck/jump, pause)
+  that feed the existing input path; shown only on touch devices during play.
+  Larger tap targets, scroll/zoom guards, and a portrait→landscape nudge.
+- **Random car livery:** each run paints the car a random colour from a curated
+  9-livery pool (red stays in the pool); stored in `state.carStyle`.
+- **Visual-polish pass 1** (2D Canvas; no physics/hitbox change):
+  - Hero car: metallic body gradient, forward headlight glow, machined 5-spoke
+    alloy wheels with a gold centre-lock.
+  - Atmospheric distance haze toward the horizon for depth.
+  - Cinematic vignette + a subtle per-biome warm/cool grade (eased off under the
+    colorblind palette).
+  - Juice: poppier pickups with sparkle accents; a pulsing red screen-edge glow
+    while fuel is critical (reduce-motion gated).
+  - Menu fade/slide entrance, button press feedback, gentle title glow.
+
 ## 2026-05-28 — Integrated release (four parallel workstreams + art pass)
 
 First fully-integrated build. Four independent feature branches (PRs #9–#12),
