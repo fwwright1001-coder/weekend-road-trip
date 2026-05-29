@@ -11,7 +11,11 @@ All notable changes to the game. Dates are in 2026.
   only bob), the body uses the per-run random livery, and the door number is
   randomised each run. Footprint + collision hitbox unchanged.
 - **Sunset godrays:** a soft static crepuscular sunburst at sunset/afternoon.
-- Story copy updated ("convertible" → "car") to match the new body.
+- **Tyre smoke** kicks up from the rear wheel under hard braking at speed.
+- **Win celebration:** falling confetti + a score/stat-card reveal on the win
+  screen (pure CSS, reduce-motion-safe).
+- Story copy updated to match the new body (README/SUBMISSION "red convertible"
+  → "red GT"; in-game "convertible" → "car").
 
 ## 2026-05-29 — Mobile, random livery & visual polish
 

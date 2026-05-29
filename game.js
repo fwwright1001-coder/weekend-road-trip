@@ -3,7 +3,7 @@
  * ENGR 5513 Applied AI in Engineering · Lipscomb MSAI · Summer 2026
  * Forrest Wright
  *
- * Drive Marty's convertible from the city to the coast in one tank
+ * Drive Marty's GT from the city to the coast in one tank
  * of gas. Jump potholes, duck under stop signs, grab fuel & snacks.
  * Don't run out of gas before you reach the ocean.
  *
@@ -88,7 +88,7 @@
   const GHOST_DISTANCE_SCALE = 0.28;
 
   // Per-run player-car liveries. startRun() picks one at random so every drive
-  // looks a little different; red stays in the pool so "Marty's red convertible"
+  // looks a little different; red stays in the pool so "Marty's red GT"
   // still shows up. The GT-car port can read the same state.carStyle (drawPlayer),
   // so the randomization survives the eventual art swap.
   const CAR_LIVERIES = [
@@ -1861,6 +1861,21 @@
       gravity: -0.04
     });
   }
+  function spawnTireSmoke(x, y) {
+    for (let i = 0; i < 2; i++) {
+      state.particles.push({
+        x: x + (Math.random() - 0.5) * 6,
+        y: y - Math.random() * 3,
+        vx: -1.5 - Math.random() * 2,
+        vy: -0.4 - Math.random() * 1.2,
+        life: 0.45 + Math.random() * 0.3,
+        max: 0.75,
+        color: 'rgba(170,170,178,0.6)',
+        size: 4 + Math.random() * 4,
+        gravity: -0.06
+      });
+    }
+  }
   function updateParticles(dt) {
     for (const p of state.particles) {
       p.x += p.vx;
@@ -2924,6 +2939,7 @@
   // ============================================================
   let lastFrame = 0;
   let exhaustTimer = 0;
+  let brakeSmokeTimer = 0;
 
   function updateGame(dt) {
     // Speed input
@@ -2997,6 +3013,16 @@
     if (exhaustTimer <= 0 && state.speed > BASE_SPEED + 0.5) {
       spawnExhaust(PLAYER_X + 4, state.player.y - 10);
       exhaustTimer = 0.07;
+    }
+    // Tyre smoke under hard braking at speed.
+    if (wantBrake && state.speed > BASE_SPEED + 1) {
+      brakeSmokeTimer -= dt;
+      if (brakeSmokeTimer <= 0) {
+        spawnTireSmoke(PLAYER_X + 22, ROAD_SURFACE_Y - 2);
+        brakeSmokeTimer = 0.04;
+      }
+    } else {
+      brakeSmokeTimer = 0;
     }
 
     // Win/lose
