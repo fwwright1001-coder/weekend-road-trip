@@ -49,6 +49,7 @@ function makeEl(tag) {
     querySelector() { return makeEl('div'); },
     querySelectorAll() { return []; },
     getContext() { return ctx2d; },
+    getBoundingClientRect() { return { width: 960, height: 540, top: 0, left: 0, right: 960, bottom: 540, x: 0, y: 0 }; },
     focus() {}, select() {}
   };
   return el;

@@ -2946,10 +2946,11 @@
     ctx.fillStyle = 'rgba(12,14,24,0.85)';
     const bw = 180, bh = 36;
     ctx.fillRect(W - bw - 20, 20, bw, bh);
-    ctx.strokeStyle = '#f5d76e';
+    const bannerC = toastColor('#f5d76e');   // palette-aware (Bot 2 colorblind map)
+    ctx.strokeStyle = bannerC;
     ctx.lineWidth = 1;
     ctx.strokeRect(W - bw - 20, 20, bw, bh);
-    ctx.fillStyle = '#f5d76e';
+    ctx.fillStyle = bannerC;
     ctx.font = 'bold 13px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
