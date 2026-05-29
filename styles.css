@@ -503,3 +503,71 @@ body.colorblind {
   font-weight: 700;
   letter-spacing: 1px;
 }
+
+/* ============================================================
+ * Accessibility & settings controls  (Bot 4: audio / a11y / settings)
+ * Append-only block — no changes to layout/HUD rules above.
+ * ============================================================ */
+
+/* Visible keyboard focus ring on every interactive control. The base button
+ * rule sets `outline:none` on :focus (for mouse clicks); :focus-visible re-adds
+ * a strong ring ONLY for keyboard / assistive-tech navigation. */
+button:focus-visible,
+[data-action]:focus-visible,
+.setting-row input:focus-visible,
+.ghost-payload:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+/* The gold CTA already turns gold on hover, so a gold ring would vanish — use a
+ * dark ring + halo so focus stays visible against the gold fill. */
+button.cta:focus-visible {
+  outline-color: #1a1a2e;
+  box-shadow: 0 0 0 3px var(--gold-bright);
+}
+
+/* Master-volume slider: the base `.setting-row input` rule forces an 18px box
+ * (sized for checkboxes) which would crush a range input. */
+.setting-row input[type="range"] {
+  width: 150px;
+  height: auto;
+  flex: 0 0 auto;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+.setting-row .setting-value {
+  margin-left: auto;
+  min-width: 42px;
+  text-align: right;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--gold);
+}
+
+/* Screen-reader-only live region / utility (visually hidden, still announced). */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Reduce motion: when the player opts in (body.reduce-motion, set from
+ * game.js), also calm CSS transitions/animations. Canvas-side motion (screen
+ * shake + speed lines) is gated in game.js. Opt-in only — defaults untouched. */
+body.reduce-motion *,
+body.reduce-motion *::before,
+body.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
