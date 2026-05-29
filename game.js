@@ -36,7 +36,17 @@
   // Legacy short aliases — kept so existing W/H references stay unchanged.
   const W = VIEW_W;
   const H = VIEW_H;
-  const GROUND_Y = 432;      // top of road surface
+
+  // --- Vertical / ground-contact geometry -------------------------------
+  // GROUND_Y is the physics anchor: the player's resting `y`, and the datum
+  // every scenery layer is drawn from. The car is *drawn* a fixed distance
+  // below this anchor so its tyres sit on the asphalt — that distance is
+  // CAR_FOOT_OFFSET, and ROAD_SURFACE_Y is the resulting contact line where
+  // the wheels (and the car's shadow) rest. Keeping these explicit means the
+  // car lands flush every time and the jump arc starts/ends on the same line.
+  const GROUND_Y = 432;            // physics anchor (resting player.y) + scenery datum
+  const CAR_FOOT_OFFSET = 18;      // px from player.y down to the wheel-contact line
+  const ROAD_SURFACE_Y = GROUND_Y + CAR_FOOT_OFFSET;  // 450: where tyres + shadow rest
   const GRAVITY = 0.78;
   const JUMP_V = -16;
   const PLAYER_X = 170;
@@ -47,11 +57,22 @@
   const SPEED_DRAG = 0.018;
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
-  const HIT_FUEL_PENALTY = 12;
+  const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (Bot 4 consumes it)
+  const HIT_FUEL_PENALTY = 14;     // per-hit fuel cost. Hits are now always avoidable (see minBlockingGap),
+                                   // so this is a pure skill signal — bumped 12->14 so careless play (many
+                                   // hits) can still run dry even with pit-stop refuels (see BALANCE.md).
   const SNACK_POINTS = 50;
   const FUEL_PICKUP_BONUS = 25;
-  const FUEL_PICKUP_REFILL = 22;
+  const FUEL_PICKUP_REFILL = 22;   // default fuel-per-can; per-leg override lives in DIFFICULTY
+  const PITSTOP_REFILL = 40;       // fuel added per pit stop (was a FULL refuel). A full reset made the
+                                   // lose condition unreachable; +40 is still the biggest single fuel
+                                   // pickup + 500 pts, but no longer an auto-win. See BALANCE.md.
+  const SPAWN_MIN_INTERVAL = 0.32; // hard floor on seconds between spawn rolls
   const BIOME_BONUS = 500;
+
+  // Hidden developer overlay. Stays false in shipped builds; when true, the
+  // backtick key toggles an on-canvas hitbox + per-leg difficulty readout.
+  const DEBUG = false;
   const STORAGE_KEY = 'wrt.highscores.v2';
   const SETTINGS_KEY = 'wrt.settings.v1';
   const ACHIEVEMENTS_KEY = 'wrt.achievements.v1';
@@ -81,7 +102,6 @@
       grass: '#3a5a3a',
       road: '#222226',
       dashColor: '#ffea88',
-      spawnMul: 1.0,    // baseline difficulty
       birdColor: '#222222'
     },
     {
@@ -96,7 +116,6 @@
       grass: '#456f3a',
       road: '#222226',
       dashColor: '#ffea88',
-      spawnMul: 0.85,   // slightly tighter
       birdColor: '#5a3a1f'  // hawks
     },
     {
@@ -111,7 +130,6 @@
       grass: '#b88a5a',
       road: '#3a3338',
       dashColor: '#ffea88',
-      spawnMul: 0.7,    // tougher
       birdColor: '#3a3a3a'  // vultures
     },
     {
@@ -126,11 +144,42 @@
       grass: '#c8a880',
       road: '#2a2a30',
       dashColor: '#ffea88',
-      spawnMul: 0.55,   // final-biome chaos
       birdColor: '#eeeeee'  // seagulls
     }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
+
+  // ============================================================
+  // DIFFICULTY CURVE  — single, reviewable source of truth for balance
+  // ============================================================
+  // One entry per leg, index-aligned with BIOMES. All gameplay tuning lives
+  // here so balance is data-driven: tweak a number, not a code path.
+  //
+  //   obstacleDensity : relative spawn cadence (×). Higher = more frequent spawn
+  //                     rolls. NOTE: at high speed minBlockingGap (below), not
+  //                     this knob, dominates how many *blockers* actually land —
+  //                     a rejected blocker leaves empty road. So obstacleDensity
+  //                     mostly scales pickup/empty cadence once you're fast; it
+  //                     is the blocker lever only at low speed.
+  //   minBlockingGap  : minimum on-screen px between two consecutive *blocking*
+  //                     obstacles (pothole/cone/sign). Sized so two blockers can
+  //                     never be unavoidable at MAX_SPEED — a full jump arc spans
+  //                     ~390px at MAX_SPEED, so every value below clears that with
+  //                     margin. (The real guarantee is the constructive zero-collision
+  //                     solvability proof in sim/balance-sim.js — see BALANCE.md.)
+  //   fuelSpawnRate   : multiplier on the fuel-can spawn probability for this leg.
+  //   fuelPerCan      : fuel restored per can collected on this leg.
+  //   speedScale      : reserved per-leg pacing multiplier (1 = stock).
+  //
+  // The COAST row is intentionally the kindest on fuel: the finale should feel
+  // like a payoff for a clean run, not a wall. De-clustering (minBlockingGap)
+  // plus the fuel bump together fix the "runs dry at ~96%" cliff.
+  const DIFFICULTY = [
+    { obstacleDensity: 1.00, minBlockingGap: 600, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // CITY
+    { obstacleDensity: 1.15, minBlockingGap: 540, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // FOREST
+    { obstacleDensity: 1.30, minBlockingGap: 500, fuelSpawnRate: 1.1, fuelPerCan: 24, speedScale: 1.00 }, // DESERT
+    { obstacleDensity: 1.45, minBlockingGap: 460, fuelSpawnRate: 1.6, fuelPerCan: 28, speedScale: 1.00 }  // COAST
+  ];
 
   const SCREEN = {
     TITLE: 'title',
@@ -282,6 +331,13 @@
     collectibles: [],
     particles: [],
     spawnTimer: 0,
+    // --- Fuel-low contract (Bot 3 produces, Bots 2/4 consume; read-only) ---
+    // `fuelLow` is true while fuel sits in the danger band (< FUEL_LOW_FRAC of
+    // FUEL_MAX) and is not yet empty. `fuelLowJustEntered` is a single-frame
+    // rising edge consumers can latch a one-shot warning (sound/flash) to.
+    fuelLow: false,
+    fuelLowJustEntered: false,
+    debug: false,            // hidden overlay toggle (only flips when DEBUG === true)
     flashTimer: 0,
     shakeT: 0,
     shakeMag: 0,
@@ -657,6 +713,8 @@
     }
     state.keys.add(e.code);
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
+    // Hidden debug overlay — only reachable in DEBUG builds.
+    if (e.code === 'Backquote') { if (DEBUG) state.debug = !state.debug; return; }
     handleKey(e.code);
   });
   window.addEventListener('keyup', (e) => {
@@ -852,6 +910,8 @@
     state.collectibles = [];
     state.particles = [];
     state.spawnTimer = 0;
+    state.fuelLow = false;
+    state.fuelLowJustEntered = false;
     state.flashTimer = 0;
     state.shakeT = 0;
     state.shakeMag = 0;
@@ -1084,7 +1144,7 @@
     if (!state.player.jumping) {
       state.player.vy = JUMP_V;
       state.player.jumping = true;
-      spawnDust(PLAYER_X + 30, GROUND_Y + 6, 8);
+      spawnDust(PLAYER_X + 30, ROAD_SURFACE_Y, 8);
       audio.playJump();
       unlockAchievement('first-jump');
     }
@@ -1101,7 +1161,7 @@
       state.player.vy = 0;
       if (wasJumping) {
         state.player.jumping = false;
-        spawnDust(PLAYER_X + 24, GROUND_Y + 6, 14);
+        spawnDust(PLAYER_X + 24, ROAD_SURFACE_Y, 14);
       }
     }
     // gentle body wobble — sells the suspension
@@ -1132,17 +1192,46 @@
   // Obstacle types so far: 'pothole', 'cone', 'sign'
   // Collectible types so far: 'fuel', 'snack', 'pitstop'
   function spawn() {
+    const diff = currentDifficulty();
+    // Per-leg fuel boost: expand the fuel slice and shrink the obstacle slices
+    // proportionally, preserving the original pothole:cone:sign composition.
+    // Baseline weights were ground 0.50 / sign 0.22 / snack 0.18 / fuel 0.10.
+    const fuelChance = Math.min(0.4, 0.10 * (diff.fuelSpawnRate || 1));
+    const snackChance = 0.18;
+    const obstMass = Math.max(0, 1 - fuelChance - snackChance);
+    const groundChance = obstMass * (0.50 / 0.72);  // pothole/cone share of obstacles
+    const signChance = obstMass * (0.22 / 0.72);    // sign share of obstacles
+
     const r = Math.random();
-    if (r < 0.5) {
+    if (r < groundChance) {
       const t = ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)];
-      state.obstacles.push(makeObstacle(t));
-    } else if (r < 0.72) {
-      state.obstacles.push(makeObstacle('sign'));
-    } else if (r < 0.90) {
+      tryPlaceObstacle(t, diff.minBlockingGap);
+    } else if (r < groundChance + signChance) {
+      tryPlaceObstacle('sign', diff.minBlockingGap);
+    } else if (r < groundChance + signChance + snackChance) {
       state.collectibles.push(makeCollectible('snack'));
     } else {
       state.collectibles.push(makeCollectible('fuel'));
     }
+  }
+
+  // Rightmost (most-recently-spawned) obstacle x, or -Infinity if none pending.
+  function rightmostObstacleX() {
+    let m = -Infinity;
+    for (const o of state.obstacles) if (o.x > m) m = o.x;
+    return m;
+  }
+
+  // Place a blocking obstacle only if it clears `minGap` px from the previous
+  // one. If it would cluster too tightly we skip it — this guarantees a
+  // jump/duck-able gap at any speed (no unavoidable back-to-back blockers) and
+  // naturally thins dense legs instead of queuing an unreachable wall off-screen.
+  function tryPlaceObstacle(type, minGap) {
+    const o = makeObstacle(type);                 // spawns at x = W + 60
+    const prevX = rightmostObstacleX();
+    if (prevX > -Infinity && (o.x - prevX) < (minGap || 0)) return false;
+    state.obstacles.push(o);
+    return true;
   }
   function makeObstacle(type) {
     const o = { type, x: W + 60, hit: false };
@@ -1231,10 +1320,11 @@
     state.spawnTimer -= dt;
     if (state.spawnTimer <= 0) {
       spawn();
-      // Faster spawns as speed climbs + per-biome difficulty multiplier
-      const mul = currentBiome().spawnMul || 1;
-      state.spawnTimer = Math.max(0.32,
-        (0.85 + Math.random() * 0.7 - state.speed * 0.045) * mul);
+      // Spawns get faster as speed climbs and as the leg's obstacleDensity rises.
+      // (min-gap enforcement in spawn() still guarantees blockers stay clearable.)
+      const density = currentDifficulty().obstacleDensity || 1;
+      state.spawnTimer = Math.max(SPAWN_MIN_INTERVAL,
+        (0.85 + Math.random() * 0.7 - state.speed * 0.045) / density);
     }
 
     // Pit stop spawns at distance milestones
@@ -1297,16 +1387,18 @@
         if (c.type === 'fuel') {
           state.runStats.fuel += 1;
           const pts = FUEL_PICKUP_BONUS * mult;
-          state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
+          const refill = currentDifficulty().fuelPerCan || FUEL_PICKUP_REFILL;
+          state.fuel = Math.min(FUEL_MAX, state.fuel + refill);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
           audio.playFuel();
           unlockAchievement('fuel');
         } else if (c.type === 'pitstop') {
-          // Full refuel + chunky bonus
+          // Big partial refuel + chunky bonus. (A full reset made running dry
+          // impossible; PITSTOP_REFILL keeps it a strong rescue, not an auto-win.)
           state.runStats.pitstops += 1;
-          state.fuel = FUEL_MAX;
+          state.fuel = Math.min(FUEL_MAX, state.fuel + PITSTOP_REFILL);
           const pts = 500 * mult;
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
@@ -1485,6 +1577,13 @@
     }
     state.biomeIdx = BIOMES.length - 1;
     return BIOMES[state.biomeIdx];
+  }
+  // The difficulty knobs for the current leg. Refreshes the biome index from
+  // distance first so spawn-time reads (called before render's currentBiome())
+  // never lag a frame behind the leg the player is actually in.
+  function currentDifficulty() {
+    currentBiome();
+    return DIFFICULTY[state.biomeIdx] || DIFFICULTY[DIFFICULTY.length - 1];
   }
   function nextBiome() {
     return BIOMES[Math.min(state.biomeIdx + 1, BIOMES.length - 1)];
@@ -1907,14 +2006,22 @@
     const w = 80;
     const h = ducking ? 36 : 56;
     const x = PLAYER_X;
-    const cy = y - h / 2 + 8 + bob;
+    // Tyres stay glued to the contact line; only the body carries the bob — so
+    // the car can never appear to float. (The old bob moved wheels + body
+    // together while the shadow stayed on the ground, which read as a hover at
+    // speed; now the wheels are locked to ROAD_SURFACE_Y and only the body bobs.)
+    const lift = GROUND_Y - y;                 // 0 at rest, >0 while airborne
+    const footY = ROAD_SURFACE_Y - lift;       // wheel-contact line, rises with the jump
+    const wheelY = footY - 10;                 // wheel radius 10 → tyre bottoms rest on footY
+    const top = wheelY + 2 - h + bob;          // body sits just above the wheels (+bob wobble)
+    const cy = top + h / 2;                    // tilt-rotation pivot
 
-    // Shadow (scaled with jump height)
+    // Shadow stays on the road surface; it shrinks/lightens as the car climbs.
     ctx.save();
-    const shadowScale = jumping ? 0.55 + Math.min(1, (GROUND_Y - y) / 80) * 0.45 : 1;
+    const shadowScale = jumping ? 0.55 + Math.min(1, lift / 80) * 0.45 : 1;
     ctx.fillStyle = `rgba(0,0,0,${0.35 * shadowScale})`;
     ctx.beginPath();
-    ctx.ellipse(x + w / 2, GROUND_Y + 18, (w / 2) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + w / 2, ROAD_SURFACE_Y, (w / 2) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -1922,8 +2029,6 @@
     ctx.translate(x + w / 2, cy);
     ctx.rotate(tilt);
     ctx.translate(-(x + w / 2), -cy);
-
-    const top = cy - h / 2;
     // Car body (red convertible)
     ctx.fillStyle = '#c81e28';
     roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
@@ -1973,8 +2078,7 @@
     ctx.lineTo(x + 44, top + h - 4);
     ctx.stroke();
 
-    // Wheels (with rotation indicator)
-    const wheelY = top + h - 2;
+    // Wheels (with rotation indicator) — planted on the contact line computed above.
     drawWheel(x + 18, wheelY, wheelAngle);
     drawWheel(x + w - 18, wheelY, wheelAngle);
 
@@ -2334,7 +2438,8 @@
 
   function checkProgressAchievements() {
     if (state.speed >= MAX_SPEED - 0.05) unlockAchievement('max-speed');
-    if (state.fuel > 0 && state.fuel <= 15) unlockAchievement('low-fuel');
+    // Reuse the fuel-low band so the achievement can never drift from the flag.
+    if (state.fuelLow) unlockAchievement('low-fuel');
     if (state.distance >= TRIP_TOTAL * 0.5) unlockAchievement('halfway');
     if (state.score >= 3000) unlockAchievement('score-3000');
   }
@@ -2366,6 +2471,12 @@
     state.distance += state.speed * dt * 60;
     state.score += state.speed * dt * 8;        // small distance score
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
+    // Fuel-low feedback hook (Bot 3 produces; Bots 2/4 consume). We compute the
+    // rising edge against the *previous* value before overwriting it, so a
+    // consumer can fire a one-shot warning without tracking history itself.
+    const lowNow = state.fuel > 0 && state.fuel < FUEL_MAX * FUEL_LOW_FRAC;
+    state.fuelLowJustEntered = lowNow && !state.fuelLow;
+    state.fuelLow = lowNow;
     state.runTime += dt;
     state.ghostSampleTimer -= dt;
     recordGhostFrame();
@@ -2484,6 +2595,57 @@
     }
     drawAudioBanner();
     drawAchievementToast();
+    if (state.debug) drawDebugOverlay();
+  }
+
+  // Hidden developer overlay (toggled by backtick when DEBUG === true). Draws
+  // the exact collision boxes the physics/collision code uses, the ground-
+  // contact reference line, and a live per-leg difficulty readout — so balance
+  // and hitbox tuning are inspectable in the running game. Authored in the
+  // logical VIEW space (Bot 1's transform maps it to device pixels for free).
+  function drawDebugOverlay() {
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    // Player hitbox — the real rect collisions are tested against.
+    const pb = playerBox();
+    ctx.strokeStyle = '#00ff88';
+    ctx.strokeRect(pb.x, pb.y, pb.w, pb.h);
+    // Obstacle + collectible hitboxes.
+    ctx.strokeStyle = '#ff3a3a';
+    for (const o of state.obstacles) ctx.strokeRect(o.x, o.y, o.w, o.h);
+    ctx.strokeStyle = '#3aa0ff';
+    for (const c of state.collectibles) ctx.strokeRect(c.x, c.y, c.w, c.h);
+    // Ground-contact reference: wheels + shadow rest exactly on this line.
+    ctx.strokeStyle = 'rgba(255,235,90,0.7)';
+    ctx.beginPath();
+    ctx.moveTo(0, ROAD_SURFACE_Y);
+    ctx.lineTo(W, ROAD_SURFACE_Y);
+    ctx.stroke();
+
+    const diff = currentDifficulty();
+    const b = currentBiome();
+    const pct = ((state.distance / TRIP_TOTAL) * 100).toFixed(1);
+    const lines = [
+      'DEBUG  (backtick toggles)',
+      `leg ${state.biomeIdx + 1}/${BIOMES.length}  ${b.name}`,
+      `density ${diff.obstacleDensity}  minGap ${diff.minBlockingGap}px`,
+      `fuelRate ${diff.fuelSpawnRate}  fuel/can ${diff.fuelPerCan}  speedScale ${diff.speedScale}`,
+      `speed ${state.speed.toFixed(2)} (${Math.round(state.speed * 12)} mph)  max ${MAX_SPEED}`,
+      `fuel ${state.fuel.toFixed(1)}  low=${state.fuelLow}`,
+      `player.y ${state.player.y.toFixed(1)}  vy ${state.player.vy.toFixed(2)}  jump=${state.player.jumping}`,
+      `combo x${state.combo}  window ${state.comboTimer.toFixed(1)}s`,
+      `obstacles ${state.obstacles.length}  collectibles ${state.collectibles.length}`,
+      `dist ${Math.round(state.distance)}/${TRIP_TOTAL}  (${pct}%)`
+    ];
+    ctx.font = '11px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const lineH = 14, panelW = 330, panelH = lines.length * lineH + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillRect(8, 78, panelW, panelH);
+    ctx.fillStyle = '#9effa0';
+    lines.forEach((ln, i) => ctx.fillText(ln, 16, 84 + i * lineH));
+    ctx.restore();
   }
 
   function drawAudioBanner() {
