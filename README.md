@@ -6,7 +6,7 @@ A polished 2D side-scrolling browser game built for ENGR 5513 — Applied AI in 
 
 ## Protagonist & Motivation
 
-You play **Marty**, a software engineer who's been heads-down shipping for eleven months straight. Today his PTO finally cleared. He throws a duffel in his red convertible, points it west, and drives. The goal is simple: dodge the potholes, duck the low STOP signs, grab roadside snacks and fuel cans, and don't run out of gas before you reach the ocean. The trip takes him through four American biomes — city at dawn, pine forest in the morning, scorched desert in the afternoon, and the Pacific coast at sunset.
+You play **Marty**, a software engineer who's been heads-down shipping for eleven months straight. Today his PTO finally cleared. He throws a duffel in his red GT, points it west, and drives. The goal is simple: dodge the potholes, duck the low STOP signs, grab roadside snacks and fuel cans, and don't run out of gas before you reach the ocean. The trip takes him through four American biomes — city at dawn, pine forest in the morning, scorched desert in the afternoon, and the Pacific coast at sunset.
 
 ## Play
 
