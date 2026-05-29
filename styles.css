@@ -36,8 +36,17 @@ html, body {
 
 #frame {
   position: relative;
-  width: 960px;
-  max-width: 100vw;
+  /* content-box so the width/aspect-ratio below describe the CANVAS itself and
+     the 3px border sits outside it. This keeps the canvas an exact 960:540 box
+     (uniform device-pixel scale, zero aspect skew) instead of the border eating
+     asymmetrically into a border-box frame. */
+  box-sizing: content-box;
+  /* Fit the 16:9 stage inside the viewport on BOTH axes without distorting the
+     aspect ratio (the 6px accounts for the border so we never overflow). Capped
+     at the 960px logical width so the HUD/menu overlays (fixed-px sizing) keep
+     their intended proportions; crispness on HiDPI / large displays comes from
+     the device-pixel backing store sized in game.js (resizeCanvas), not CSS. */
+  width: min(960px, calc(100vw - 6px), calc((100vh - 6px) * 960 / 540));
   aspect-ratio: 960 / 540;
   border: 3px solid var(--gold);
   border-radius: 8px;

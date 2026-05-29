@@ -25,8 +25,17 @@
   // ============================================================
   // CONFIG
   // ============================================================
-  const W = 960;
-  const H = 540;
+  // --- Logical coordinate space (device-independent) ----------------------
+  // VIEW_W/VIEW_H are the single source of truth for the game's coordinate
+  // space. ALL gameplay + draw math is authored in this fixed 960x540 space;
+  // the canvas backing store is sized separately for the device's pixels (see
+  // resizeCanvas) and a setTransform scales logical -> device every frame, so
+  // nothing below ever has to know the real pixel resolution.
+  const VIEW_W = 960;
+  const VIEW_H = 540;
+  // Legacy short aliases — kept so existing W/H references stay unchanged.
+  const W = VIEW_W;
+  const H = VIEW_H;
   const GROUND_Y = 432;      // top of road surface
   const GRAVITY = 0.78;
   const JUMP_V = -16;
@@ -169,6 +178,88 @@
   // ============================================================
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
+
+  // ============================================================
+  // DEVICE-PIXEL-RATIO-AWARE RENDERING
+  // ------------------------------------------------------------
+  // The canvas keeps its CSS size (driven entirely by styles.css), but its
+  // backing store is sized to CSS-pixels * devicePixelRatio so HiDPI / Retina
+  // displays and large windows render at native resolution instead of being
+  // upscaled (blurry) by the browser. The game itself never leaves the fixed
+  // VIEW_W x VIEW_H logical space — applyViewTransform() maps that space onto
+  // whatever the real backing store happens to be, once per frame.
+  //
+  // Why imageSmoothingEnabled is left at its default (true): this game draws
+  // only flat-vector shapes, gradients, and text — none of which are affected
+  // by the smoothing flag (it only governs drawImage/pattern scaling, of which
+  // there are none here). Gradients/backgrounds therefore stay smooth and
+  // shapes/text stay crisp purely because setTransform — not CSS — performs the
+  // upscale. If photographic background images are ever added, keep smoothing
+  // true for those draws and the rest will remain sharp.
+  const MAX_DPR = 3;   // clamp: beyond ~3x the extra fill cost buys nothing
+
+  // Size the backing store to the canvas's real on-screen CSS size * DPR.
+  // No-ops safely when the canvas is zero-sized (hidden tab / display:none)
+  // so we never produce a 0-dimension buffer or a NaN transform.
+  function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return; // hidden — keep last good size
+    const dpr = Math.max(1, Math.min(MAX_DPR, window.devicePixelRatio || 1));
+    const targetW = Math.round(rect.width * dpr);
+    const targetH = Math.round(rect.height * dpr);
+    // Only touch the backing store when it actually changed — assigning
+    // canvas.width/height clears the canvas and resets the 2D context state.
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+    // CSS size is intentionally NOT set here — styles.css owns it (width/height
+    // 100% of the aspect-locked #frame), so the canvas is never CSS-stretched.
+  }
+
+  // Re-establish the logical->device transform. Called at the very top of every
+  // frame because setTransform replaces the whole matrix and the per-frame
+  // save()/translate(shake)/restore() in render() all hang off this base.
+  function applyViewTransform() {
+    const sx = canvas.width / VIEW_W;
+    const sy = canvas.height / VIEW_H;
+    if (sx > 0 && sy > 0 && isFinite(sx) && isFinite(sy)) {
+      ctx.setTransform(sx, 0, 0, sy, 0, 0);
+    }
+  }
+
+  // Coalesce bursts of resize/orientation events into a single relayout.
+  let resizeRaf = 0;
+  let resizeDebounce = 0;
+  function scheduleResize() {
+    clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(resizeCanvas);
+    }, 100);
+  }
+
+  // Fire resizeCanvas when the DPR itself changes (e.g. dragging the window to
+  // a monitor with a different scale factor, or OS zoom). A media query bound
+  // to the current dppx stops matching the instant DPR changes; we re-arm it
+  // after each change since the threshold moves with the new ratio.
+  function watchDpr() {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    const onChange = () => { resizeCanvas(); watchDpr(); };
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onChange, { once: true });
+    } else if (mq.addListener) { // legacy Safari/old Edge
+      const legacy = () => { mq.removeListener(legacy); onChange(); };
+      mq.addListener(legacy);
+    }
+  }
+
+  window.addEventListener('resize', scheduleResize);
+  window.addEventListener('orientationchange', scheduleResize);
+  window.addEventListener('load', resizeCanvas); // re-measure once layout settles
+  resizeCanvas();  // size correctly before the first frame is drawn
+  watchDpr();
 
   const state = {
     screen: SCREEN.TITLE,
@@ -2353,6 +2444,9 @@
   // RENDER FRAME
   // ============================================================
   function render() {
+    // Reset the logical->device transform first so every draw below works in
+    // the fixed VIEW_W x VIEW_H space regardless of the real backing-store size.
+    applyViewTransform();
     const b = currentBiome();
     const shake = state.screen === SCREEN.PLAYING ? shakeOffset() : { x: 0, y: 0 };
 
