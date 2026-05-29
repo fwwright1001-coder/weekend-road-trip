@@ -199,11 +199,29 @@
           <button class="cta" data-action="return">RETURN</button>
         </div>
       </div>
+
+      <!-- ============ Touch controls (mobile; shown on coarse-pointer in play) ============ -->
+      <div id="touch-controls">
+        <div class="tc-cluster tc-left">
+          <button type="button" class="tc-btn tc-brake" data-tc="brake" aria-label="Brake">BRAKE</button>
+          <button type="button" class="tc-btn tc-accel" data-tc="accel" aria-label="Accelerate">GAS</button>
+        </div>
+        <div class="tc-cluster tc-right">
+          <button type="button" class="tc-btn tc-duck" data-tc="duck" aria-label="Duck">DUCK</button>
+          <button type="button" class="tc-btn tc-jump" data-tc="jump" aria-label="Jump">JUMP</button>
+        </div>
+        <button type="button" class="tc-btn tc-pause" data-tc="pause" aria-label="Pause">❚❚</button>
+      </div>
     </div>
   </div>
   <!-- Screen-reader live region (Bot 4 a11y): polite announcements for screen
        changes, leg transitions, low fuel, and run outcome. -->
   <div id="a11y-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+  <!-- Portrait-orientation nudge (mobile only; pure-CSS show/hide) -->
+  <div id="rotate-hint">
+    <div class="rh-icon">📱↻</div>
+    <div class="rh-text">Rotate your device to landscape to drive.</div>
+  </div>
   <script src="game.js"></script>
 </body>
 </html>
