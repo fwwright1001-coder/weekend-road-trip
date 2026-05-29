@@ -15,6 +15,9 @@ All notable changes to the game. Dates are in 2026.
 - **Dynamic pit stops:** pulsing welcome glow, a chase-blink marquee, a
   flickering price display, a fuel hose, and a little attendant who bobs and
   waves you in. All motion eases off under reduce-motion.
+- *Review tuning:* boosted pothole contrast (dark outline + brighter/wider rim +
+  stronger cracks) so it reads instantly; eased the peak dusk colour grade ~15%
+  so low hazards stay visible; scaled the pit stop ~1.3× for more presence.
 
 ## 2026-05-29 — GT hero car + pass-2 polish
 
