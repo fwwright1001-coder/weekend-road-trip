@@ -27,7 +27,11 @@ Open `game.js` and search for `// === EXTENSION POINT ===`. Every spot you'd rea
 
 ### Add a new biome
 Search: `EXTENSION POINT: BIOMES`
-Add a `{ name, end, timeOfDay, sky, sunColor, sunY, mountainColor, ground, grass, road, dashColor, spawnMul, birdColor }` object to the `BIOMES` array. Then add a `case 'YOURBIOME':` branch in `drawMidScenery()` for biome-specific scenery.
+Add a `{ name, end, timeOfDay, sky, sunColor, sunY, mountainColor, ground, grass, road, dashColor, birdColor }` object to the `BIOMES` array. Then add a `case 'YOURBIOME':` branch in `drawMidScenery()` for biome-specific scenery. Also add a matching, index-aligned row to the `DIFFICULTY` array (one per leg) for that biome's tuning.
+
+### Tune difficulty / balance
+Search: `DIFFICULTY CURVE`
+All per-leg balance lives in the `DIFFICULTY` array — `obstacleDensity`, `minBlockingGap`, `fuelSpawnRate`, `fuelPerCan`, `speedScale`. Tweak a number, not a code path. (This replaced the old per-biome `spawnMul`.) See `BALANCE.md` for the rationale and the headless proof.
 
 ### Add a new obstacle
 Search: `EXTENSION POINT: OBSTACLE TYPES`

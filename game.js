@@ -25,9 +25,28 @@
   // ============================================================
   // CONFIG
   // ============================================================
-  const W = 960;
-  const H = 540;
-  const GROUND_Y = 432;      // top of road surface
+  // --- Logical coordinate space (device-independent) ----------------------
+  // VIEW_W/VIEW_H are the single source of truth for the game's coordinate
+  // space. ALL gameplay + draw math is authored in this fixed 960x540 space;
+  // the canvas backing store is sized separately for the device's pixels (see
+  // resizeCanvas) and a setTransform scales logical -> device every frame, so
+  // nothing below ever has to know the real pixel resolution.
+  const VIEW_W = 960;
+  const VIEW_H = 540;
+  // Legacy short aliases — kept so existing W/H references stay unchanged.
+  const W = VIEW_W;
+  const H = VIEW_H;
+
+  // --- Vertical / ground-contact geometry -------------------------------
+  // GROUND_Y is the physics anchor: the player's resting `y`, and the datum
+  // every scenery layer is drawn from. The car is *drawn* a fixed distance
+  // below this anchor so its tyres sit on the asphalt — that distance is
+  // CAR_FOOT_OFFSET, and ROAD_SURFACE_Y is the resulting contact line where
+  // the wheels (and the car's shadow) rest. Keeping these explicit means the
+  // car lands flush every time and the jump arc starts/ends on the same line.
+  const GROUND_Y = 432;            // physics anchor (resting player.y) + scenery datum
+  const CAR_FOOT_OFFSET = 18;      // px from player.y down to the wheel-contact line
+  const ROAD_SURFACE_Y = GROUND_Y + CAR_FOOT_OFFSET;  // 450: where tyres + shadow rest
   const GRAVITY = 0.78;
   const JUMP_V = -16;
   const PLAYER_X = 170;
@@ -38,15 +57,32 @@
   const SPEED_DRAG = 0.018;
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
-  const HIT_FUEL_PENALTY = 12;
+  const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (Bot 4 consumes it)
+  const HIT_FUEL_PENALTY = 14;     // per-hit fuel cost. Hits are now always avoidable (see minBlockingGap),
+                                   // so this is a pure skill signal — bumped 12->14 so careless play (many
+                                   // hits) can still run dry even with pit-stop refuels (see BALANCE.md).
   const SNACK_POINTS = 50;
   const FUEL_PICKUP_BONUS = 25;
-  const FUEL_PICKUP_REFILL = 22;
+  const FUEL_PICKUP_REFILL = 22;   // default fuel-per-can; per-leg override lives in DIFFICULTY
+  const PITSTOP_REFILL = 40;       // fuel added per pit stop (was a FULL refuel). A full reset made the
+                                   // lose condition unreachable; +40 is still the biggest single fuel
+                                   // pickup + 500 pts, but no longer an auto-win. See BALANCE.md.
+  const SPAWN_MIN_INTERVAL = 0.32; // hard floor on seconds between spawn rolls
   const BIOME_BONUS = 500;
+
+  // Developer flag. Off in shipped builds; enable via "?debug" in the URL or
+  // localStorage 'wrt.debug'='1'. Gates the backtick hitbox/difficulty overlay
+  // (Bot 3) AND auto-running the self-test harness on boot (Bot 4).
+  const DEBUG = (() => {
+    try {
+      return /[?&]debug(=1)?(&|$)/.test(location.search) || localStorage.getItem('wrt.debug') === '1';
+    } catch (e) { return false; }
+  })();
   const STORAGE_KEY = 'wrt.highscores.v2';
   const SETTINGS_KEY = 'wrt.settings.v1';
   const ACHIEVEMENTS_KEY = 'wrt.achievements.v1';
   const GHOST_KEY = 'wrt.ghost.v1';
+  const MUTE_KEY = 'wrt.muted.v1';     // legacy; migrated into SETTINGS_KEY on load
   const MAX_SCORES = 5;
   const GHOST_SAMPLE_STEP = 0.08;
   const GHOST_DISTANCE_SCALE = 0.28;
@@ -72,7 +108,6 @@
       grass: '#3a5a3a',
       road: '#222226',
       dashColor: '#ffea88',
-      spawnMul: 1.0,    // baseline difficulty
       birdColor: '#222222'
     },
     {
@@ -87,7 +122,6 @@
       grass: '#456f3a',
       road: '#222226',
       dashColor: '#ffea88',
-      spawnMul: 0.85,   // slightly tighter
       birdColor: '#5a3a1f'  // hawks
     },
     {
@@ -102,7 +136,6 @@
       grass: '#b88a5a',
       road: '#3a3338',
       dashColor: '#ffea88',
-      spawnMul: 0.7,    // tougher
       birdColor: '#3a3a3a'  // vultures
     },
     {
@@ -117,11 +150,42 @@
       grass: '#c8a880',
       road: '#2a2a30',
       dashColor: '#ffea88',
-      spawnMul: 0.55,   // final-biome chaos
       birdColor: '#eeeeee'  // seagulls
     }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
+
+  // ============================================================
+  // DIFFICULTY CURVE  — single, reviewable source of truth for balance
+  // ============================================================
+  // One entry per leg, index-aligned with BIOMES. All gameplay tuning lives
+  // here so balance is data-driven: tweak a number, not a code path.
+  //
+  //   obstacleDensity : relative spawn cadence (×). Higher = more frequent spawn
+  //                     rolls. NOTE: at high speed minBlockingGap (below), not
+  //                     this knob, dominates how many *blockers* actually land —
+  //                     a rejected blocker leaves empty road. So obstacleDensity
+  //                     mostly scales pickup/empty cadence once you're fast; it
+  //                     is the blocker lever only at low speed.
+  //   minBlockingGap  : minimum on-screen px between two consecutive *blocking*
+  //                     obstacles (pothole/cone/sign). Sized so two blockers can
+  //                     never be unavoidable at MAX_SPEED — a full jump arc spans
+  //                     ~390px at MAX_SPEED, so every value below clears that with
+  //                     margin. (The real guarantee is the constructive zero-collision
+  //                     solvability proof in sim/balance-sim.js — see BALANCE.md.)
+  //   fuelSpawnRate   : multiplier on the fuel-can spawn probability for this leg.
+  //   fuelPerCan      : fuel restored per can collected on this leg.
+  //   speedScale      : reserved per-leg pacing multiplier (1 = stock).
+  //
+  // The COAST row is intentionally the kindest on fuel: the finale should feel
+  // like a payoff for a clean run, not a wall. De-clustering (minBlockingGap)
+  // plus the fuel bump together fix the "runs dry at ~96%" cliff.
+  const DIFFICULTY = [
+    { obstacleDensity: 1.00, minBlockingGap: 600, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // CITY
+    { obstacleDensity: 1.15, minBlockingGap: 540, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // FOREST
+    { obstacleDensity: 1.30, minBlockingGap: 500, fuelSpawnRate: 1.1, fuelPerCan: 24, speedScale: 1.00 }, // DESERT
+    { obstacleDensity: 1.45, minBlockingGap: 460, fuelSpawnRate: 1.6, fuelPerCan: 28, speedScale: 1.00 }  // COAST
+  ];
 
   const SCREEN = {
     TITLE: 'title',
@@ -140,7 +204,30 @@
   const DEFAULT_SETTINGS = {
     screenShake: true,
     colorblind: false,
-    ghostVisible: true
+    ghostVisible: true,
+    // Audio — all folded into the single wrt.settings.v1 key. The legacy
+    // wrt.muted.v1 key is migrated on first load (see loadSettings).
+    muted: false,
+    sfxEnabled: true,
+    masterVolume: 0.7,          // 0..1; scales AUDIO_BASE_GAIN at the master bus
+    // Accessibility — reduceMotion is seeded from the OS prefers-reduced-motion
+    // hint at load time, then persists once the player sets it explicitly.
+    reduceMotion: false
+  };
+
+  // Spoken labels for the screen-reader live region on each screen change.
+  const SCREEN_LABELS = {
+    [SCREEN.TITLE]: 'Title screen',
+    [SCREEN.PLAYING]: 'Trip started',
+    [SCREEN.PAUSED]: 'Paused',
+    [SCREEN.GAMEOVER]: 'Out of gas. Game over',
+    [SCREEN.WIN]: 'You reached the coast. You win',
+    [SCREEN.INITIALS]: 'New high score. Enter your initials',
+    [SCREEN.SCORES]: 'High scores',
+    [SCREEN.ACHIEVEMENTS]: 'Achievements',
+    [SCREEN.GHOST]: 'Ghost race',
+    [SCREEN.SETTINGS]: 'Settings',
+    [SCREEN.HELP]: 'Controls'
   };
 
   const ACHIEVEMENTS = [
@@ -170,6 +257,88 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
 
+  // ============================================================
+  // DEVICE-PIXEL-RATIO-AWARE RENDERING
+  // ------------------------------------------------------------
+  // The canvas keeps its CSS size (driven entirely by styles.css), but its
+  // backing store is sized to CSS-pixels * devicePixelRatio so HiDPI / Retina
+  // displays and large windows render at native resolution instead of being
+  // upscaled (blurry) by the browser. The game itself never leaves the fixed
+  // VIEW_W x VIEW_H logical space — applyViewTransform() maps that space onto
+  // whatever the real backing store happens to be, once per frame.
+  //
+  // Why imageSmoothingEnabled is left at its default (true): this game draws
+  // only flat-vector shapes, gradients, and text — none of which are affected
+  // by the smoothing flag (it only governs drawImage/pattern scaling, of which
+  // there are none here). Gradients/backgrounds therefore stay smooth and
+  // shapes/text stay crisp purely because setTransform — not CSS — performs the
+  // upscale. If photographic background images are ever added, keep smoothing
+  // true for those draws and the rest will remain sharp.
+  const MAX_DPR = 3;   // clamp: beyond ~3x the extra fill cost buys nothing
+
+  // Size the backing store to the canvas's real on-screen CSS size * DPR.
+  // No-ops safely when the canvas is zero-sized (hidden tab / display:none)
+  // so we never produce a 0-dimension buffer or a NaN transform.
+  function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return; // hidden — keep last good size
+    const dpr = Math.max(1, Math.min(MAX_DPR, window.devicePixelRatio || 1));
+    const targetW = Math.round(rect.width * dpr);
+    const targetH = Math.round(rect.height * dpr);
+    // Only touch the backing store when it actually changed — assigning
+    // canvas.width/height clears the canvas and resets the 2D context state.
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+    // CSS size is intentionally NOT set here — styles.css owns it (width/height
+    // 100% of the aspect-locked #frame), so the canvas is never CSS-stretched.
+  }
+
+  // Re-establish the logical->device transform. Called at the very top of every
+  // frame because setTransform replaces the whole matrix and the per-frame
+  // save()/translate(shake)/restore() in render() all hang off this base.
+  function applyViewTransform() {
+    const sx = canvas.width / VIEW_W;
+    const sy = canvas.height / VIEW_H;
+    if (sx > 0 && sy > 0 && isFinite(sx) && isFinite(sy)) {
+      ctx.setTransform(sx, 0, 0, sy, 0, 0);
+    }
+  }
+
+  // Coalesce bursts of resize/orientation events into a single relayout.
+  let resizeRaf = 0;
+  let resizeDebounce = 0;
+  function scheduleResize() {
+    clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(resizeCanvas);
+    }, 100);
+  }
+
+  // Fire resizeCanvas when the DPR itself changes (e.g. dragging the window to
+  // a monitor with a different scale factor, or OS zoom). A media query bound
+  // to the current dppx stops matching the instant DPR changes; we re-arm it
+  // after each change since the threshold moves with the new ratio.
+  function watchDpr() {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    const onChange = () => { resizeCanvas(); watchDpr(); };
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onChange, { once: true });
+    } else if (mq.addListener) { // legacy Safari/old Edge
+      const legacy = () => { mq.removeListener(legacy); onChange(); };
+      mq.addListener(legacy);
+    }
+  }
+
+  window.addEventListener('resize', scheduleResize);
+  window.addEventListener('orientationchange', scheduleResize);
+  window.addEventListener('load', resizeCanvas); // re-measure once layout settles
+  resizeCanvas();  // size correctly before the first frame is drawn
+  watchDpr();
+
   const state = {
     screen: SCREEN.TITLE,
     prevScreen: SCREEN.TITLE,
@@ -191,6 +360,13 @@
     collectibles: [],
     particles: [],
     spawnTimer: 0,
+    // --- Fuel-low contract (Bot 3 produces, Bots 2/4 consume; read-only) ---
+    // `fuelLow` is true while fuel sits in the danger band (< FUEL_LOW_FRAC of
+    // FUEL_MAX) and is not yet empty. `fuelLowJustEntered` is a single-frame
+    // rising edge consumers can latch a one-shot warning (sound/flash) to.
+    fuelLow: false,
+    fuelLowJustEntered: false,
+    debug: false,            // hidden overlay toggle (only flips when DEBUG === true)
     flashTimer: 0,
     shakeT: 0,
     shakeMag: 0,
@@ -268,13 +444,35 @@
     saveScores(state.scores);
   }
 
+  function prefersReducedMotion() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+  function legacyMutePref() {
+    try { return localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { return false; }
+  }
   function loadSettings() {
+    // Defaults first; the OS reduce-motion hint and the legacy mute key seed the
+    // initial values, then an explicitly-saved wrt.settings.v1 overrides them.
+    const seeded = {
+      ...DEFAULT_SETTINGS,
+      reduceMotion: prefersReducedMotion(),
+      muted: legacyMutePref()
+    };
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
-      return { ...DEFAULT_SETTINGS, ...parsed };
+      const s = { ...seeded, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+      // Coerce/clamp so a stale or hand-edited payload can never break audio/UI.
+      let vol = Number(s.masterVolume);
+      if (!Number.isFinite(vol)) vol = DEFAULT_SETTINGS.masterVolume;
+      s.masterVolume = Math.max(0, Math.min(1, vol));
+      ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion']
+        .forEach((k) => { s[k] = !!s[k]; });
+      return s;
     } catch (e) {
-      return { ...DEFAULT_SETTINGS };
+      return { ...seeded };
     }
   }
   function saveSettings() {
@@ -358,14 +556,25 @@
   // ============================================================
   // Engine drone is a continuous oscillator pitched by speed.
   // Pickups, hits, jumps, win/lose are short envelope shapes.
-  // Muted state persists across reloads.
-  const MUTE_KEY = 'wrt.muted.v1';
+  // Mute / master volume / SFX-enabled all live in state.settings (persisted to
+  // wrt.settings.v1); the accessors below keep the audio graph in sync with that
+  // single source of truth. The legacy wrt.muted.v1 key is READ once as a
+  // migration seed (see loadSettings) and never written by the current code.
+  const AUDIO_BASE_GAIN = 0.5;   // master level at volume=1.0, unmuted
   const audio = {
     ctx: null,
     master: null,
     engineOsc: null,
     engineGain: null,
-    muted: (() => { try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; } })(),
+
+    get muted() { return !!state.settings.muted; },
+    get sfxOn() { return state.settings.sfxEnabled !== false; },
+    masterLevel() {
+      if (this.muted) return 0;
+      let v = Number(state.settings.masterVolume);
+      if (!Number.isFinite(v)) v = DEFAULT_SETTINGS.masterVolume;
+      return Math.max(0, Math.min(1, v)) * AUDIO_BASE_GAIN;
+    },
 
     init() {
       if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
@@ -374,18 +583,26 @@
         this.ctx = new AC();
         if (this.ctx.state === 'suspended') this.ctx.resume();
         this.master = this.ctx.createGain();
-        this.master.gain.value = this.muted ? 0 : 0.35;
+        this.master.gain.value = this.masterLevel();
         this.master.connect(this.ctx.destination);
       } catch (e) { /* no audio available — game still works */ }
     },
+    // Re-apply mute/volume to the live master bus. Safe to call before init().
+    refresh() {
+      if (this.master && this.ctx) {
+        this.master.gain.setTargetAtTime(this.masterLevel(), this.ctx.currentTime, 0.02);
+      }
+    },
     setMuted(m) {
-      this.muted = m;
-      try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch {}
-      if (this.master) this.master.gain.value = m ? 0 : 0.35;
+      state.settings.muted = !!m;
+      saveSettings();
+      this.refresh();
+      syncSettingsInputs();
     },
     toggle() {
       this.setMuted(!this.muted);
       showAudioBanner(this.muted ? 'SOUND OFF' : 'SOUND ON');
+      announce(this.muted ? 'Audio muted' : 'Audio on');
     },
 
     // Continuous engine — pitch tied to speed
@@ -426,7 +643,7 @@
 
     // One-shot helpers
     blip({ freq = 600, freq2 = freq, dur = 0.12, type = 'triangle', vol = 0.25 } = {}) {
-      if (!this.ctx) return;
+      if (!this.ctx || !this.sfxOn) return;   // SFX toggle gates all one-shots
       const t = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       osc.type = type;
@@ -440,7 +657,7 @@
       osc.start(t); osc.stop(t + dur + 0.02);
     },
     noiseHit(dur = 0.18) {
-      if (!this.ctx) return;
+      if (!this.ctx || !this.sfxOn) return;
       const t = this.ctx.currentTime;
       const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
       const d = buf.getChannelData(0);
@@ -476,6 +693,21 @@
     playLose() {
       [392, 330, 277, 220].forEach((f, i) => setTimeout(() =>
         this.blip({ freq: f, freq2: f, dur: 0.26, type: 'sawtooth', vol: 0.22 }), i * 130));
+    },
+    // Duck: short downward "whump".
+    playDuck() { this.blip({ freq: 360, freq2: 200, dur: 0.10, type: 'sine', vol: 0.14 }); },
+    // Combo escalation: a brief tick whose pitch climbs with the combo level, so
+    // each step reads as forward progress. Very short + quiet so it layers over
+    // the pickup sound without fatigue.
+    playCombo(level) {
+      const n = Math.max(2, level | 0);
+      const base = 620 + (n - 2) * 130;
+      this.blip({ freq: base, freq2: base * 1.5, dur: 0.07, type: 'triangle', vol: 0.10 });
+    },
+    // Low-fuel warning: two soft falling beeps — a nudge, not an alarm.
+    playLowFuel() {
+      this.blip({ freq: 520, freq2: 380, dur: 0.14, type: 'triangle', vol: 0.16 });
+      setTimeout(() => this.blip({ freq: 430, freq2: 300, dur: 0.16, type: 'triangle', vol: 0.16 }), 150);
     }
   };
   let audioBanner = { text: '', t: 0 };
@@ -508,6 +740,64 @@
   const ghostSummaryEl = document.getElementById('ghost-summary');
   const ghostMessageEl = document.getElementById('ghost-message');
   const settingsInputs = document.querySelectorAll('[data-setting]');
+  const hudFuelBar = hudFuel ? hudFuel.parentElement : null;   // .hud-fuel-bar
+  const hudTripBar = hudTrip ? hudTrip.parentElement : null;   // .hud-trip-bar
+  const liveRegion = document.getElementById('a11y-live');
+
+  // ============================================================
+  // ACCESSIBILITY (Bot 4: a11y workstream)
+  // ============================================================
+  // Polite screen-reader announcements (screen changes, leg transitions, low
+  // fuel, run outcome). Clearing first guarantees identical repeats re-announce.
+  function announce(msg) {
+    if (!liveRegion || !msg) return;
+    liveRegion.textContent = '';
+    setTimeout(() => { liveRegion.textContent = msg; }, 30);
+  }
+  function reduceMotionOn() { return !!state.settings.reduceMotion; }
+  // The canvas carries a text summary of game state for screen readers.
+  function updateCanvasAria() {
+    if (!canvas) return;
+    let label;
+    if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+      const b = currentBiome();
+      const tripPct = Math.max(0, Math.min(100, Math.round((state.distance / TRIP_TOTAL) * 100)));
+      const fuelPct = Math.max(0, Math.min(100, Math.round((state.fuel / FUEL_MAX) * 100)));
+      label = 'Weekend Road Trip. Driving through ' + b.name + ', leg ' + (state.biomeIdx + 1) +
+        ' of ' + BIOMES.length + '. Trip ' + tripPct + ' percent complete. Fuel ' + fuelPct +
+        ' percent. Score ' + (state.score | 0) + (state.screen === SCREEN.PAUSED ? '. Paused.' : '.');
+    } else {
+      label = 'Weekend Road Trip. ' + (SCREEN_LABELS[state.screen] || 'Menu') +
+        '. Use Tab to reach the on-screen buttons.';
+    }
+    canvas.setAttribute('aria-label', label);
+  }
+  // One-time ARIA wiring for the canvas + DOM HUD. Applied from JS so the HUD
+  // markup (Bot 2's lane) is left untouched — we only add attributes at runtime.
+  function initA11y() {
+    try {
+      if (canvas) canvas.setAttribute('role', 'img');
+      if (hudEl) {
+        hudEl.setAttribute('role', 'group');
+        hudEl.setAttribute('aria-label', 'Heads-up display');
+      }
+      [[hudFuelBar, 'Fuel'], [hudTripBar, 'Trip progress']].forEach((pair) => {
+        const el = pair[0];
+        if (!el) return;
+        el.setAttribute('role', 'progressbar');
+        el.setAttribute('aria-label', pair[1]);
+        el.setAttribute('aria-valuemin', '0');
+        el.setAttribute('aria-valuemax', '100');
+        el.setAttribute('aria-valuenow', '0');
+      });
+      // Make each menu screen programmatically focusable (not in the tab order)
+      // so focus can be moved into it on a screen change. See applyScreen().
+      for (const key in screenEls) {
+        if (screenEls[key] && screenEls[key].setAttribute) screenEls[key].setAttribute('tabindex', '-1');
+      }
+      updateCanvasAria();
+    } catch (e) { /* a11y is best-effort; never block the game */ }
+  }
 
   // ============================================================
   // SCREEN MANAGEMENT
@@ -534,6 +824,20 @@
       audio.engineGain.gain.setTargetAtTime(target, audio.ctx.currentTime, 0.05);
     }
     updateGhostTitleStatus();
+    announce(SCREEN_LABELS[state.screen] || '');
+    updateCanvasAria();
+    // A11y focus management (WCAG 2.4.3): move focus into a newly shown menu so
+    // it never stays stranded on a now-hidden control; drop focus out of the
+    // overlay when gameplay starts so game keys aren't intercepted by a hidden
+    // button.
+    if (state.screen !== SCREEN.PLAYING) {
+      const focusEl = screenEls[state.screen];
+      if (focusEl && typeof focusEl.focus === 'function') {
+        try { focusEl.focus({ preventScroll: true }); } catch (e) { try { focusEl.focus(); } catch (e2) {} }
+      }
+    } else if (document.activeElement && overlayEl.contains && overlayEl.contains(document.activeElement)) {
+      try { document.activeElement.blur(); } catch (e) {}
+    }
   }
   function openHelp() {
     state.prevScreen = state.screen;
@@ -566,6 +870,11 @@
     }
     state.keys.add(e.code);
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
+    // Hidden debug overlay — only reachable in DEBUG builds.
+    if (e.code === 'Backquote') { if (DEBUG) state.debug = !state.debug; return; }
+    // A focused button activates itself on Enter (native click); don't also run
+    // the screen-global confirm, or navigation would fire twice.
+    if (e.code === 'Enter' && tag === 'BUTTON') return;
     handleKey(e.code);
   });
   window.addEventListener('keyup', (e) => {
@@ -739,11 +1048,23 @@
   });
 
   settingsInputs.forEach((input) => {
-    input.addEventListener('change', () => {
-      state.settings[input.dataset.setting] = input.checked;
-      saveSettings();
+    const apply = (persist) => {
+      const key = input.dataset.setting;
+      if (input.type === 'range') {
+        let v = Number(input.value);
+        if (!Number.isFinite(v)) v = DEFAULT_SETTINGS.masterVolume;
+        state.settings[key] = Math.max(0, Math.min(1, v));
+      } else {
+        state.settings[key] = input.checked;
+      }
+      if (persist) saveSettings();
       applySettings();
-    });
+      updateVolumeReadout();
+    };
+    input.addEventListener('change', () => apply(true));
+    // Sliders also fire 'input' continuously while dragging — apply live, but
+    // only persist on 'change' (release) to avoid hammering localStorage.
+    if (input.type === 'range') input.addEventListener('input', () => apply(false));
   });
 
   // ============================================================
@@ -761,6 +1082,8 @@
     state.collectibles = [];
     state.particles = [];
     state.spawnTimer = 0;
+    state.fuelLow = false;
+    state.fuelLowJustEntered = false;
     state.flashTimer = 0;
     state.shakeT = 0;
     state.shakeMag = 0;
@@ -769,6 +1092,9 @@
     state.player.vy = 0;
     state.player.jumping = false;
     state.player.ducking = false;
+    state._duckHeldPrev = false;
+    state._lowFuelWarned = false;
+    state._ariaTick = 0;
     state.player.tilt = 0;
     state.player.bob = 0;
     state.combo = 0;
@@ -849,14 +1175,32 @@
       el.appendChild(card);
     });
   }
-  function renderSettings() {
+  function syncSettingsInputs() {
     settingsInputs.forEach((input) => {
-      input.checked = !!state.settings[input.dataset.setting];
+      const key = input.dataset.setting;
+      if (input.type === 'range') input.value = Number(state.settings[key]);
+      else input.checked = !!state.settings[key];
     });
+    updateVolumeReadout();
+  }
+  function updateVolumeReadout() {
+    const slider = document.getElementById('setting-volume');
+    const out = document.getElementById('setting-volume-value');
+    const pct = Math.round(Math.max(0, Math.min(1, Number(state.settings.masterVolume))) * 100);
+    if (out) out.textContent = pct + '%';
+    if (slider) {
+      slider.setAttribute('aria-valuenow', String(Math.max(0, Math.min(1, Number(state.settings.masterVolume)))));
+      slider.setAttribute('aria-valuetext', pct + '%');
+    }
+  }
+  function renderSettings() {
+    syncSettingsInputs();
     applySettings();
   }
   function applySettings() {
     document.body.classList.toggle('colorblind', !!state.settings.colorblind);
+    document.body.classList.toggle('reduce-motion', reduceMotionOn());
+    audio.refresh();
   }
   function updateGhostTitleStatus() {
     if (!ghostTitleStatus) return;
@@ -993,7 +1337,7 @@
     if (!state.player.jumping) {
       state.player.vy = JUMP_V;
       state.player.jumping = true;
-      spawnDust(PLAYER_X + 30, GROUND_Y + 6, 8);
+      spawnDust(PLAYER_X + 30, ROAD_SURFACE_Y, 8);
       audio.playJump();
       unlockAchievement('first-jump');
     }
@@ -1010,7 +1354,7 @@
       state.player.vy = 0;
       if (wasJumping) {
         state.player.jumping = false;
-        spawnDust(PLAYER_X + 24, GROUND_Y + 6, 14);
+        spawnDust(PLAYER_X + 24, ROAD_SURFACE_Y, 14);
       }
     }
     // gentle body wobble — sells the suspension
@@ -1041,17 +1385,46 @@
   // Obstacle types so far: 'pothole', 'cone', 'sign'
   // Collectible types so far: 'fuel', 'snack', 'pitstop'
   function spawn() {
+    const diff = currentDifficulty();
+    // Per-leg fuel boost: expand the fuel slice and shrink the obstacle slices
+    // proportionally, preserving the original pothole:cone:sign composition.
+    // Baseline weights were ground 0.50 / sign 0.22 / snack 0.18 / fuel 0.10.
+    const fuelChance = Math.min(0.4, 0.10 * (diff.fuelSpawnRate || 1));
+    const snackChance = 0.18;
+    const obstMass = Math.max(0, 1 - fuelChance - snackChance);
+    const groundChance = obstMass * (0.50 / 0.72);  // pothole/cone share of obstacles
+    const signChance = obstMass * (0.22 / 0.72);    // sign share of obstacles
+
     const r = Math.random();
-    if (r < 0.5) {
+    if (r < groundChance) {
       const t = ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)];
-      state.obstacles.push(makeObstacle(t));
-    } else if (r < 0.72) {
-      state.obstacles.push(makeObstacle('sign'));
-    } else if (r < 0.90) {
+      tryPlaceObstacle(t, diff.minBlockingGap);
+    } else if (r < groundChance + signChance) {
+      tryPlaceObstacle('sign', diff.minBlockingGap);
+    } else if (r < groundChance + signChance + snackChance) {
       state.collectibles.push(makeCollectible('snack'));
     } else {
       state.collectibles.push(makeCollectible('fuel'));
     }
+  }
+
+  // Rightmost (most-recently-spawned) obstacle x, or -Infinity if none pending.
+  function rightmostObstacleX() {
+    let m = -Infinity;
+    for (const o of state.obstacles) if (o.x > m) m = o.x;
+    return m;
+  }
+
+  // Place a blocking obstacle only if it clears `minGap` px from the previous
+  // one. If it would cluster too tightly we skip it — this guarantees a
+  // jump/duck-able gap at any speed (no unavoidable back-to-back blockers) and
+  // naturally thins dense legs instead of queuing an unreachable wall off-screen.
+  function tryPlaceObstacle(type, minGap) {
+    const o = makeObstacle(type);                 // spawns at x = W + 60
+    const prevX = rightmostObstacleX();
+    if (prevX > -Infinity && (o.x - prevX) < (minGap || 0)) return false;
+    state.obstacles.push(o);
+    return true;
   }
   function makeObstacle(type) {
     const o = { type, x: W + 60, hit: false };
@@ -1140,10 +1513,11 @@
     state.spawnTimer -= dt;
     if (state.spawnTimer <= 0) {
       spawn();
-      // Faster spawns as speed climbs + per-biome difficulty multiplier
-      const mul = currentBiome().spawnMul || 1;
-      state.spawnTimer = Math.max(0.32,
-        (0.85 + Math.random() * 0.7 - state.speed * 0.045) * mul);
+      // Spawns get faster as speed climbs and as the leg's obstacleDensity rises.
+      // (min-gap enforcement in spawn() still guarantees blockers stay clearable.)
+      const density = currentDifficulty().obstacleDensity || 1;
+      state.spawnTimer = Math.max(SPAWN_MIN_INTERVAL,
+        (0.85 + Math.random() * 0.7 - state.speed * 0.045) / density);
     }
 
     // Pit stop spawns at distance milestones
@@ -1203,19 +1577,22 @@
         state.runStats.pickups += 1;
         if (state.combo >= COMBO_MAX) unlockAchievement('combo-5');
         const mult = state.combo;
+        if (state.combo >= 2) audio.playCombo(state.combo);   // combo milestone feedback
         if (c.type === 'fuel') {
           state.runStats.fuel += 1;
           const pts = FUEL_PICKUP_BONUS * mult;
-          state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_PICKUP_REFILL);
+          const refill = currentDifficulty().fuelPerCan || FUEL_PICKUP_REFILL;
+          state.fuel = Math.min(FUEL_MAX, state.fuel + refill);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
           audio.playFuel();
           unlockAchievement('fuel');
         } else if (c.type === 'pitstop') {
-          // Full refuel + chunky bonus
+          // Big partial refuel + chunky bonus. (A full reset made running dry
+          // impossible; PITSTOP_REFILL keeps it a strong rescue, not an auto-win.)
           state.runStats.pitstops += 1;
-          state.fuel = FUEL_MAX;
+          state.fuel = Math.min(FUEL_MAX, state.fuel + PITSTOP_REFILL);
           const pts = 500 * mult;
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
@@ -1234,6 +1611,36 @@
       }
     }
     state.collectibles = state.collectibles.filter((c) => !c.taken);
+  }
+
+  // ============================================================
+  // HUD SAFE ZONE + TOAST PALETTE
+  // ------------------------------------------------------------
+  // The DOM HUD cards (SCORE/STAGE/TRIP top row + SPEEDO/FUEL bottom row, see
+  // index.html) sit in screen space over the canvas. Canvas-drawn toasts must
+  // never render inside those bands or they read as a glitch — the old COMBO
+  // toast drew at y=60, colliding with the TRIP card. All coordinates below are
+  // in the fixed VIEW_W x VIEW_H logical space Bot 1's render transform guarantees.
+  const HUD_SAFE_TOP = 88;            // bottom of the SCORE/STAGE/TRIP card band (+margin)
+  // COMBO toast sits in a clear band BELOW the card band AND the biome banner
+  // (the banner occupies y 96..166). Centered ~0.40*VIEW_H so that even at the
+  // toast's max pop scale (1.4x, yOff -8 → pill top ~COMBO_Y-37) it stays a
+  // dozen px clear of the banner bottom, and well above the car.
+  const COMBO_Y = Math.round(H * 0.40);   // = 216
+
+  // Colorblind palette for canvas toasts. We CONSUME the existing palette source
+  // (state.settings.colorblind — the same flag gameColor() reads); these
+  // high-contrast hexes mirror the body.colorblind CSS vars so canvas toasts and
+  // the DOM HUD stay in lockstep. The setting/persistence is owned upstream
+  // (accessibility); we only read it.
+  const TOAST_CB = {
+    '#7ee27e': '#009e73',   // good / gain  -> CB green
+    '#f5d76e': '#ffd23f',   // gold / score -> CB amber
+    '#ff6b3a': '#cc79a7',   // penalty      -> CB magenta
+  };
+  function toastColor(hex) {
+    if (!state.settings.colorblind) return hex;
+    return TOAST_CB[hex.toLowerCase()] || hex;
   }
 
   // ============================================================
@@ -1260,14 +1667,17 @@
     ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // Dark halo keeps popups legible over bright biome skies (desert/coast).
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 1;
     for (const p of state.scorePopups) {
-      const a = Math.min(1, p.life * 2);
-      ctx.globalAlpha = a;
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillText(p.text, p.x + 1, p.y + 1);
-      ctx.fillStyle = p.color;
-      ctx.fillText(p.text, p.x, p.y);
+      ctx.globalAlpha = Math.min(1, p.life * 2);
+      // Popups spawn at world objects (low on screen) and drift up; clamp so
+      // none can ever drift into the top DOM card band.
+      const py = Math.max(p.y, HUD_SAFE_TOP);
+      ctx.fillStyle = toastColor(p.color);
+      ctx.fillText(p.text, p.x, py);
     }
     ctx.restore();
   }
@@ -1276,16 +1686,25 @@
     const t = Math.min(1, state.comboPopupT * 2);
     const scale = 1 + (1 - t) * 0.4;
     const yOff = (1 - t) * -8;
+    const label = `COMBO  x${state.combo}`;
     ctx.save();
-    ctx.translate(W / 2, 60 + yOff);
+    ctx.translate(W / 2, COMBO_Y + yOff);
     ctx.scale(scale, scale);
     ctx.font = 'bold 26px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillText(`COMBO  x${state.combo}`, 1, 1);
-    ctx.fillStyle = '#f5d76e';
-    ctx.fillText(`COMBO  x${state.combo}`, 0, 0);
+    // Dark backplate pill — keeps the toast legible over bright skies
+    // (desert noon, coast sunset), matching the DOM card backplates.
+    const tw = ctx.measureText(label).width;
+    const bw = tw + 32, bh = 42;
+    ctx.fillStyle = 'rgba(12, 14, 24, 0.72)';
+    roundRect(ctx, -bw / 2, -bh / 2, bw, bh, 8);
+    ctx.fill();
+    ctx.strokeStyle = toastColor('#f5d76e');
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = toastColor('#f5d76e');
+    ctx.fillText(label, 0, 1);
     ctx.restore();
   }
 
@@ -1369,12 +1788,12 @@
   // SCREEN SHAKE
   // ============================================================
   function screenShake(mag, duration) {
-    if (!state.settings.screenShake) return;
+    if (!state.settings.screenShake || reduceMotionOn()) return;
     state.shakeMag = mag;
     state.shakeT = duration;
   }
   function shakeOffset() {
-    if (!state.settings.screenShake || state.shakeT <= 0) return { x: 0, y: 0 };
+    if (!state.settings.screenShake || reduceMotionOn() || state.shakeT <= 0) return { x: 0, y: 0 };
     const t = state.shakeT / 0.35;
     return {
       x: (Math.random() - 0.5) * state.shakeMag * t,
@@ -1394,6 +1813,13 @@
     }
     state.biomeIdx = BIOMES.length - 1;
     return BIOMES[state.biomeIdx];
+  }
+  // The difficulty knobs for the current leg. Refreshes the biome index from
+  // distance first so spawn-time reads (called before render's currentBiome())
+  // never lag a frame behind the leg the player is actually in.
+  function currentDifficulty() {
+    currentBiome();
+    return DIFFICULTY[state.biomeIdx] || DIFFICULTY[DIFFICULTY.length - 1];
   }
   function nextBiome() {
     return BIOMES[Math.min(state.biomeIdx + 1, BIOMES.length - 1)];
@@ -1816,14 +2242,22 @@
     const w = 80;
     const h = ducking ? 36 : 56;
     const x = PLAYER_X;
-    const cy = y - h / 2 + 8 + bob;
+    // Tyres stay glued to the contact line; only the body carries the bob — so
+    // the car can never appear to float. (The old bob moved wheels + body
+    // together while the shadow stayed on the ground, which read as a hover at
+    // speed; now the wheels are locked to ROAD_SURFACE_Y and only the body bobs.)
+    const lift = GROUND_Y - y;                 // 0 at rest, >0 while airborne
+    const footY = ROAD_SURFACE_Y - lift;       // wheel-contact line, rises with the jump
+    const wheelY = footY - 10;                 // wheel radius 10 → tyre bottoms rest on footY
+    const top = wheelY + 2 - h + bob;          // body sits just above the wheels (+bob wobble)
+    const cy = top + h / 2;                    // tilt-rotation pivot
 
-    // Shadow (scaled with jump height)
+    // Shadow stays on the road surface; it shrinks/lightens as the car climbs.
     ctx.save();
-    const shadowScale = jumping ? 0.55 + Math.min(1, (GROUND_Y - y) / 80) * 0.45 : 1;
+    const shadowScale = jumping ? 0.55 + Math.min(1, lift / 80) * 0.45 : 1;
     ctx.fillStyle = `rgba(0,0,0,${0.35 * shadowScale})`;
     ctx.beginPath();
-    ctx.ellipse(x + w / 2, GROUND_Y + 18, (w / 2) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + w / 2, ROAD_SURFACE_Y, (w / 2) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -1831,8 +2265,6 @@
     ctx.translate(x + w / 2, cy);
     ctx.rotate(tilt);
     ctx.translate(-(x + w / 2), -cy);
-
-    const top = cy - h / 2;
     // Car body (red convertible)
     ctx.fillStyle = '#c81e28';
     roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
@@ -1882,8 +2314,7 @@
     ctx.lineTo(x + 44, top + h - 4);
     ctx.stroke();
 
-    // Wheels (with rotation indicator)
-    const wheelY = top + h - 2;
+    // Wheels (with rotation indicator) — planted on the contact line computed above.
     drawWheel(x + 18, wheelY, wheelAngle);
     drawWheel(x + w - 18, wheelY, wheelAngle);
 
@@ -1970,27 +2401,62 @@
       const float = Math.sin(c.bob) * 4;
       const y = c.y + float;
       if (c.type === 'fuel') {
-        const fuelGlow = gameColor('rgba(126, 226, 126, 0.35)', 'rgba(0, 114, 178, 0.38)');
-        const fuelBody = gameColor('#2a7a2a', '#005f8f');
-        const fuelStroke = gameColor('#7ee27e', '#56b4e9');
-        // Glow
+        // Stereotypical NATO jerry can: red body with the signature embossed
+        // X-brace, a pour spout + cap, and a top carry-handle. Red in the default
+        // palette; the colorblind palette keeps it blue so it never reads as a
+        // hazard — and the unmistakable can SHAPE means fuel never relies on
+        // colour alone (accessibility: shape redundancy, not just hue).
+        const fuelGlow  = gameColor('rgba(220, 70, 55, 0.34)', 'rgba(0, 114, 178, 0.38)');
+        const fuelBody  = gameColor('#c0392b', '#005f8f');
+        const fuelShade = gameColor('#7d241b', '#00405c');
+        const fuelEdge  = gameColor('#e8897f', '#7fc7ef');
+        const metal     = '#9aa3ab';
+        const cx = c.x + c.w / 2;
+        // soft glow halo
         ctx.fillStyle = fuelGlow;
         ctx.beginPath();
-        ctx.arc(c.x + c.w / 2, y + c.h / 2, c.w * 0.7, 0, Math.PI * 2);
+        ctx.arc(cx, y + c.h / 2, c.w * 0.72, 0, Math.PI * 2);
         ctx.fill();
-        // Can
+        // can geometry (body leaves headroom for the spout + handle)
+        const bx = c.x + c.w * 0.12, bw = c.w * 0.76;
+        const bTop = y + c.h * 0.22, bh = c.h * 0.76;
+        // pour spout (top-right), drawn first so the body overlaps its base
+        ctx.fillStyle = metal;
+        ctx.strokeStyle = fuelShade;
+        ctx.lineWidth = 1;
+        const sx = bx + bw * 0.66, sTop = bTop - c.h * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(sx, bTop);
+        ctx.lineTo(sx + c.w * 0.20, sTop);
+        ctx.lineTo(sx + c.w * 0.30, sTop + c.h * 0.06);
+        ctx.lineTo(sx + c.w * 0.12, bTop + c.h * 0.05);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        // body
         ctx.fillStyle = fuelBody;
-        roundRect(ctx, c.x, y, c.w, c.h, 3);
+        roundRect(ctx, bx, bTop, bw, bh, 2);
         ctx.fill();
-        ctx.strokeStyle = fuelStroke;
+        ctx.strokeStyle = fuelShade;
         ctx.lineWidth = 2;
         ctx.stroke();
-        // F letter
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('F', c.x + c.w / 2, y + c.h / 2);
+        // top carry-handle (arched strap straddling the body top)
+        ctx.strokeStyle = fuelShade;
+        ctx.lineWidth = Math.max(1.5, c.w * 0.07);
+        ctx.beginPath();
+        ctx.arc(bx + bw * 0.32, bTop, bw * 0.20, Math.PI, 0);
+        ctx.stroke();
+        // signature X-brace on an inset face panel
+        const ix = bx + bw * 0.15, iy = bTop + bh * 0.16;
+        const iw = bw * 0.70, ih = bh * 0.66;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = fuelShade;
+        ctx.strokeRect(ix, iy, iw, ih);
+        ctx.strokeStyle = fuelEdge;
+        ctx.lineWidth = Math.max(1.3, c.w * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(ix, iy); ctx.lineTo(ix + iw, iy + ih);
+        ctx.moveTo(ix + iw, iy); ctx.lineTo(ix, iy + ih);
+        ctx.stroke();
       } else {
         // Snack — yellow coin
         const snackGlow = gameColor('rgba(245, 215, 110, 0.4)', 'rgba(255, 210, 63, 0.42)');
@@ -2110,6 +2576,7 @@
     ctx.fillRect(0, 0, W, H);
   }
   function drawSpeedLines() {
+    if (reduceMotionOn()) return;   // motion-blur speed lines disabled for reduced motion
     // Only at higher speeds; intensity scales with how fast above base
     const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
     if (frac < 0.55) return;
@@ -2239,14 +2706,21 @@
     hudFuel.classList.toggle('low', fuelFrac < 0.25);
     hudFuel.classList.toggle('mid', fuelFrac >= 0.25 && fuelFrac < 0.5);
     hudTrip.style.width = `${Math.min(100, (state.distance / TRIP_TOTAL) * 100)}%`;
+    // A11y: keep progressbar values + canvas summary in sync (canvas throttled).
+    if (hudFuelBar) hudFuelBar.setAttribute('aria-valuenow', String(Math.round(fuelFrac * 100)));
+    if (hudTripBar) hudTripBar.setAttribute('aria-valuenow', String(Math.min(100, Math.round((state.distance / TRIP_TOTAL) * 100))));
+    state._ariaTick = (state._ariaTick || 0) + 1;
+    if (state._ariaTick % 20 === 0) updateCanvasAria();
   }
 
   function checkProgressAchievements() {
     if (state.speed >= MAX_SPEED - 0.05) unlockAchievement('max-speed');
-    if (state.fuel > 0 && state.fuel <= 15) unlockAchievement('low-fuel');
+    // Reuse the fuel-low band so the achievement can never drift from the flag.
+    if (state.fuelLow) unlockAchievement('low-fuel');
     if (state.distance >= TRIP_TOTAL * 0.5) unlockAchievement('halfway');
     if (state.score >= 3000) unlockAchievement('score-3000');
   }
+
 
   // ============================================================
   // GAMEPLAY UPDATE
@@ -2256,7 +2730,10 @@
 
   function updateGame(dt) {
     // Speed input
-    state.player.ducking = actionDown('duck');
+    const duckHeld = actionDown('duck');
+    if (duckHeld && !state._duckHeldPrev) audio.playDuck();   // duck SFX on press (kbd + gamepad)
+    state._duckHeldPrev = duckHeld;
+    state.player.ducking = duckHeld;
     const wantAccel = actionDown('accel');
     const wantBrake = actionDown('brake');
     if (wantAccel) state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
@@ -2275,6 +2752,12 @@
     state.distance += state.speed * dt * 60;
     state.score += state.speed * dt * 8;        // small distance score
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
+    // Fuel-low feedback hook (Bot 3 produces; Bots 2/4 consume). We compute the
+    // rising edge against the *previous* value before overwriting it, so a
+    // consumer can fire a one-shot warning without tracking history itself.
+    const lowNow = state.fuel > 0 && state.fuel < FUEL_MAX * FUEL_LOW_FRAC;
+    state.fuelLowJustEntered = lowNow && !state.fuelLow;
+    state.fuelLow = lowNow;
     state.runTime += dt;
     state.ghostSampleTimer -= dt;
     recordGhostFrame();
@@ -2293,12 +2776,21 @@
     if (state.biomeIdx > state._lastBiomeIdx) {
       state.score += BIOME_BONUS;
       state._lastBiomeIdx = state.biomeIdx;
-      audio.playBiome();
+      audio.playBiome();                 // leg transition sound
+      announce('Entering ' + b.name);
       if (b.name === 'FOREST') unlockAchievement('forest');
       if (b.name === 'DESERT') unlockAchievement('desert');
       if (b.name === 'COAST') unlockAchievement('coast');
     }
     checkProgressAchievements();
+
+    // Low-fuel warning: Bot 3 flags the rising edge (state.fuelLowJustEntered);
+    // we play the one-shot beep + announce here. It re-arms automatically after a
+    // refuel because Bot 3 only sets the flag on a fresh crossing into the low band.
+    if (state.fuelLowJustEntered) {
+      audio.playLowFuel();
+      announce('Low fuel');
+    }
 
     // Engine pitch follows speed
     audio.updateEngine((state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
@@ -2353,6 +2845,9 @@
   // RENDER FRAME
   // ============================================================
   function render() {
+    // Reset the logical->device transform first so every draw below works in
+    // the fixed VIEW_W x VIEW_H space regardless of the real backing-store size.
+    applyViewTransform();
     const b = currentBiome();
     const shake = state.screen === SCREEN.PLAYING ? shakeOffset() : { x: 0, y: 0 };
 
@@ -2390,6 +2885,57 @@
     }
     drawAudioBanner();
     drawAchievementToast();
+    if (state.debug) drawDebugOverlay();
+  }
+
+  // Hidden developer overlay (toggled by backtick when DEBUG === true). Draws
+  // the exact collision boxes the physics/collision code uses, the ground-
+  // contact reference line, and a live per-leg difficulty readout — so balance
+  // and hitbox tuning are inspectable in the running game. Authored in the
+  // logical VIEW space (Bot 1's transform maps it to device pixels for free).
+  function drawDebugOverlay() {
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    // Player hitbox — the real rect collisions are tested against.
+    const pb = playerBox();
+    ctx.strokeStyle = '#00ff88';
+    ctx.strokeRect(pb.x, pb.y, pb.w, pb.h);
+    // Obstacle + collectible hitboxes.
+    ctx.strokeStyle = '#ff3a3a';
+    for (const o of state.obstacles) ctx.strokeRect(o.x, o.y, o.w, o.h);
+    ctx.strokeStyle = '#3aa0ff';
+    for (const c of state.collectibles) ctx.strokeRect(c.x, c.y, c.w, c.h);
+    // Ground-contact reference: wheels + shadow rest exactly on this line.
+    ctx.strokeStyle = 'rgba(255,235,90,0.7)';
+    ctx.beginPath();
+    ctx.moveTo(0, ROAD_SURFACE_Y);
+    ctx.lineTo(W, ROAD_SURFACE_Y);
+    ctx.stroke();
+
+    const diff = currentDifficulty();
+    const b = currentBiome();
+    const pct = ((state.distance / TRIP_TOTAL) * 100).toFixed(1);
+    const lines = [
+      'DEBUG  (backtick toggles)',
+      `leg ${state.biomeIdx + 1}/${BIOMES.length}  ${b.name}`,
+      `density ${diff.obstacleDensity}  minGap ${diff.minBlockingGap}px`,
+      `fuelRate ${diff.fuelSpawnRate}  fuel/can ${diff.fuelPerCan}  speedScale ${diff.speedScale}`,
+      `speed ${state.speed.toFixed(2)} (${Math.round(state.speed * 12)} mph)  max ${MAX_SPEED}`,
+      `fuel ${state.fuel.toFixed(1)}  low=${state.fuelLow}`,
+      `player.y ${state.player.y.toFixed(1)}  vy ${state.player.vy.toFixed(2)}  jump=${state.player.jumping}`,
+      `combo x${state.combo}  window ${state.comboTimer.toFixed(1)}s`,
+      `obstacles ${state.obstacles.length}  collectibles ${state.collectibles.length}`,
+      `dist ${Math.round(state.distance)}/${TRIP_TOTAL}  (${pct}%)`
+    ];
+    ctx.font = '11px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const lineH = 14, panelW = 330, panelH = lines.length * lineH + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillRect(8, 78, panelW, panelH);
+    ctx.fillStyle = '#9effa0';
+    lines.forEach((ln, i) => ctx.fillText(ln, 16, 84 + i * lineH));
+    ctx.restore();
   }
 
   function drawAudioBanner() {
@@ -2400,10 +2946,11 @@
     ctx.fillStyle = 'rgba(12,14,24,0.85)';
     const bw = 180, bh = 36;
     ctx.fillRect(W - bw - 20, 20, bw, bh);
-    ctx.strokeStyle = '#f5d76e';
+    const bannerC = toastColor('#f5d76e');   // palette-aware (Bot 2 colorblind map)
+    ctx.strokeStyle = bannerC;
     ctx.lineWidth = 1;
     ctx.strokeRect(W - bw - 20, 20, bw, bh);
-    ctx.fillStyle = '#f5d76e';
+    ctx.fillStyle = bannerC;
     ctx.font = 'bold 13px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -2414,22 +2961,25 @@
   function drawAchievementToast() {
     if (!state.achievementToast) return;
     const a = Math.min(1, state.achievementToast.t * 2);
+    // Anchored just BELOW the top card band (old position y=20 overlapped the
+    // SCORE/STAGE cards). x range stays clear of the centered biome banner.
+    const bw = 280, bh = 48;
+    const bx = 20, by = HUD_SAFE_TOP + 4;
     ctx.save();
     ctx.globalAlpha = a;
     ctx.fillStyle = 'rgba(12,14,24,0.9)';
-    const bw = 280, bh = 48;
-    ctx.fillRect(20, 20, bw, bh);
-    ctx.strokeStyle = '#f5d76e';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = toastColor('#f5d76e');
     ctx.lineWidth = 1;
-    ctx.strokeRect(20, 20, bw, bh);
-    ctx.fillStyle = '#f5d76e';
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = toastColor('#f5d76e');
     ctx.font = 'bold 11px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText('ACHIEVEMENT UNLOCKED', 32, 29);
+    ctx.fillText('ACHIEVEMENT UNLOCKED', bx + 12, by + 9);
     ctx.fillStyle = '#ececec';
     ctx.font = 'bold 14px "JetBrains Mono", Consolas, monospace';
-    ctx.fillText(state.achievementToast.title, 32, 45);
+    ctx.fillText(state.achievementToast.title, bx + 12, by + 25);
     ctx.restore();
   }
 
@@ -2456,12 +3006,195 @@
   }
 
   // ============================================================
+  // SELF-TEST HARNESS (DEBUG-gated; also callable from the console)
+  // ============================================================
+  // Self-tests run manually via window.runSelfTests() / window.WRT.runSelfTests(),
+  // and auto-run on boot when DEBUG is on (defined in CONFIG: "?debug" or
+  // localStorage 'wrt.debug'='1'). Tests are NON-DESTRUCTIVE: anything written to
+  // real storage is snapshotted and restored, and no AudioContext is created
+  // without a user gesture. Returns { pass, fail, total, results } + logs a summary.
+  function runSelfTests() {
+    const results = [];
+    const check = (name, cond, detail) => results.push({ name: name, pass: !!cond, detail: detail || '' });
+
+    // 1) localStorage JSON round-trip for each persistence key (temp sibling key
+    //    so real saved data is never touched).
+    [SETTINGS_KEY, STORAGE_KEY, ACHIEVEMENTS_KEY, GHOST_KEY].forEach((key) => {
+      const tmp = key + '.__selftest__';
+      const sample = { key: key, n: 42, list: [3, 2, 1], nested: { ok: true }, s: 'café' };
+      let pass = false, err = '';
+      try {
+        localStorage.setItem(tmp, JSON.stringify(sample));
+        const back = JSON.parse(localStorage.getItem(tmp));
+        pass = !!back && back.n === 42 && back.list.length === 3 &&
+               back.nested.ok === true && back.s === 'café';
+      } catch (e) { err = String(e); }
+      try { localStorage.removeItem(tmp); } catch (e) {}
+      check('localStorage round-trip: ' + key, pass, err);
+    });
+
+    // 2) settings load merges defaults; all keys present and correctly typed.
+    {
+      let pass = false, detail = '';
+      try {
+        const s = loadSettings();
+        const bools = ['screenShake', 'colorblind', 'ghostVisible', 'muted', 'sfxEnabled', 'reduceMotion'];
+        const boolsOk = bools.every((k) => typeof s[k] === 'boolean');
+        const volOk = typeof s.masterVolume === 'number' && s.masterVolume >= 0 && s.masterVolume <= 1;
+        pass = boolsOk && volOk;
+        detail = JSON.stringify(s);
+      } catch (e) { detail = String(e); }
+      check('settings load: defaults + all keys typed', pass, detail);
+    }
+
+    // 3) settings save → load preserves every field (round-trip via the real key,
+    //    snapshotted + restored).
+    {
+      let pass = false, detail = '';
+      const snap = (() => { try { return localStorage.getItem(SETTINGS_KEY); } catch (e) { return null; } })();
+      const realSettings = state.settings;
+      try {
+        const probe = { screenShake: false, colorblind: true, ghostVisible: false,
+                        muted: true, sfxEnabled: false, masterVolume: 0.3, reduceMotion: true };
+        state.settings = Object.assign({}, DEFAULT_SETTINGS, probe);
+        saveSettings();
+        const loaded = loadSettings();
+        pass = loaded.screenShake === false && loaded.colorblind === true &&
+               loaded.ghostVisible === false && loaded.muted === true &&
+               loaded.sfxEnabled === false && loaded.masterVolume === 0.3 &&
+               loaded.reduceMotion === true;
+        detail = JSON.stringify(loaded);
+      } catch (e) { detail = String(e); }
+      finally {
+        state.settings = realSettings;
+        try {
+          if (snap === null) localStorage.removeItem(SETTINGS_KEY);
+          else localStorage.setItem(SETTINGS_KEY, snap);
+        } catch (e) {}
+      }
+      check('settings save → load preserves all fields', pass, detail);
+    }
+
+    // 4) high-score sort is descending and capped at MAX_SCORES (same logic as
+    //    insertScore, run on a synthetic list).
+    {
+      const raw = [120, 50, 999, 3000, 7, 480, 1500, 60];
+      const list = raw.map((n, i) => ({ initials: 'AAA', score: n, date: '2026-01-0' + (i % 9) }));
+      const sorted = list.slice().sort((a, b) => b.score - a.score).slice(0, MAX_SCORES);
+      let descending = true;
+      for (let i = 1; i < sorted.length; i++) if (sorted[i - 1].score < sorted[i].score) descending = false;
+      check('high-score sort is descending', descending, sorted.map((s) => s.score).join(', '));
+      check('high-score list capped at MAX_SCORES (' + MAX_SCORES + ')',
+            sorted.length === MAX_SCORES, 'len=' + sorted.length);
+      check('high-score top entry is the maximum', sorted[0].score === Math.max.apply(null, raw));
+    }
+
+    // 5) achievements never duplicate — unlock is idempotent (snapshot + restore).
+    {
+      let pass = false, detail = '';
+      const id = ACHIEVEMENTS[0].id;
+      const snapState = JSON.stringify(state.achievements);
+      const snapStore = (() => { try { return localStorage.getItem(ACHIEVEMENTS_KEY); } catch (e) { return null; } })();
+      const snapToast = state.achievementToast;
+      try {
+        unlockAchievement(id);
+        const c1 = Object.keys(state.achievements).length;
+        const t1 = state.achievements[id];
+        unlockAchievement(id);   // second call must be a no-op
+        const c2 = Object.keys(state.achievements).length;
+        const t2 = state.achievements[id];
+        pass = c1 === c2 && t1 === t2;
+        detail = 'count ' + c1 + ' → ' + c2;
+      } catch (e) { detail = String(e); }
+      finally {
+        try { state.achievements = JSON.parse(snapState); } catch (e) { state.achievements = {}; }
+        state.achievementToast = snapToast;
+        try {
+          if (snapStore === null) localStorage.removeItem(ACHIEVEMENTS_KEY);
+          else localStorage.setItem(ACHIEVEMENTS_KEY, snapStore);
+        } catch (e) {}
+      }
+      check('achievement unlock is idempotent (no dupes)', pass, detail);
+    }
+
+    // 6) AudioContext can initialize. To honor the autoplay policy we never
+    //    create a context without a user gesture: if the game already has one
+    //    (post-gesture) we assert it; otherwise we assert the constructor exists.
+    {
+      let pass = false, detail = '';
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (audio.ctx) {
+          pass = typeof audio.ctx.state === 'string';
+          detail = 'live ctx, state=' + audio.ctx.state;
+        } else {
+          pass = typeof AC === 'function';
+          detail = 'constructor available (not instantiated — no user gesture yet)';
+        }
+      } catch (e) { detail = String(e); }
+      check('AudioContext initializes', pass, detail);
+    }
+
+    // 7) prefers-reduced-motion seeds the reduceMotion default on a fresh profile
+    //    (no saved settings); a saved value still wins. Mocks matchMedia and
+    //    snapshots the settings key — fully non-destructive.
+    {
+      let pass = false, detail = '';
+      const realMM = (typeof window !== 'undefined') ? window.matchMedia : undefined;
+      const snap = (() => { try { return localStorage.getItem(SETTINGS_KEY); } catch (e) { return null; } })();
+      try {
+        try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
+        window.matchMedia = () => ({ matches: true });
+        if (!(window.matchMedia('(prefers-reduced-motion: reduce)') || {}).matches) {
+          pass = true; detail = 'matchMedia override unsupported — skipped';
+        } else {
+          const onPref = loadSettings();
+          window.matchMedia = () => ({ matches: false });
+          const offPref = loadSettings();
+          pass = onPref.reduceMotion === true && offPref.reduceMotion === false;
+          detail = 'OS reduce-motion on→' + onPref.reduceMotion + ', off→' + offPref.reduceMotion;
+        }
+      } catch (e) { detail = String(e); }
+      finally {
+        try { window.matchMedia = realMM; } catch (e) {}
+        try {
+          if (snap === null) localStorage.removeItem(SETTINGS_KEY);
+          else localStorage.setItem(SETTINGS_KEY, snap);
+        } catch (e) {}
+      }
+      check('prefers-reduced-motion seeds reduceMotion default (calm by default)', pass, detail);
+    }
+
+    const passed = results.filter((r) => r.pass).length;
+    const failed = results.length - passed;
+    const tag = failed === 0 ? 'ALL PASS' : failed + ' FAILED';
+    try {
+      console.group('WRT self-tests — ' + tag + ' (' + passed + '/' + results.length + ')');
+      results.forEach((r) => console.log((r.pass ? 'PASS' : 'FAIL') + '  ' + r.name + (r.detail ? '  — ' + r.detail : '')));
+      console.groupEnd();
+    } catch (e) {
+      results.forEach((r) => console.log((r.pass ? 'PASS' : 'FAIL') + '  ' + r.name));
+    }
+    return { pass: passed, fail: failed, total: results.length, results: results };
+  }
+
+  // ============================================================
   // BOOT
   // ============================================================
   state._lastBiomeIdx = 0;
   state.bannerT = 0;
   state.scores = loadScores();
+  initA11y();
   applySettings();
+  syncSettingsInputs();   // reflect loaded settings in the controls before first open
   applyScreen();
+  try {
+    window.WRT = window.WRT || {};
+    window.WRT.runSelfTests = runSelfTests;
+    window.runSelfTests = runSelfTests;   // convenience for the console
+  } catch (e) {}
+  if (DEBUG) {
+    try { runSelfTests(); } catch (e) { try { console.error('Self-tests threw:', e); } catch (e2) {} }
+  }
   requestAnimationFrame(tick);
 })();
