@@ -638,6 +638,11 @@
         el.setAttribute('aria-valuemax', '100');
         el.setAttribute('aria-valuenow', '0');
       });
+      // Make each menu screen programmatically focusable (not in the tab order)
+      // so focus can be moved into it on a screen change. See applyScreen().
+      for (const key in screenEls) {
+        if (screenEls[key] && screenEls[key].setAttribute) screenEls[key].setAttribute('tabindex', '-1');
+      }
       updateCanvasAria();
     } catch (e) { /* a11y is best-effort; never block the game */ }
   }
@@ -669,6 +674,18 @@
     updateGhostTitleStatus();
     announce(SCREEN_LABELS[state.screen] || '');
     updateCanvasAria();
+    // A11y focus management (WCAG 2.4.3): move focus into a newly shown menu so
+    // it never stays stranded on a now-hidden control; drop focus out of the
+    // overlay when gameplay starts so game keys aren't intercepted by a hidden
+    // button.
+    if (state.screen !== SCREEN.PLAYING) {
+      const focusEl = screenEls[state.screen];
+      if (focusEl && typeof focusEl.focus === 'function') {
+        try { focusEl.focus({ preventScroll: true }); } catch (e) { try { focusEl.focus(); } catch (e2) {} }
+      }
+    } else if (document.activeElement && overlayEl.contains && overlayEl.contains(document.activeElement)) {
+      try { document.activeElement.blur(); } catch (e) {}
+    }
   }
   function openHelp() {
     state.prevScreen = state.screen;
@@ -701,6 +718,9 @@
     }
     state.keys.add(e.code);
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
+    // A focused button activates itself on Enter (native click); don't also run
+    // the screen-global confirm, or navigation would fire twice.
+    if (e.code === 'Enter' && tag === 'BUTTON') return;
     handleKey(e.code);
   });
   window.addEventListener('keyup', (e) => {
@@ -1012,7 +1032,10 @@
     const out = document.getElementById('setting-volume-value');
     const pct = Math.round(Math.max(0, Math.min(1, Number(state.settings.masterVolume))) * 100);
     if (out) out.textContent = pct + '%';
-    if (slider) slider.setAttribute('aria-valuetext', pct + '%');
+    if (slider) {
+      slider.setAttribute('aria-valuenow', String(Math.max(0, Math.min(1, Number(state.settings.masterVolume)))));
+      slider.setAttribute('aria-valuetext', pct + '%');
+    }
   }
   function renderSettings() {
     syncSettingsInputs();
@@ -2787,6 +2810,36 @@
       check('AudioContext initializes', pass, detail);
     }
 
+    // 7) prefers-reduced-motion seeds the reduceMotion default on a fresh profile
+    //    (no saved settings); a saved value still wins. Mocks matchMedia and
+    //    snapshots the settings key — fully non-destructive.
+    {
+      let pass = false, detail = '';
+      const realMM = (typeof window !== 'undefined') ? window.matchMedia : undefined;
+      const snap = (() => { try { return localStorage.getItem(SETTINGS_KEY); } catch (e) { return null; } })();
+      try {
+        try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
+        window.matchMedia = () => ({ matches: true });
+        if (!(window.matchMedia('(prefers-reduced-motion: reduce)') || {}).matches) {
+          pass = true; detail = 'matchMedia override unsupported — skipped';
+        } else {
+          const onPref = loadSettings();
+          window.matchMedia = () => ({ matches: false });
+          const offPref = loadSettings();
+          pass = onPref.reduceMotion === true && offPref.reduceMotion === false;
+          detail = 'OS reduce-motion on→' + onPref.reduceMotion + ', off→' + offPref.reduceMotion;
+        }
+      } catch (e) { detail = String(e); }
+      finally {
+        try { window.matchMedia = realMM; } catch (e) {}
+        try {
+          if (snap === null) localStorage.removeItem(SETTINGS_KEY);
+          else localStorage.setItem(SETTINGS_KEY, snap);
+        } catch (e) {}
+      }
+      check('prefers-reduced-motion seeds reduceMotion default (calm by default)', pass, detail);
+    }
+
     const passed = results.filter((r) => r.pass).length;
     const failed = results.length - passed;
     const tag = failed === 0 ? 'ALL PASS' : failed + ' FAILED';
@@ -2808,6 +2861,7 @@
   state.scores = loadScores();
   initA11y();
   applySettings();
+  syncSettingsInputs();   // reflect loaded settings in the controls before first open
   applyScreen();
   try {
     window.WRT = window.WRT || {};

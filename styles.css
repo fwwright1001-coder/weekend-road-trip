@@ -527,6 +527,10 @@ button.cta:focus-visible {
   outline-color: #1a1a2e;
   box-shadow: 0 0 0 3px var(--gold-bright);
 }
+/* Menu containers receive programmatic focus on screen change (so focus never
+ * stays on a hidden screen). They are not interactive controls, so suppress the
+ * default outline — real controls still show the :focus-visible ring above. */
+.screen:focus { outline: none; }
 
 /* Master-volume slider: the base `.setting-row input` rule forces an 18px box
  * (sized for checkboxes) which would crush a range input. */
