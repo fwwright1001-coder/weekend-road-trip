@@ -87,6 +87,25 @@
   const GHOST_SAMPLE_STEP = 0.08;
   const GHOST_DISTANCE_SCALE = 0.28;
 
+  // Per-run player-car liveries. startRun() picks one at random so every drive
+  // looks a little different; red stays in the pool so "Marty's red convertible"
+  // still shows up. The GT-car port can read the same state.carStyle (drawPlayer),
+  // so the randomization survives the eventual art swap.
+  const CAR_LIVERIES = [
+    { name: 'Classic Red',   body: '#c81e28', stripe: '#ffffff' },
+    { name: 'Racing Blue',   body: '#1f6feb', stripe: '#ffffff' },
+    { name: 'British Green', body: '#1f7a3d', stripe: '#ffd23f' },
+    { name: 'Sunset Orange', body: '#e8581c', stripe: '#1a1a26' },
+    { name: 'Sunflower',     body: '#f3c218', stripe: '#1a1a26' },
+    { name: 'Plum',          body: '#7a3ea8', stripe: '#ffffff' },
+    { name: 'Teal',          body: '#138a8a', stripe: '#ffffff' },
+    { name: 'Graphite',      body: '#2a2d33', stripe: '#e0564a' },
+    { name: 'Pearl White',   body: '#e8e8ee', stripe: '#c81e28' }
+  ];
+  function pickCarStyle() {
+    return CAR_LIVERIES[Math.floor(Math.random() * CAR_LIVERIES.length)];
+  }
+
   // Each biome covers a stretch of the road. Total trip = 20000 units.
   // Lengths are paced so each biome reads as a distinct "leg" of the drive.
   // Each biome has its own palette (sky, sun, ground) and time-of-day.
@@ -346,6 +365,7 @@
     pad: {},
     padPrev: {},
     padConnected: false,
+    carStyle: CAR_LIVERIES[0],     // current run's livery; randomized in startRun()
     settings: loadSettings(),
     achievements: loadAchievements(),
     achievementToast: null,
@@ -1149,6 +1169,7 @@
     state._ariaTick = 0;
     state.player.tilt = 0;
     state.player.bob = 0;
+    state.carStyle = pickCarStyle();   // fresh random livery each run
     state.combo = 0;
     state.comboTimer = 0;
     state.comboPopupT = 0;
@@ -2317,8 +2338,8 @@
     ctx.translate(x + w / 2, cy);
     ctx.rotate(tilt);
     ctx.translate(-(x + w / 2), -cy);
-    // Car body (red convertible)
-    ctx.fillStyle = '#c81e28';
+    // Car body — per-run random livery (state.carStyle); red stays in the pool.
+    ctx.fillStyle = state.carStyle.body;
     roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
     ctx.fill();
     // Hood gradient highlight
@@ -2328,8 +2349,8 @@
     ctx.fillStyle = bodyG;
     roundRect(ctx, x + 4, top + 12, w - 8, h - 14, 6);
     ctx.fill();
-    // White stripe accent
-    ctx.fillStyle = '#fff';
+    // Stripe accent (livery-matched)
+    ctx.fillStyle = state.carStyle.stripe;
     ctx.fillRect(x + 12, top + 24, w - 24, 4);
     // Windshield
     ctx.fillStyle = '#9cd0f0';
