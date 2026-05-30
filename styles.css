@@ -75,6 +75,103 @@ html, body {
   height: 100%;
   display: block;
 }
+
+/* ============================================================
+ * On-foot mode (experiment/onfoot-gta) — hidden "step out of the car" sandbox
+ * unlocked only after finishing the trip. Its own canvas overlays #game.
+ * ============================================================ */
+#gamefoot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #f3b066;
+  cursor: crosshair;
+}
+#foot-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  z-index: 30;
+  pointer-events: none;
+}
+#foot-crosshair::before,
+#foot-crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+#foot-crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; margin-left: -1px; }
+#foot-crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; margin-top: -1px; }
+#foot-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  padding: 16px 20px;
+  font-family: "JetBrains Mono", Consolas, monospace;
+  color: #fff;
+}
+.foot-stats {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  display: flex;
+  gap: 18px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+}
+.foot-stat { text-align: right; }
+.foot-stat .foot-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #ffe6b0;
+  opacity: 0.85;
+}
+.foot-stat b { font-size: 22px; font-weight: 700; }
+.foot-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: #fff;
+  opacity: 0.8;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+#foot-toast {
+  position: absolute;
+  left: 50%;
+  top: 26%;
+  transform: translateX(-50%);
+  max-width: 70%;
+  text-align: center;
+  padding: 12px 18px;
+  background: rgba(18, 16, 24, 0.72);
+  border: 1px solid rgba(255, 220, 150, 0.35);
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.foot-prompt {
+  margin-top: 14px;
+  font-size: 14px;
+  color: #ffd27a;
+  letter-spacing: 0.02em;
+  animation: footPulse 1.8s ease-in-out infinite;
+}
+.foot-prompt b { color: #fff; }
+@keyframes footPulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 #rt3d-status {
   position: absolute;
   left: 8px;

@@ -23,7 +23,20 @@
       <canvas id="game" width="960" height="540"></canvas>
       <!-- 3D render target — overlays #game; render3d.js shows one or the other (press T to toggle). -->
       <canvas id="game3d" width="960" height="540" class="hidden"></canvas>
+      <!-- Hidden on-foot mode (experiment/onfoot-gta): unlocked only after you finish the trip. -->
+      <canvas id="gamefoot" width="960" height="540" class="hidden"></canvas>
       <pre id="rt3d-status" aria-hidden="true"></pre>
+
+      <!-- ============ On-foot HUD (the "step out of the car" mode) ============ -->
+      <div id="foot-crosshair" class="hidden" aria-hidden="true"></div>
+      <div id="foot-hud" class="hidden">
+        <div id="foot-toast" class="hidden"></div>
+        <div class="foot-stats">
+          <div class="foot-stat"><span class="foot-label">AMMO</span><b id="foot-ammo">12 / 12</b></div>
+          <div class="foot-stat"><span class="foot-label">DOWNED</span><b id="foot-kills">0</b></div>
+        </div>
+        <div class="foot-controls">WASD move · MOUSE look · CLICK shoot · R reload · SPACE jump · SHIFT run · E by car to leave</div>
+      </div>
 
       <!-- ============ HUD overlay (visible during gameplay) ============ -->
       <div id="hud" class="hidden">
@@ -105,6 +118,7 @@
           <p class="score-line">FINAL SCORE  <span id="win-score">000000</span></p>
           <div id="win-stats" class="run-stats"></div>
           <button class="cta" data-action="continue">CONTINUE</button>
+          <p id="foot-prompt" class="foot-prompt hidden">…the engine ticks as it cools. Press <b>F</b> to step out of the car.</p>
         </div>
 
         <!-- Initials Entry -->
@@ -196,5 +210,6 @@
   </div>
   <script src="game.js"></script>
   <script type="module" src="render3d.js"></script>
+  <script type="module" src="onfoot3d.js"></script>
 </body>
 </html>
