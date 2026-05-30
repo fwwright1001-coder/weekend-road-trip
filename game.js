@@ -2444,6 +2444,13 @@
   // RENDER FRAME
   // ============================================================
   function render() {
+    // Optional 3D renderer (render3d.js). When enabled and ready it draws the
+    // same simulation in Three.js and we skip the 2D path entirely. Any failure
+    // disables it and falls back to the 2D canvas below, so the game never breaks.
+    if (window.RT3D && window.RT3D.enabled && window.RT3D.ready) {
+      try { window.RT3D.render(); return; }
+      catch (e) { window.RT3D.enabled = false; console.error('[RT3D] render failed; falling back to 2D', e); }
+    }
     // Reset the logical->device transform first so every draw below works in
     // the fixed VIEW_W x VIEW_H space regardless of the real backing-store size.
     applyViewTransform();
@@ -2557,5 +2564,20 @@
   state.scores = loadScores();
   applySettings();
   applyScreen();
+
+  // === 3D RENDERER BRIDGE (feature/road-trip-3d) ===
+  // Publishes a read-only view of the live simulation + constants so the
+  // optional Three.js renderer (render3d.js) can draw the same game state in
+  // 3D. The 2D canvas renderer remains the default and the fallback.
+  window.__roadtrip = {
+    get state() { return state; },
+    currentBiome, nextBiome, biomeBlend,
+    BIOMES, SCREEN,
+    consts: {
+      W, H, VIEW_W, VIEW_H, GROUND_Y, PLAYER_X,
+      GRAVITY, JUMP_V, BASE_SPEED, MAX_SPEED, TRIP_TOTAL
+    }
+  };
+
   requestAnimationFrame(tick);
 })();
