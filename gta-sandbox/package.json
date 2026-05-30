@@ -1,0 +1,13 @@
+{
+  "name": "weekend-road-trip-gta",
+  "version": "0.1.0",
+  "description": "Open-world crime-sandbox gameplay layer (drop-in for the Weekend Road Trip on-foot mode). Original systems & art; no third-party IP.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "smoke": "node tools/headless-smoke.mjs"
+  },
+  "devDependencies": {
+    "three": "0.170.0"
+  }
+}
