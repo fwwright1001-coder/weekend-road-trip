@@ -1,0 +1,140 @@
+/* ============================================================
+   styles.css — demo harness + crime-sandbox HUD
+   Original styling; HUD layout the hud-radar.js system writes into.
+   ============================================================ */
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%;
+  background: #0c0d12;
+  color: #e8eaef;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+}
+#gta-stage {
+  display: grid; place-items: center;
+  height: 100vh; width: 100vw;
+  background: radial-gradient(1200px 700px at 50% 0%, #1a2030, #0c0d12 70%);
+}
+#gta-frame {
+  position: relative;
+  width: min(100vw, 177.78vh);   /* 16:9 */
+  height: min(56.25vw, 100vh);
+  background: #000;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+#gta-canvas { display: block; width: 100%; height: 100%; }
+.hidden { display: none !important; }
+
+/* ---- crosshair ---- */
+#gta-crosshair {
+  position: absolute; left: 50%; top: 50%;
+  width: 18px; height: 18px; transform: translate(-50%, -50%);
+  pointer-events: none; z-index: 6;
+}
+#gta-crosshair::before, #gta-crosshair::after {
+  content: ''; position: absolute; background: rgba(255,255,255,0.85);
+  box-shadow: 0 0 3px rgba(0,0,0,0.8);
+}
+#gta-crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+#gta-crosshair::after  { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+
+/* ---- HUD overlay ---- */
+#gta-hud {
+  position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* radar (a canvas, drawn by hud-radar.js) */
+#gta-radar {
+  position: absolute; left: 14px; bottom: 14px;
+  width: 168px; height: 168px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.25);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  background: rgba(10,14,20,0.55);
+  z-index: 5;
+}
+
+/* wanted stars (top-right) */
+.gta-stars {
+  position: absolute; top: 14px; right: 16px;
+  display: flex; gap: 4px; font-size: 26px; line-height: 1;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.8);
+}
+.gta-stars .star { color: rgba(255,255,255,0.18); transition: color .2s, transform .2s; }
+.gta-stars .star.lit { color: #f5d76e; transform: scale(1.08); }
+.gta-stars.flash .star.lit { animation: starflash .5s steps(2) infinite; }
+@keyframes starflash { 50% { color: #fff; } }
+
+/* cash (top-right under stars) */
+.gta-money {
+  position: absolute; top: 50px; right: 16px;
+  font-size: 24px; font-weight: 700; color: #7ee27e;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.8); letter-spacing: 0.5px;
+}
+.gta-money.bump { animation: moneybump .35s ease; }
+@keyframes moneybump { 0%{transform:scale(1)} 40%{transform:scale(1.18)} 100%{transform:scale(1)} }
+
+/* weapon box (bottom-right) */
+.gta-weaponbox {
+  position: absolute; right: 16px; bottom: 16px; text-align: right;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.8);
+}
+.gta-weapon { font-size: 15px; letter-spacing: 2px; color: #cdd3dc; text-transform: uppercase; }
+.gta-ammo { font-size: 30px; font-weight: 800; color: #fff; }
+.gta-ammo.empty { color: #d83a3a; }
+
+/* vitals (bottom-left, above radar) */
+.gta-vitals {
+  position: absolute; left: 14px; bottom: 190px;
+  display: flex; flex-direction: column; gap: 5px; width: 168px;
+}
+.gta-bar { height: 9px; border-radius: 5px; background: rgba(0,0,0,0.45); overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+.gta-bar i { display: block; height: 100%; width: 100%; transition: width .15s ease; }
+.gta-health i { background: linear-gradient(90deg, #e25555, #f1a04f); }
+.gta-armor  i { background: linear-gradient(90deg, #5fa9e0, #8fd0ff); }
+
+/* mission objective banner (center-top) */
+.gta-objective {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  max-width: 70%; text-align: center;
+  background: rgba(12,16,24,0.7); border-left: 3px solid #f5d76e;
+  padding: 8px 16px; border-radius: 4px;
+  font-size: 15px; color: #f3f4f7;
+}
+.gta-objective b { color: #f5d76e; }
+
+/* toast / hints */
+.gta-toast {
+  position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
+  max-width: 80%; text-align: center;
+  background: rgba(12,16,24,0.78); padding: 10px 18px; border-radius: 6px;
+  font-size: 14px; color: #e8eaef; line-height: 1.5;
+  transition: opacity .4s; opacity: 1;
+}
+.gta-toast b { color: #f5d76e; }
+
+/* weapon wheel */
+#gta-weapon-wheel {
+  position: absolute; inset: 0; z-index: 7;
+  display: grid; place-items: center;
+  background: rgba(8,10,16,0.45); backdrop-filter: blur(2px);
+}
+
+/* WASTED / BUSTED big message */
+#gta-bigmsg {
+  position: absolute; inset: 0; z-index: 9;
+  display: none; place-items: center;
+  font-size: clamp(40px, 9vw, 120px); font-weight: 900; letter-spacing: 8px;
+  font-family: Georgia, 'Times New Roman', serif; font-style: italic;
+  background: rgba(0,0,0,0.55);
+  text-shadow: 0 4px 24px rgba(0,0,0,0.9);
+  opacity: 0; transition: opacity .6s;
+}
+#gta-bigmsg.show { display: grid; opacity: 1; }
+
+#gta-credit {
+  position: absolute; left: 12px; top: 10px; margin: 0;
+  font-size: 11px; color: rgba(255,255,255,0.4); z-index: 5; pointer-events: none;
+}

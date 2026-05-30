@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Open-world crime-sandbox gameplay layer — a standalone Three.js demo of GTA-style mechanics (wanted level, police pursuit, carjacking, missions, economy) built to bolt onto the Weekend Road Trip on-foot mode. Original art & systems; no third-party IP." />
+  <title>Crime Sandbox — gameplay layer demo</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a1a2e'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' font-family='monospace' font-weight='bold' fill='%23f5d76e'%3E%E2%98%85%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+  <!-- Same no-build Three.js import map as the host game (render3d/onfoot3d). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="gta-stage">
+    <div id="gta-frame">
+      <canvas id="gta-canvas" width="960" height="540"></canvas>
+
+      <!-- crosshair (shown when aiming / pointer-locked) -->
+      <div id="gta-crosshair" class="hidden" aria-hidden="true"></div>
+
+      <!-- minimap / radar -->
+      <canvas id="gta-radar" width="220" height="220" aria-hidden="true"></canvas>
+
+      <!-- ============ HUD overlay ============ -->
+      <div id="gta-hud">
+        <!-- top-right: wanted stars -->
+        <div id="gta-stars" class="gta-stars" aria-label="Wanted level"></div>
+
+        <!-- top-left under radar: cash -->
+        <div id="gta-money" class="gta-money">$0</div>
+
+        <!-- bottom-right: weapon + ammo -->
+        <div class="gta-weaponbox">
+          <div id="gta-weapon" class="gta-weapon">FISTS</div>
+          <div id="gta-ammo" class="gta-ammo">—</div>
+        </div>
+
+        <!-- bottom-left: health + armor bars -->
+        <div class="gta-vitals">
+          <div class="gta-bar gta-health"><i id="gta-health-fill"></i></div>
+          <div class="gta-bar gta-armor"><i id="gta-armor-fill"></i></div>
+        </div>
+
+        <!-- center-top: current mission objective -->
+        <div id="gta-objective" class="gta-objective hidden"></div>
+
+        <!-- toast / hint line -->
+        <div id="gta-toast" class="gta-toast hidden"></div>
+      </div>
+
+      <!-- weapon wheel (toggled with Tab) -->
+      <div id="gta-weapon-wheel" class="hidden" aria-hidden="true"></div>
+
+      <p id="gta-credit">Crime-sandbox gameplay layer · original systems &amp; art · drop-in for Weekend Road Trip on-foot mode</p>
+    </div>
+  </div>
+
+  <!-- Standalone host: builds the scene, player, input, loop; imports systems. -->
+  <script type="module" src="gta/boot.js"></script>
+</body>
+</html>
