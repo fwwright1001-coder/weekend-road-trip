@@ -932,3 +932,12 @@ window.addEventListener('mousedown', onMouseDown, true);
 window.addEventListener('mousemove', onMouseMove, false);
 document.addEventListener('pointerlockchange', onPointerLockChange, false);
 window.addEventListener('resize', () => { if (initialized && OF.active) resize(); });
+
+// Shareable playtest entry: opening the page with #gta (or ?gta / #playtest)
+// unlocks and drops you straight into the on-foot/GTA sandbox — no need to
+// finish the whole drive first. The normal hidden flow (finish -> F) still works.
+if (/gta|playtest/i.test(location.hash) || /gta|playtest/i.test(location.search)) {
+  localStorage.setItem('wrt.onfoot.unlocked', 'true');
+  // defer a frame so game.js has finished its own boot + initial applyScreen
+  requestAnimationFrame(() => { try { enter(); } catch (e) { console.error('[ONFOOT] auto-enter failed', e); } });
+}
