@@ -83,7 +83,7 @@ for (const [x, z] of carSpots) vehicles.push({ pos: new THREE.Vector3(x, 0, z), 
 const internals = {
   THREE, scene, camera, renderer: { render: noop, setSize: noop, setPixelRatio: noop, shadowMap: {}, domElement: fakeEl('gamefoot') }, canvas: fakeEl('gamefoot'),
   player: { pos: new THREE.Vector3(2.4, 0, 6), vy: 0, grounded: true, mesh: playerMesh, muzzle: playerMesh.userData.muzzle, ammo: 12, facing: 0 },
-  keys: new Set(), yaw: Math.PI, pitch: -0.1, locked: true, mode: 'foot', playerVehicle: null, bound: BOUND,
+  keys: new Set(), yaw: Math.PI, pitch: -0.1, locked: true, mode: 'foot', playerVehicle: null, bound: BOUND, headless: true,
   peds, vehicles, aabbs, resolveCollision, insideBuilding,
   spawnVehicle: (x, z, h, c) => { const v = { pos: new THREE.Vector3(x, 0, z), heading: h, speed: 0, occupied: false, mesh: new THREE.Group(), wheels: [], steerPivots: [] }; vehicles.push(v); return v; },
   nearestVehicle: (d) => { let b = null, bd = d; for (const v of vehicles) { if (v.occupied) continue; const dd = Math.hypot(v.pos.x - internals.player.pos.x, v.pos.z - internals.player.pos.z); if (dd < bd) { bd = dd; b = v; } } return b; },

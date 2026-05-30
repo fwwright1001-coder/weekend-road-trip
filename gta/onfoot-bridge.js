@@ -36,6 +36,7 @@ const _scratchDir = { x: 0, y: 0, z: 0 };
 let _lastPx = null, _lastPy = null, _lastPz = null;   // prior player pos -> velocity
 let _shakeMag = 0, _flashEl = null;
 let _detailBuilt = false;
+let _realism = null, _realismBuilt = false;   // post-FX + textures pipeline (browser only)
 
 // ---- real input state (fed to combat.js) -----------------------------------
 let _mouseDown = false, _mouseWired = false;
@@ -340,6 +341,21 @@ function onEnter() {
       buildMirrors();
       // world detail (props) once
       if (!_detailBuilt) { try { buildWorldDetail(I.THREE, I.scene, { exclude: [{ x: 0, z: -42, r: 16 }] }); _detailBuilt = true; } catch (e) { console.error('[GTA bridge] world detail failed', e); } }
+      // realism pass (procedural textures + env reflections + post-FX AA/AO/bloom).
+      // Browser-only, fully defensive: dynamic-imported so a missing/broken module
+      // can't break the game, and it falls back to plain rendering on any failure.
+      if (!I.headless && !_realismBuilt) {
+        _realismBuilt = true;
+        Promise.all([import('./onfoot-textures.js'), import('./onfoot-render.js')]).then(async ([tex, rmod]) => {
+          try { if (tex && tex.beautifyScene) tex.beautifyScene(I.THREE, I.scene, {}); } catch (e) { console.warn('[GTA] beautify skipped', e); }
+          try {
+            if (rmod && rmod.installRealism) {
+              const rl = await rmod.installRealism(I.THREE, I.renderer, I.scene, I.camera, I.canvas, {});   // async (env map + composer)
+              if (rl && rl.render) { _realism = rl; window.ONFOOT.renderHook = (dt) => rl.render(dt); window.ONFOOT.onResize = (w, h) => rl.setSize(w, h); }
+            }
+          } catch (e) { console.warn('[GTA] realism pipeline skipped; plain render', e); }
+        }).catch((e) => console.warn('[GTA] realism modules unavailable; plain render', e));
+      }
       // loadout: Smeaglodin starts with a pistol + an AK-47, full health + armor
       const c = ctx.systems.combat && ctx.systems.combat.api;
       if (c) { c.giveWeapon('pistol', true); c.giveWeapon('ak47', false); }

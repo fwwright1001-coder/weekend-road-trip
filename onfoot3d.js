@@ -139,79 +139,158 @@ function gunSound() {
 // feet (Y=0), ~1.8 tall. `armed` adds a pistol in the right hand.
 function buildPerson(colors, armed) {
   const g = new THREE.Group();
+
+  // --- helpers (defensive: nothing here may throw in a way that kills render) ---
   const mk = (geo, col, rough) => {
     const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: col, roughness: rough == null ? 0.85 : rough }));
     m.castShadow = true; m.receiveShadow = true; return m;
   };
+  // Capsule whose TOP (the joint) sits at the mesh's local origin, so a parent
+  // rotation.x reads as a swing pivoting from the shoulder/hip. `len` is the
+  // straight section between the two hemispherical caps; total length = len + 2*r.
+  const limbCapsule = (r, len) => {
+    let geo;
+    try { geo = new THREE.CapsuleGeometry(r, len, 4, 10); }
+    catch (e) { geo = new THREE.CylinderGeometry(r, r, len + r * 2, 10); } // r0.170 has Capsule, but fall back just in case
+    // shift down so the top cap apex is at y=0 (the pivot)
+    geo.translate(0, -(len / 2 + r), 0);
+    return geo;
+  };
   const skin = colors.skin, shirt = colors.shirt, pants = colors.pants, hair = colors.hair;
-  // tiny per-spawn cosmetic variety (build / height), cheap & deterministic-free
+
+  // tiny per-spawn cosmetic variety (build / height)
   const sx = 0.92 + Math.random() * 0.20;   // girth
   const sy = 0.96 + Math.random() * 0.12;   // height
+  const build = 0.9 + Math.random() * 0.22; // limb chunkiness
   const shoe = 0x2b2b30;
 
-  // ---- LEGS: animated mesh is the UPPER leg (box centred at mid-thigh),
-  // exactly like the original so animateWalk's rotation.x reads as a hip swing.
-  // Lower leg + shoe are children so they swing with it.
+  // ============================================================
+  // LEGS — animated mesh is the UPPER leg; its capsule top sits at the hip
+  // joint so animateWalk's rotation.x swings the whole leg from the hip.
+  // Lower leg + shoe are children that swing along.
+  // ============================================================
   const mkLeg = (sign) => {
-    const up = mk(new THREE.BoxGeometry(0.24, 0.46, 0.26), pants); // thigh, centre ~Y=0.62
-    up.position.set(sign * 0.15, 0.62, 0);
-    const lo = mk(new THREE.BoxGeometry(0.20, 0.42, 0.22), pants);  // shin
-    lo.position.set(0, -0.40, 0.01); up.add(lo);
-    const ft = mk(new THREE.BoxGeometry(0.22, 0.12, 0.34), shoe, 0.6); // shoe, toe forward (+Z)
-    ft.position.set(0, -0.27, 0.06); lo.add(ft);
+    const hipY = 0.92;                       // hip joint height
+    const thighLen = 0.30, thighR = 0.115 * build;
+    const up = mk(limbCapsule(thighR, thighLen), pants);
+    up.position.set(sign * 0.13, hipY, 0);   // pivot AT the hip
+
+    const kneeY = -(thighLen + thighR * 2);  // bottom of thigh (local to up)
+    const shinLen = 0.28, shinR = 0.095 * build;
+    const lo = mk(limbCapsule(shinR, shinLen), pants);
+    lo.position.set(0, kneeY + thighR * 0.4, 0.005); // slight overlap at knee
+    up.add(lo);
+
+    // rounded shoe: squashed sphere + a small toe cap, toe forward (+Z)
+    const ankleY = -(shinLen + shinR * 2) + shinR * 0.3;
+    const foot = mk(new THREE.SphereGeometry(0.12, 12, 10), shoe, 0.55);
+    foot.scale.set(0.95, 0.55, 1.7);
+    foot.position.set(0, ankleY - 0.02, 0.07);
+    lo.add(foot);
+    const toe = mk(new THREE.SphereGeometry(0.08, 10, 8), shoe, 0.55);
+    toe.scale.set(1.0, 0.7, 1.0);
+    toe.position.set(0, ankleY - 0.03, 0.19);
+    lo.add(toe);
     return up;
   };
   const legL = mkLeg(-1), legR = mkLeg(1);
 
-  // ---- HIPS + TORSO (chest tapers, hips block) ----
-  const hips = mk(new THREE.BoxGeometry(0.56, 0.30, 0.34), pants); hips.position.set(0, 1.00, 0);
-  const torso = mk(new THREE.BoxGeometry(0.60, 0.62, 0.34), shirt); torso.position.set(0, 1.45, 0);
-  const chest = mk(new THREE.BoxGeometry(0.64, 0.26, 0.36), shirt); chest.position.set(0, 1.66, 0.01);
+  // ============================================================
+  // HIPS + TORSO — capsules give a rounded, tapered trunk
+  // ============================================================
+  const hips = mk(limbCapsule(0.20 * build, 0.10), pants);
+  hips.position.set(0, 1.10, 0); hips.scale.set(1.25, 1.0, 0.85);
 
-  // ---- NECK + HEAD + FACE ----
-  const neck = mk(new THREE.BoxGeometry(0.16, 0.12, 0.16), skin); neck.position.set(0, 1.86, 0);
-  const head = mk(new THREE.BoxGeometry(0.32, 0.36, 0.32), skin); head.position.set(0, 2.10, 0);
-  // hair cap hugging the top/back of the skull
-  const cap = mk(new THREE.BoxGeometry(0.35, 0.16, 0.35), hair, 0.9); cap.position.set(0, 0.18, -0.01); head.add(cap);
-  const bang = mk(new THREE.BoxGeometry(0.35, 0.10, 0.08), hair, 0.9); bang.position.set(0, 0.10, 0.155); head.add(bang);
+  // torso capsule: shoulders ~1.66, taper handled by slight scale
+  const torsoLen = 0.42, torsoR = 0.21 * build;
+  const torso = mk(limbCapsule(torsoR, torsoLen), shirt);
+  // place so its top (shoulder line) is around Y=1.70
+  torso.position.set(0, 1.70, 0); torso.scale.set(1.18, 1.0, 0.78);
+
+  // chest/upper-pec swell for a less tubular silhouette
+  const chest = mk(new THREE.SphereGeometry(0.20 * build, 14, 12), shirt);
+  chest.scale.set(1.3, 0.7, 0.85); chest.position.set(0, 1.55, 0.03);
+
+  // shoulder caps (gentle taper into the arms)
+  const shoulderGeo = new THREE.SphereGeometry(0.11 * build, 12, 10);
+  const shL = mk(shoulderGeo, shirt); shL.position.set(-0.27, 1.66, 0);
+  const shR = mk(shoulderGeo, shirt); shR.position.set(0.27, 1.66, 0);
+
+  // ============================================================
+  // NECK + HEAD + FACE
+  // ============================================================
+  const neck = mk(limbCapsule(0.075, 0.06), skin); neck.position.set(0, 1.86, 0);
+
+  const head = mk(new THREE.SphereGeometry(0.165, 18, 16), skin);
+  head.scale.set(0.95, 1.08, 1.0);          // slightly squashed / elongated jaw
+  head.position.set(0, 2.02, 0);
+
+  // hair cap — scaled sphere clipped to the upper/back skull
+  const cap = mk(new THREE.SphereGeometry(0.172, 16, 14), hair, 0.92);
+  cap.scale.set(1.02, 0.85, 1.05);
+  cap.position.set(0, 0.04, -0.012); head.add(cap);
+  // fringe/bangs over the forehead
+  const bang = mk(new THREE.SphereGeometry(0.10, 12, 8), hair, 0.92);
+  bang.scale.set(1.5, 0.5, 0.6); bang.position.set(0, 0.06, 0.13); head.add(bang);
+
   // ears
-  const earL = mk(new THREE.BoxGeometry(0.05, 0.12, 0.10), skin); earL.position.set(-0.175, 0.0, 0); head.add(earL);
-  const earR = mk(new THREE.BoxGeometry(0.05, 0.12, 0.10), skin); earR.position.set(0.175, 0.0, 0); head.add(earR);
-  // eyes (whites) on the +Z face
-  const eyeGeo = new THREE.BoxGeometry(0.08, 0.06, 0.03);
-  const eyeL = mk(eyeGeo, 0xf4f4f4, 0.4); eyeL.position.set(-0.08, 0.03, 0.16); head.add(eyeL);
-  const eyeR = mk(eyeGeo, 0xf4f4f4, 0.4); eyeR.position.set(0.08, 0.03, 0.16); head.add(eyeR);
-  const pupGeo = new THREE.BoxGeometry(0.035, 0.04, 0.02);
-  const pupL = mk(pupGeo, 0x1a1a22, 0.4); pupL.position.set(-0.08, 0.02, 0.175); head.add(pupL);
-  const pupR = mk(pupGeo, 0x1a1a22, 0.4); pupR.position.set(0.08, 0.02, 0.175); head.add(pupR);
-  // nose + mouth
-  const nose = mk(new THREE.BoxGeometry(0.06, 0.08, 0.06), skin); nose.position.set(0, -0.04, 0.17); head.add(nose);
-  const mouth = mk(new THREE.BoxGeometry(0.12, 0.025, 0.02), 0x7a3b3b, 0.6); mouth.position.set(0, -0.13, 0.16); head.add(mouth);
+  const earGeo = new THREE.SphereGeometry(0.045, 8, 8);
+  const earL = mk(earGeo, skin); earL.scale.set(0.6, 1.2, 1.0); earL.position.set(-0.155, 0.0, 0); head.add(earL);
+  const earR = mk(earGeo, skin); earR.scale.set(0.6, 1.2, 1.0); earR.position.set(0.155, 0.0, 0); head.add(earR);
 
-  // ---- ARMS: animated mesh is the UPPER arm (box centred at mid-upper-arm),
-  // matching the original pivot. Forearm + hand are children that swing along.
+  // eyes (whites + pupils) on the +Z face
+  const eyeGeo = new THREE.SphereGeometry(0.032, 10, 8);
+  const eyeL = mk(eyeGeo, 0xf4f4f4, 0.35); eyeL.scale.set(1.1, 0.8, 0.6); eyeL.position.set(-0.06, 0.025, 0.145); head.add(eyeL);
+  const eyeR = mk(eyeGeo, 0xf4f4f4, 0.35); eyeR.scale.set(1.1, 0.8, 0.6); eyeR.position.set(0.06, 0.025, 0.145); head.add(eyeR);
+  const pupGeo = new THREE.SphereGeometry(0.016, 8, 8);
+  const pupL = mk(pupGeo, 0x1a1a22, 0.3); pupL.position.set(-0.06, 0.02, 0.165); head.add(pupL);
+  const pupR = mk(pupGeo, 0x1a1a22, 0.3); pupR.position.set(0.06, 0.02, 0.165); head.add(pupR);
+
+  // brows (thin rounded bars), nose (capsule), mouth (squashed sphere)
+  const browGeo = new THREE.SphereGeometry(0.04, 8, 6);
+  const browL = mk(browGeo, hair, 0.9); browL.scale.set(1.3, 0.35, 0.5); browL.position.set(-0.06, 0.075, 0.15); head.add(browL);
+  const browR = mk(browGeo, hair, 0.9); browR.scale.set(1.3, 0.35, 0.5); browR.position.set(0.06, 0.075, 0.15); head.add(browR);
+  const nose = mk(limbCapsule(0.028, 0.05), skin); nose.rotation.x = Math.PI; nose.position.set(0, 0.05, 0.155); head.add(nose);
+  const mouth = mk(new THREE.SphereGeometry(0.05, 10, 6), 0x7a3b3b, 0.55); mouth.scale.set(1.1, 0.35, 0.4); mouth.position.set(0, -0.085, 0.145); head.add(mouth);
+
+  // ============================================================
+  // ARMS — animated mesh is the UPPER arm; capsule top sits at the shoulder
+  // joint so rotation.x swings from the shoulder. Forearm + hand are children.
+  // ============================================================
   const mkArm = (sign) => {
-    const up = mk(new THREE.BoxGeometry(0.16, 0.40, 0.18), shirt); // upper arm, centre ~Y=1.50
-    up.position.set(sign * 0.40, 1.50, 0);
-    const lo = mk(new THREE.BoxGeometry(0.14, 0.36, 0.15), skin);   // forearm (rolled sleeve -> skin)
-    lo.position.set(0, -0.36, 0.01); up.add(lo);
-    const hand = mk(new THREE.BoxGeometry(0.13, 0.14, 0.15), skin); // hand
-    hand.position.set(0, -0.25, 0.0); lo.add(hand);
+    const shoulderY = 1.66;
+    const upperLen = 0.26, upperR = 0.075 * build;
+    const up = mk(limbCapsule(upperR, upperLen), shirt);
+    up.position.set(sign * 0.27, shoulderY, 0); // pivot AT the shoulder
+
+    const elbowY = -(upperLen + upperR * 2);
+    const foreLen = 0.24, foreR = 0.062 * build;
+    const lo = mk(limbCapsule(foreR, foreLen), skin); // rolled-sleeve forearm -> skin
+    lo.position.set(0, elbowY + upperR * 0.4, 0.004);
+    up.add(lo);
+
+    const wristY = -(foreLen + foreR * 2) + foreR * 0.2;
+    const hand = mk(new THREE.SphereGeometry(0.07, 12, 10), skin);
+    hand.scale.set(0.85, 1.15, 0.7);
+    hand.position.set(0, wristY - 0.01, 0.01);
+    lo.add(hand);
     return up;
   };
   const armL = mkArm(-1), armR = mkArm(1);
 
-  g.add(legL, legR, hips, torso, chest, neck, head, armL, armR);
+  g.add(legL, legR, hips, torso, chest, shL, shR, neck, head, armL, armR);
   g.userData.armL = armL; g.userData.armR = armR; g.userData.legL = legL; g.userData.legR = legR;
 
   if (armed) {
     // raise the right arm forward and clip a little pistol near the right hand
-    armR.position.set(0.40, 1.50, 0.06); armR.rotation.x = -1.35;
+    armR.position.set(0.27, 1.62, 0.06); armR.rotation.x = -1.35;
     const gun = new THREE.Group();
-    const slide = mk(new THREE.BoxGeometry(0.10, 0.12, 0.34), 0x222228, 0.5); slide.position.set(0, 0.02, 0.06); gun.add(slide);
-    const grip = mk(new THREE.BoxGeometry(0.09, 0.18, 0.11), 0x18181c, 0.5); grip.position.set(0, -0.10, -0.06); grip.rotation.x = 0.25; gun.add(grip);
-    gun.position.set(0.42, 1.28, 0.5);
-    const muzzle = new THREE.Object3D(); muzzle.position.set(0.42, 1.32, 0.72);
+    const slide = mk(new THREE.BoxGeometry(0.08, 0.10, 0.30), 0x222228, 0.45); slide.position.set(0, 0.02, 0.06); gun.add(slide);
+    const barrel = mk(new THREE.CylinderGeometry(0.022, 0.022, 0.10, 8), 0x2a2a30, 0.4);
+    barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, 0.24); gun.add(barrel);
+    const grip = mk(new THREE.BoxGeometry(0.07, 0.16, 0.10), 0x18181c, 0.45); grip.position.set(0, -0.10, -0.05); grip.rotation.x = 0.25; gun.add(grip);
+    gun.position.set(0.30, 1.30, 0.5);
+    const muzzle = new THREE.Object3D(); muzzle.position.set(0.30, 1.34, 0.72);
     g.add(gun, muzzle);
     g.userData.muzzle = muzzle; g.userData.gun = gun;
   }
@@ -256,98 +335,144 @@ function buildBuilding(rng) {
 // Returns { group, wheels[] }. wheels[0..1] front, [2..3] rear (for steer/spin).
 function buildCarMesh(bodyColor) {
   const g = new THREE.Group();
+  const PI = Math.PI;
+
   // --- materials ---
-  const body = new THREE.MeshPhysicalMaterial({ color: bodyColor, roughness: 0.32, metalness: 0.0, clearcoat: 0.85, clearcoatRoughness: 0.22 });
+  const body = new THREE.MeshPhysicalMaterial({ color: bodyColor, roughness: 0.3, metalness: 0.3, clearcoat: 0.9, clearcoatRoughness: 0.18 });
   const trim = new THREE.MeshStandardMaterial({ color: 0x14141a, roughness: 0.55, metalness: 0.1 }); // black plastic trim / rockers
   const dark = new THREE.MeshStandardMaterial({ color: 0x1b1b20, roughness: 0.7 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.9, roughness: 0.25 });
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.9, roughness: 0.22 });
   const grilleMat = new THREE.MeshStandardMaterial({ color: 0x202024, metalness: 0.5, roughness: 0.45 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fc4d8, roughness: 0.08, metalness: 0.0, transmission: 0.0, transparent: true, opacity: 0.5, clearcoat: 1.0 });
-  const tail = new THREE.MeshStandardMaterial({ color: 0xff3838, emissive: 0xcc1010, emissiveIntensity: 1.1, roughness: 0.4 });
-  const lamp = new THREE.MeshStandardMaterial({ color: 0xfff3c0, emissive: 0xfff0b0, emissiveIntensity: 1.2, roughness: 0.3 });
-  const hubMat = new THREE.MeshStandardMaterial({ color: 0xd7dade, metalness: 0.9, roughness: 0.28 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fc4d8, roughness: 0.06, metalness: 0.0, transmission: 0.55, transparent: true, opacity: 0.5, clearcoat: 1.0, ior: 1.45 });
+  const tail = new THREE.MeshStandardMaterial({ color: 0xff3838, emissive: 0xcc1010, emissiveIntensity: 1.1, roughness: 0.35 });
+  const lamp = new THREE.MeshStandardMaterial({ color: 0xfff3c0, emissive: 0xfff0b0, emissiveIntensity: 1.2, roughness: 0.25 });
+  const lensMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.05, metalness: 0.0, transmission: 0.4, transparent: true, opacity: 0.55, clearcoat: 1.0 });
+  const hubMat = new THREE.MeshStandardMaterial({ color: 0xd7dade, metalness: 0.9, roughness: 0.26 });
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x111116, roughness: 0.9 });
 
-  // --- painted lower body (sleeker: separate hood / cabin / trunk + main hull) ---
+  // Helper: a rounded "soft box" via a capsule squashed on its length axis still
+  // reads boxy; instead we round real boxes by stacking the box with thin chamfer
+  // rails along its top edges. capsule(): a horizontal capsule used for hull/roof
+  // curvature. Falls back to a plain box if CapsuleGeometry is unavailable.
+  function softHull(w, h, d, mat, segCap) {
+    // Body hull as a capsule laid along Z (rounds nose+tail+sides), scaled to size.
+    try {
+      const r = Math.min(w, h) * 0.5;
+      const len = Math.max(0.01, d - 2 * r);
+      const cap = new THREE.CapsuleGeometry(r, len, 4, segCap || 12);
+      // Capsule's long axis is Y; rotate so length runs along Z.
+      cap.rotateX(PI / 2);
+      const m = new THREE.Mesh(cap, mat);
+      // squash the round cross-section into the body's W x H footprint
+      m.scale.set(w / (2 * r), h / (2 * r), 1);
+      return m;
+    } catch (e) {
+      return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    }
+  }
+
   // nose is -Z, tail is +Z (matches headlights at -Z, taillights at +Z)
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(1.96, 0.5, 4.0), body); hull.position.y = 0.66;
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.3, 1.4), body); hood.position.set(0, 0.9, -1.28); hood.rotation.x = -0.05;
-  const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.34, 1.05), body); trunk.position.set(0, 0.9, 1.42); trunk.rotation.x = 0.04;
-  // cabin: a narrower greenhouse with a slight taper feel (lower base + tapered roof box)
-  const cabinBase = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.5, 1.9), body); cabinBase.position.set(0, 1.05, 0.08);
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.56, 0.34, 1.5), body); roof.position.set(0, 1.36, 0.12);
-  // rockers / lower side cladding
-  const rockerL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.26, 3.0), trim); rockerL.position.set(-0.99, 0.5, 0.05);
-  const rockerR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.26, 3.0), trim); rockerR.position.set(0.99, 0.5, 0.05);
-  const underTray = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.22, 3.3), dark); underTray.position.y = 0.42;
+  // --- main painted hull: rounded capsule core (sides/nose/tail curved) ---
+  const hull = softHull(1.96, 0.74, 4.0, body, 16); hull.position.y = 0.7;
+  // belt-line filler box keeps a solid silhouette under the capsule curve
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.42, 3.62), body); belt.position.y = 0.62;
+  // sloped hood + trunk give the long curved profile
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.26, 1.5), body); hood.position.set(0, 0.96, -1.22); hood.rotation.x = -0.1;
+  const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.3, 1.1), body); trunk.position.set(0, 0.95, 1.42); trunk.rotation.x = 0.09;
 
-  // --- glass: windshield, rear glass, side windows ---
-  const wind = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.46, 0.06), glass); wind.position.set(0, 1.3, -0.66); wind.rotation.x = -0.42;
-  const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.42, 0.06), glass); rearGlass.position.set(0, 1.3, 0.86); rearGlass.rotation.x = 0.42;
-  const sideGlassL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.34, 1.42), glass); sideGlassL.position.set(-0.79, 1.32, 0.12);
-  const sideGlassR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.34, 1.42), glass); sideGlassR.position.set(0.79, 1.32, 0.12);
+  // --- curved cabin / greenhouse: capsule roof (rounded) over a tapered base ---
+  const cabinBase = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.5, 1.96), body); cabinBase.position.set(0, 1.06, 0.06);
+  const roof = softHull(1.52, 0.5, 1.78, body, 12); roof.position.set(0, 1.4, 0.12);
+  // A-pillar / windshield-frame chamfer fillers to soften the cabin-to-hood join
+  const cowl = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.2, 0.34), body); cowl.position.set(0, 1.14, -0.86); cowl.rotation.x = -0.45;
 
-  // --- front face: grille + headlights ---
-  const grille = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.26, 0.06), grilleMat); grille.position.set(0, 0.7, -2.02);
-  const grilleBar1 = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.04, 0.08), chrome); grilleBar1.position.set(0, 0.78, -2.03);
-  const grilleBar2 = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.04, 0.08), chrome); grilleBar2.position.set(0, 0.62, -2.03);
-  const hl1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.07), lamp); hl1.position.set(-0.66, 0.78, -2.02);
-  const hl2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.07), lamp); hl2.position.set(0.66, 0.78, -2.02);
+  // --- rockers / lower side cladding + underbody ---
+  const rockerL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.24, 3.0), trim); rockerL.position.set(-0.96, 0.46, 0.05);
+  const rockerR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.24, 3.0), trim); rockerR.position.set(0.96, 0.46, 0.05);
+  const underTray = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.2, 3.3), dark); underTray.position.y = 0.4;
 
-  // --- rear face: tail lights + reflector strip ---
-  const tl1 = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.18, 0.07), tail); tl1.position.set(-0.62, 0.8, 2.02);
-  const tl2 = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.18, 0.07), tail); tl2.position.set(0.62, 0.8, 2.02);
-  const tlBar = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.05, 0.06), tail); tlBar.position.set(0, 0.8, 2.02);
+  // --- glass: curved windshield, rear glass, side windows (physical, transparent) ---
+  const wind = new THREE.Mesh(new THREE.BoxGeometry(1.46, 0.5, 0.05), glass); wind.position.set(0, 1.32, -0.7); wind.rotation.x = -0.46;
+  const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(1.46, 0.44, 0.05), glass); rearGlass.position.set(0, 1.32, 0.9); rearGlass.rotation.x = 0.46;
+  const sideGlassL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 1.46), glass); sideGlassL.position.set(-0.78, 1.34, 0.12);
+  const sideGlassR = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 1.46), glass); sideGlassR.position.set(0.78, 1.34, 0.12);
 
-  // --- bumpers ---
-  const bumperF = new THREE.Mesh(new THREE.BoxGeometry(1.94, 0.2, 0.16), trim); bumperF.position.set(0, 0.5, -2.04);
-  const bumperFlip = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.1), chrome); bumperFlip.position.set(0, 0.42, -2.06);
-  const bumperR = new THREE.Mesh(new THREE.BoxGeometry(1.94, 0.2, 0.16), trim); bumperR.position.set(0, 0.5, 2.04);
-  const bumperRlip = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.1), chrome); bumperRlip.position.set(0, 0.42, 2.06);
+  // --- front face: grille + rounded headlights (sphere base + clear lens) ---
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.26, 0.06), grilleMat); grille.position.set(0, 0.68, -2.0);
+  const grilleBar1 = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.022, 6, 20, PI), chrome); grilleBar1.position.set(0, 0.74, -2.0); grilleBar1.rotation.z = PI; grilleBar1.scale.set(1.05, 0.32, 1);
+  const hl1 = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10), lamp); hl1.position.set(-0.66, 0.78, -1.98); hl1.scale.set(1.3, 0.78, 0.6);
+  const hl2 = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10), lamp); hl2.position.set(0.66, 0.78, -1.98); hl2.scale.set(1.3, 0.78, 0.6);
+  const hlLensL = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8), lensMat); hlLensL.position.set(-0.66, 0.78, -2.0); hlLensL.scale.set(1.3, 0.8, 0.45);
+  const hlLensR = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8), lensMat); hlLensR.position.set(0.66, 0.78, -2.0); hlLensR.scale.set(1.3, 0.8, 0.45);
 
-  // --- side mirrors ---
-  const mirrorL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.1), body); mirrorL.position.set(-1.04, 1.12, -0.52);
-  const mirrorR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.1), body); mirrorR.position.set(1.04, 1.12, -0.52);
-  const mirrorLglass = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.07), glass); mirrorLglass.position.set(-1.13, 1.12, -0.52);
-  const mirrorRglass = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.07), glass); mirrorRglass.position.set(1.13, 1.12, -0.52);
+  // --- rear face: rounded tail lights (emissive) + chrome strip ---
+  const tl1 = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), tail); tl1.position.set(-0.64, 0.82, 1.98); tl1.scale.set(1.5, 0.85, 0.5);
+  const tl2 = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), tail); tl2.position.set(0.64, 0.82, 1.98); tl2.scale.set(1.5, 0.85, 0.5);
+  const tlBar = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.05), chrome); tlBar.position.set(0, 0.82, 2.0);
 
-  // --- door-seam hints (thin dark recesses on each flank) ---
-  const seamL = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.42, 0.03), trim); seamL.position.set(-0.99, 0.74, 0.55);
-  const seamR = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.42, 0.03), trim); seamR.position.set(0.99, 0.74, 0.55);
-  const seamL2 = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.42, 0.03), trim); seamL2.position.set(-0.99, 0.74, -0.45);
-  const seamR2 = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.42, 0.03), trim); seamR2.position.set(0.99, 0.74, -0.45);
+  // --- rounded bumpers (capsule-profile) + chrome lips ---
+  const bumperF = softHull(1.94, 0.26, 0.34, trim, 8); bumperF.position.set(0, 0.46, -2.0);
+  const bumperFlip = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.08), chrome); bumperFlip.position.set(0, 0.36, -2.08);
+  const bumperR = softHull(1.94, 0.26, 0.34, trim, 8); bumperR.position.set(0, 0.46, 2.0);
+  const bumperRlip = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.08), chrome); bumperRlip.position.set(0, 0.36, 2.08);
+
+  // --- pronounced wheel arches (torus flares) over each wheel ---
+  function makeArch(x, z) {
+    const arch = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.1, 8, 18, PI), trim);
+    arch.position.set(x, 0.56, z);
+    arch.rotation.y = PI / 2;          // open the arch toward the side
+    arch.scale.set(1, 1, 0.55);        // flatten against the flank
+    return arch;
+  }
+  const archFL = makeArch(-0.99, -1.4), archFR = makeArch(0.99, -1.4);
+  const archRL = makeArch(-0.99, 1.45), archRR = makeArch(0.99, 1.45);
+
+  // --- side mirrors (rounded pods) ---
+  const mirrorL = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), body); mirrorL.position.set(-1.04, 1.14, -0.5); mirrorL.scale.set(1, 0.85, 1.3);
+  const mirrorR = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), body); mirrorR.position.set(1.04, 1.14, -0.5); mirrorR.scale.set(1, 0.85, 1.3);
+  const mirrorLglass = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.08, 0.13), glass); mirrorLglass.position.set(-1.12, 1.14, -0.5);
+  const mirrorRglass = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.08, 0.13), glass); mirrorRglass.position.set(1.12, 1.14, -0.5);
+
+  // --- chrome belt-line trim + door-seam hints on each flank ---
+  const beltTrimL = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 2.4), chrome); beltTrimL.position.set(-0.95, 0.92, 0.1);
+  const beltTrimR = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 2.4), chrome); beltTrimR.position.set(0.95, 0.92, 0.1);
+  const seamL = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.4, 0.025), trim); seamL.position.set(-0.96, 0.74, 0.55);
+  const seamR = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.4, 0.025), trim); seamR.position.set(0.96, 0.74, 0.55);
 
   g.add(
-    underTray, hull, hood, trunk, cabinBase, roof, rockerL, rockerR,
+    underTray, belt, hull, hood, trunk, cabinBase, roof, cowl, rockerL, rockerR,
     wind, rearGlass, sideGlassL, sideGlassR,
-    grille, grilleBar1, grilleBar2, hl1, hl2,
+    grille, grilleBar1, hl1, hl2, hlLensL, hlLensR,
     tl1, tl2, tlBar,
     bumperF, bumperFlip, bumperR, bumperRlip,
+    archFL, archFR, archRL, archRR,
     mirrorL, mirrorR, mirrorLglass, mirrorRglass,
-    seamL, seamR, seamL2, seamR2
+    beltTrimL, beltTrimR, seamL, seamR
   );
 
   // --- wheels: front pair (-Z) then rear pair (+Z); axle along X so they roll on Z.
   // Front wheels live inside a steer-pivot Group so steer (pivot.rotation.y) and roll
-  // (wheel.rotation.x) compose cleanly. Each wheel is a small sub-group: tire + hubcap. ---
-  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.36, 18); wheelGeo.rotateZ(Math.PI / 2);
-  const hubGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.06, 12); hubGeo.rotateZ(Math.PI / 2);
-  const hubCenterGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.08, 8); hubCenterGeo.rotateZ(Math.PI / 2);
+  // (wheel.rotation.x) compose cleanly. Each wheel is a sub-group: tire + sidewall + hub + spokes. ---
+  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.34, 22); wheelGeo.rotateZ(PI / 2);          // tire tread
+  const sidewallGeo = new THREE.TorusGeometry(0.42, 0.1, 8, 22); sidewallGeo.rotateY(PI / 2);          // rounded tire shoulder
+  const hubGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.08, 16); hubGeo.rotateZ(PI / 2);              // alloy rim disc
+  const hubCenterGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.1, 10); hubCenterGeo.rotateZ(PI / 2);   // center cap
 
   function makeWheel(side) {
-    // side = -1 for left, +1 for right (determines which face the hubcap shows)
+    // side = -1 for left, +1 for right (determines which face the hub/cap shows)
     const w = new THREE.Mesh(wheelGeo, tireMat);
-    const hubFace = side * 0.18;
+    const hubFace = side * 0.16;
+    const sidewall = new THREE.Mesh(sidewallGeo, tireMat); sidewall.position.x = hubFace * 0.6;
     const hub = new THREE.Mesh(hubGeo, hubMat); hub.position.x = hubFace;
-    const cap = new THREE.Mesh(hubCenterGeo, chrome); cap.position.x = hubFace + 0.04;
-    // simple spoke hints
+    const cap = new THREE.Mesh(hubCenterGeo, chrome); cap.position.x = hubFace + 0.05;
+    // alloy spokes radiating from the hub center
     for (let s = 0; s < 5; s++) {
-      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.34, 0.05), hubMat);
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.42, 0.04), hubMat);
       spoke.position.x = hubFace;
-      spoke.rotation.x = (s / 5) * Math.PI * 2;
+      spoke.rotation.x = (s / 5) * PI * 2;
       hub.add(spoke);
     }
-    w.add(hub, cap);
+    w.add(sidewall, hub, cap);
     return w;
   }
 
@@ -756,7 +881,8 @@ function loop(time) {
   try {
     update(dt);
     postFrameUi(dt);
-    renderer.render(scene, camera);
+    if (OF.renderHook) OF.renderHook(dt);   // optional post-processing pipeline (gta realism layer)
+    else renderer.render(scene, camera);
   } catch (e) {
     console.error('[ONFOOT] frame failed; leaving on-foot mode', e);
     exit(); return;
@@ -1031,6 +1157,7 @@ function resize() {
   const w = canvas.clientWidth || 960, h = canvas.clientHeight || 540;
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (OF.onResize) OF.onResize(w, h);   // resize the optional post-processing composer
   lastW = w; lastH = h;
 }
 function resizeIfNeeded() {
