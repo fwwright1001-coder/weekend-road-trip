@@ -1,0 +1,55 @@
+# GTA systems layer — wired onto the on-foot mode
+
+This folder turns the hidden "step out of the car and walk around" mode
+(`onfoot3d.js`) into a full open-world crime loop: **wanted stars, police that
+spawn/chase/shoot and can be shot back, player health + armor + Wasted/Busted, a
+money economy, bounty missions, and a rotating minimap/radar.**
+
+The driving game (`game.js`) is **untouched**. `onfoot3d.js` stays the host (it
+owns the scene, camera, player controller, town, pedestrians, pistol, and
+driving); this layer only *reads* its internals and reacts.
+
+## How it's wired
+- **Additive hooks in `onfoot3d.js`** (the only host edits, all optional — no
+  behavior change when the layer isn't loaded):
+  - `OF.internals` — read access to scene/camera/player/keys/yaw/peds/vehicles/
+    aabbs/`resolveCollision`/`spawnVehicle`/etc.
+  - `OF.onEnter / onTick / onFire / onKill / onJack / onExit` — called from
+    `enter()` / the loop / `fire()` / `killPed()` / `enterVehicle()` / `exit()`.
+- **`gta/onfoot-bridge.js`** — the integration host. It builds the shared `ctx`
+  from `OF.internals`, registers the reviewed systems, and adapts them with three
+  thin shims:
+  - **world shim** — `world.api` (collision / spawns / road grid) over onfoot3d's
+    `aabbs` + `BOUND` + `resolveCollision` (streets at `k*24 + 12`).
+  - **combat/health shim** — player health/armor + `currentWeapon`/`damagePlayer`/
+    `heal`/`addArmor` (onfoot3d still owns the actual pistol + firing).
+  - **vehicles shim** — `count`/`nearestEnterable`/`spawnAt`/`playerVehicle`.
+  - Plus: a cop hit-scan on the same aim ray (so police are shootable), crime
+    feed (gunfire/assault/vehicle-theft → wanted), ped/vehicle radar mirrors,
+    Wasted/Busted respawn, and DOM-only screen-shake + hit-flash feedback.
+- **Reused unchanged** (already reviewed in the standalone sandbox):
+  `core.js`, `wanted.js`, `economy.js`, `missions.js`, `police.js`, `hud-radar.js`.
+- **HUD**: `#gta-hud` (radar, stars, vitals, money, weapon, objective) added to
+  `index.html`; `#gta-*` styles appended to `styles.css`. A `body.gta-active`
+  class suppresses the legacy on-foot ammo panel while the layer runs.
+
+## Try it
+```bash
+python -m http.server 8090     # then open http://localhost:8090/#gta
+```
+`#gta` drops straight into the sandbox. Click to capture the mouse · **WASD** move ·
+**Click** shoot (stars climb, cops come) · **R** reload · **E** jack a car · **P** quit.
+(Or finish the drive and press **F**.)
+
+## Safety
+Every hook body and every system tick is `try/catch`-wrapped and per-system
+isolated, so a bug in this layer can never brick the base on-foot mode or the
+driving game.
+
+## Tests
+- `npm install && npm run smoke` (from `gta/`) runs a headless Node alpha test:
+  boots every system + the bridge against a stubbed host and ticks 240+ frames
+  while firing, killing peds, taking damage, carjacking, and respawning —
+  asserting zero throws/errors and the full crime→wanted→police→damage interlock.
+- Adversarially QC-reviewed (3 dimensions + per-finding verification); confirmed
+  findings fixed.

@@ -525,7 +525,10 @@ function fire() {
   tracer.material.opacity = 0.9; tracerT = 0.06;
   muzzleFlash.position.copy(muzzleWorld); muzzleFlash.material.opacity = 1; flashT = 0.05;
 
-  if (best) killPed(best);
+  // let an optional systems layer (police) claim the shot first if a cop is
+  // closer than the pedestrian, so a single bullet hits exactly one target.
+  const copClaimed = OF.onFire ? OF.onFire(best ? bestT : MAX_RANGE) === true : false;
+  if (best && !copClaimed) killPed(best);
   startleNearby();
   updateHud();
 }
@@ -535,6 +538,7 @@ function killPed(p) {
   p.fall = (Math.random() < 0.5 ? 1 : -1);             // tip direction
   for (const m of p.mats) { m.transparent = true; }
   kills++;
+  if (OF.onKill) OF.onKill(p);
   updateHud();
 }
 
@@ -579,6 +583,7 @@ function enter() {
     updateHud();
 
     lastT = 0;
+    if (OF.onEnter) OF.onEnter();    // boot the optional systems layer before the first frame
     rafId = requestAnimationFrame(loop);
   } catch (e) {
     console.error('[ONFOOT] enter failed; staying in the base game', e);
@@ -587,6 +592,7 @@ function enter() {
 }
 
 function exit() {
+  if (OF.active && OF.onExit) OF.onExit();   // tear down the optional systems layer
   OF.active = false;
   if (rafId) cancelAnimationFrame(rafId); rafId = 0;
   if (document.pointerLockElement === canvas) document.exitPointerLock();
@@ -635,6 +641,8 @@ function update(dt) {
   // visual timers (tracer / muzzle flash)
   if (tracerT > 0) { tracerT -= dt; if (tracerT <= 0) tracer.material.opacity = 0; }
   if (flashT > 0) { flashT -= dt; if (flashT <= 0) muzzleFlash.material.opacity = 0; }
+
+  if (OF.onTick) OF.onTick(dt);   // optional systems layer (gta/onfoot-bridge.js)
 }
 
 function updateOnFoot(dt) {
@@ -749,6 +757,7 @@ function enterVehicle(v) {
   mode = 'drive';
   playerVehicle = v;
   v.occupied = true;
+  if (OF.onJack) OF.onJack(v);
   keys.clear();                         // start the drive scheme from a clean input state
   player.mesh.visible = false;
   if (document.pointerLockElement === canvas) document.exitPointerLock();
@@ -923,6 +932,27 @@ function watchForWin() {
 // ============================================================
 // BOOT — wire listeners + HUD; build nothing heavy until first enter()
 // ============================================================
+// Additive integration surface for an optional systems layer (gta/onfoot-bridge.js):
+// read-only access to internals + optional hooks the bridge assigns. When no bridge
+// is loaded, OF.onEnter/onTick/onFire/onKill/onJack/onExit are simply never set, so
+// this changes nothing about the base on-foot mode. Placed here (after all module
+// declarations) so direct field refs aren't in a temporal-dead-zone.
+OF.internals = {
+  THREE,
+  get scene() { return scene; },
+  get camera() { return camera; },
+  get renderer() { return renderer; },
+  get canvas() { return canvas; },
+  player, keys, peds, vehicles, aabbs,
+  get yaw() { return yaw; }, set yaw(v) { yaw = v; },
+  get pitch() { return pitch; }, set pitch(v) { pitch = v; },
+  get locked() { return locked; },
+  get mode() { return mode; },
+  get playerVehicle() { return playerVehicle; },
+  bound: BOUND,
+  resolveCollision, insideBuilding, spawnVehicle, nearestVehicle, enterVehicle, exitVehicle,
+};
+
 ensureHud();
 watchForWin();
 // capture-phase so we pre-empt game.js's window listeners while active
