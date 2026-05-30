@@ -1,56 +1,59 @@
 // ============================================================
 // gta/onfoot-bridge.js — wires the crime-sandbox SYSTEMS layer onto the
-// existing on-foot mode (onfoot3d.js), turning the "walk + shoot" easter egg
-// into a full GTA-style loop: wanted stars, police that spawn/chase/shoot and
-// can be shot back, player health + armor + Wasted/Busted, a money economy,
-// bounty missions, and a rotating minimap/radar.
+// existing on-foot mode (onfoot3d.js): the full GTA loop — wanted stars,
+// police that spawn/chase/shoot and can be shot back, a multi-weapon arsenal
+// (pistol / AK-47 / SMG / shotgun) with ammo + pickups, player health + body
+// armor + Wasted/Busted, a money economy, the BANK HEIST mission, and a radar.
 // ------------------------------------------------------------
-// DESIGN: onfoot3d.js stays the HOST. It owns the scene, camera, renderer,
-// player controller, town, pedestrians, pistol, and driving. This bridge only
-// READS its internals (window.ONFOOT.internals) and reacts through the optional
-// hooks it exposes (onEnter/onTick/onFire/onKill/onJack/onExit). It registers
-// my reviewed systems (wanted/economy/missions/police/hud-radar) plus three thin
-// SHIMS that adapt my systems' world/combat/vehicles contracts onto onfoot3d's
-// town. Everything is null-guarded and per-system isolated by core.js, so a bug
-// here can never brick the base on-foot mode.
+// onfoot3d.js stays the HOST (scene, camera, player controller, town, peds,
+// driving). This bridge READS window.ONFOOT.internals and reacts via the
+// optional hooks (onEnter/onTick/onKill/onJack/onExit). It now OWNS combat:
+// onfoot3d's single pistol is suppressed (OF.combatOwned) and gta/combat.js
+// runs the full arsenal, fed real mouse/keyboard input. Everything is
+// per-system isolated + try/caught, so a bug here can't brick the base mode.
 //
-// Reuses (unchanged): gta/core.js, wanted.js, economy.js, missions.js,
-//   police.js, hud-radar.js. Does NOT import combat.js or vehicles.js (onfoot3d
-//   owns shooting + cars); a combat/vehicles SHIM provides the api those modules
-//   expect.
+// Reuses unchanged: core.js, wanted.js, economy.js, police.js, hud-radar.js,
+//   combat.js. The heist (gta/onfoot-heist.js) registers as the HUD's
+//   'missions' provider. World + vehicles are adapted by thin shims below.
 // ============================================================
 import { GTA, GU } from './core.js';
 import './wanted.js';
 import './economy.js';
-import './missions.js';
 import './police.js';
+import './combat.js';
 import './hud-radar.js';
+import './onfoot-heist.js';
+import { buildWorldDetail } from './onfoot-detail.js';
 
-// ---- handles (resolved at enter time; internals don't exist until ensureInit) ----
+// ---- handles (resolved at enter time) --------------------------------------
 let I = null;            // window.ONFOOT.internals
 let ctx = null;
 let booted = false;
 let active = false;
 const pedMirrors = [];   // ctx.targets blip entries mirroring onfoot3d's peds
-const vehMirrors = [];   // ctx.targets blip entries mirroring onfoot3d's vehicles
+const vehMirrors = [];
 const _scratchDir = { x: 0, y: 0, z: 0 };
-let _aimDir = null;                                   // reused Vector3 for the cop aim ray
-let _lastPx = null, _lastPy = null, _lastPz = null;   // prior player pos, for deriving velocity
-let _shakeMag = 0, _flashEl = null;                   // screen-shake + hit-flash feedback
+let _lastPx = null, _lastPy = null, _lastPz = null;   // prior player pos -> velocity
+let _shakeMag = 0, _flashEl = null;
+let _detailBuilt = false;
+
+// ---- real input state (fed to combat.js) -----------------------------------
+let _mouseDown = false, _mouseWired = false;
+const _justKeys = new Set(), _justMouse = new Set();
+let _prevKeys = new Set();
+
+// ---- weapon pickups (bridge-owned; economy handles cash/ammo/health/armor) --
+const weaponPickups = [];   // {grp, x, z, weaponId, taken}
 
 // ============================================================
-// SHIM 1 — WORLD: adapt onfoot3d's town (aabbs + BOUND + resolveCollision)
-// onto the world.api my police/missions/hud-radar expect.
+// SHIM 1 — WORLD over onfoot3d's town (aabbs + BOUND + resolveCollision)
 // ============================================================
-const BLOCK = 24;        // onfoot3d's CELL grid spacing
-const ROAD_OFFSET = 12;  // real cross-streets run at k*24 + 12 (between building-block centres)
-const ROAD_HALF = 5;     // approximate street half-width
+const BLOCK = 24, ROAD_OFFSET = 12, ROAD_HALF = 5;
 function makeWorldShim() {
   const THREE = I.THREE;
   const bound = I.bound;
   let landmarks = null;
   const buildLandmarks = () => {
-    // a handful of named anchors for missions: the spawn plaza + a few block centres
     const out = [{ name: 'plaza', pos: { x: 0, z: 8 }, district: 'downtown' }];
     const a = I.aabbs;
     for (let i = 0; i < a.length; i += Math.max(1, (a.length / 6) | 0)) {
@@ -81,7 +84,7 @@ function makeWorldShim() {
     },
     randomRoadSpawn(rng, out = {}) {
       const r = rng || Math.random;
-      const k = Math.round((r() * 2 - 1) * (bound / BLOCK) - 0.5);   // street index (lines at k*24+12)
+      const k = Math.round((r() * 2 - 1) * (bound / BLOCK) - 0.5);
       const line = GU.clamp(k * BLOCK + ROAD_OFFSET, -bound, bound);
       const along = (r() * 2 - 1) * (bound - 6);
       if (r() < 0.5) { out.x = line; out.z = along; out.dir = 0; }
@@ -92,68 +95,15 @@ function makeWorldShim() {
     landmarks: () => (landmarks || (landmarks = buildLandmarks())),
     randomLandmark: (rng) => GU.pick(rng, (landmarks || (landmarks = buildLandmarks()))),
   };
-  return {
-    name: 'world', deps: [],
-    aabbs: I.aabbs,
-    api,
-    init(c) { c.world = api; this.aabbs = I.aabbs; },
-    update() {},
-    reset() {},
-  };
+  return { name: 'world', deps: [], aabbs: I.aabbs, api, init(c) { c.world = api; this.aabbs = I.aabbs; }, update() {}, reset() {} };
 }
 
 // ============================================================
-// SHIM 2 — COMBAT/HEALTH: onfoot3d owns the pistol + firing; this shim only
-// owns the PLAYER's health/armor and exposes the small combat api my economy /
-// hud-radar / police expect (currentWeapon, damagePlayer, heal, addArmor...).
-// ============================================================
-function makeCombatShim() {
-  const sys = {
-    name: 'combat', deps: [],
-    init(c) {
-      const p = c.player;
-      if (p.maxHealth == null) p.maxHealth = 100;
-      if (p.health == null) p.health = p.maxHealth;
-      if (p.armor == null) p.armor = 0;
-      p.weapon = 'pistol';
-      c.bus.on('damage', (e) => { if (e && e.target === 'player') this.api.damagePlayer(e.amount, e.source || e.kind, e.pos); });
-    },
-    update() {},
-    reset(c) { const p = c.player; p.health = p.maxHealth; p.armor = 0; p.alive = true; },
-    api: {
-      currentWeapon() {
-        const ammo = I && I.player ? I.player.ammo : 0;
-        // onfoot3d's pistol reloads to full for free, so reserve is effectively
-        // unlimited; the HUD needs a NUMBER (it coerces non-numbers to 0), so
-        // report a comfortably large reserve rather than a glyph.
-        return { id: 'pistol', name: 'PISTOL', clip: ammo, reserve: 240, melee: false };
-      },
-      damagePlayer(amount, src, pos) {
-        const p = ctx.player;
-        if (!p.alive) return;
-        let dmg = Math.max(0, amount || 0);
-        if (p.armor > 0) { const soak = Math.min(p.armor, dmg * 0.66); p.armor -= soak; dmg -= soak; }
-        p.health = Math.max(0, p.health - dmg);
-        ctx.bus.emit('playerHurt', { amount, health: p.health, armor: p.armor, source: src });
-        if (p.health <= 0) { p.alive = false; ctx.bus.emit('playerWasted', { pos: pos || p.pos, cause: src || 'wasted' }); }
-      },
-      heal(n) { const p = ctx.player; p.health = Math.min(p.maxHealth, p.health + (n || 0)); },
-      addArmor(n) { const p = ctx.player; p.armor = Math.min(100, p.armor + (n || 0)); },
-      addAmmo(id, n) { if (I && I.player) I.player.ammo = Math.min(12, (I.player.ammo || 0) + (n || 0)); },
-      giveWeapon() {}, select() {},
-    },
-  };
-  return sys;
-}
-
-// ============================================================
-// SHIM 3 — VEHICLES: onfoot3d owns driving; this shim exposes the small api
-// missions/hud expect (count / nearestEnterable / spawnAt / playerVehicle).
+// SHIM 2 — VEHICLES over onfoot3d's cars
 // ============================================================
 function makeVehiclesShim() {
   return {
-    name: 'vehicles', deps: [],
-    init() {}, update() {}, reset() {},
+    name: 'vehicles', deps: [], init() {}, update() {}, reset() {},
     api: {
       count: () => (I && I.vehicles ? I.vehicles.length : 0),
       playerVehicle: () => (I ? I.playerVehicle : null),
@@ -165,8 +115,7 @@ function makeVehiclesShim() {
       },
       spawnAt(x, z, opts) {
         if (!I || !I.spawnVehicle) return null;
-        const heading = (opts && opts.heading) || 0;
-        const color = (opts && opts.color) || 0x394150;
+        const heading = (opts && opts.heading) || 0, color = (opts && opts.color) || 0x394150;
         try { return I.spawnVehicle(x, z, heading, color); } catch (e) { return null; }
       },
       forceExit() { try { if (I && I.mode === 'drive' && I.exitVehicle) I.exitVehicle(); } catch (e) {} },
@@ -175,12 +124,12 @@ function makeVehiclesShim() {
 }
 
 // ============================================================
-// CONTEXT — built from onfoot3d's internals at enter time
+// CONTEXT
 // ============================================================
 function buildCtx() {
   const THREE = I.THREE;
   const player = {
-    pos: I.player.pos,                 // shared Vector3 — both sides see the same position
+    pos: I.player.pos,
     vel: new THREE.Vector3(),
     get vy() { return I.player.vy; }, set vy(v) { I.player.vy = v; },
     get grounded() { return I.player.grounded; },
@@ -198,9 +147,12 @@ function buildCtx() {
     input: {
       keys: I.keys,
       get pointerLocked() { return I.locked; },
-      get mouseDown() { return false; },
-      held: (c) => I.keys.has(c), pressed: () => false, consume: () => false,
-      mouseJust: () => false, consumeMouse: () => false,
+      get mouseDown() { return _mouseDown; },
+      held: (c) => I.keys.has(c),
+      pressed: (c) => _justKeys.has(c),
+      consume: (c) => { const h = _justKeys.has(c); _justKeys.delete(c); return h; },
+      mouseJust: (b = 0) => _justMouse.has(b),
+      consumeMouse: (b = 0) => { const h = _justMouse.has(b); _justMouse.delete(b); return h; },
     },
     world: null,
     targets: [],
@@ -211,39 +163,37 @@ function buildCtx() {
   return ctx;
 }
 
-// GTA.host shim — my reused systems read camera forward + recoil through this.
+// GTA.host — combat reads camera forward + drives a little recoil (mapped to shake)
 function wireHost() {
   GTA.host = {
-    addRecoil() {},
+    addRecoil(a) { _shakeMag = Math.min(1.4, _shakeMag + (a || 0) * 3); },
     cameraDir(out) { const o = out || _scratchDir; if (I && I.camera) I.camera.getWorldDirection(o); return o; },
     yaw: () => (I ? I.yaw : 0), pitch: () => (I ? I.pitch : 0),
   };
 }
 
 // ============================================================
-// ctx.targets — keep mirror blip entries for onfoot3d's peds + vehicles so they
-// appear on the radar. Police pushes/splices its own 'cop' entries; we never
-// touch those. Mirrors are created once (ped/vehicle arrays are stable) and just
-// have their .pos/.dead refreshed each tick.
+// ctx.targets mirrors — peds (shootable: onHit -> onfoot3d.killPed) + vehicles
 // ============================================================
+function pedOnHit(src) {
+  return function () { try { if (!src.dead && I.killPed) I.killPed(src); } catch (e) {} };
+}
 function buildMirrors() {
   pedMirrors.length = 0; vehMirrors.length = 0;
   for (const p of (I.peds || [])) {
-    const m = { pos: p.pos, height: 1.7, radius: 0.5, kind: 'ped', dead: false, _mirror: true, _src: p, onHit() {} };
+    const m = { pos: p.pos, height: 1.7, radius: 0.55, kind: 'ped', dead: false, _mirror: true, _src: p, onHit: pedOnHit(p) };
     pedMirrors.push(m); ctx.targets.push(m);
   }
   for (const v of (I.vehicles || [])) {
-    const m = { pos: v.pos, height: 1.4, radius: 1.4, kind: 'vehicle', dead: false, _mirror: true, _src: v, onHit() {} };
+    const m = { pos: v.pos, height: 1.4, radius: 1.2, kind: 'vehicle', dead: false, _mirror: true, _src: v, onHit() {} };
     vehMirrors.push(m); ctx.targets.push(m);
   }
 }
 function refreshMirrors() {
-  // reconcile: cars spawned after boot (mission spawnAt -> I.spawnVehicle) grow I.vehicles
-  // past the snapshot; append a mirror per new tail vehicle so it gets a radar blip.
   if (I && I.vehicles && vehMirrors.length < I.vehicles.length) {
     for (let i = vehMirrors.length; i < I.vehicles.length; i++) {
       const v = I.vehicles[i];
-      const m = { pos: v.pos, height: 1.4, radius: 1.4, kind: 'vehicle', dead: false, _mirror: true, _src: v, onHit() {} };
+      const m = { pos: v.pos, height: 1.4, radius: 1.2, kind: 'vehicle', dead: false, _mirror: true, _src: v, onHit() {} };
       vehMirrors.push(m); ctx.targets.push(m);
     }
   }
@@ -252,37 +202,11 @@ function refreshMirrors() {
 }
 
 // ============================================================
-// CRIME / EVENT EMITTERS (the wanted-level feed)
+// CRIME / WASTED / BUSTED
 // ============================================================
 function emitCrime(kind, pos, severity) {
   GTA.bus.emit('crime', { kind, pos: pos || ctx.player.pos, severity: severity == null ? 1 : severity, source: 'player' });
 }
-
-// raycast onfoot3d's aim ray against police cops (kind:'cop') and damage the
-// nearest one closer than the pedestrian their own fire() already hit.
-function shootCops(pedDist) {
-  if (!I.camera) return false;
-  const origin = I.camera.position;
-  if (!_aimDir) _aimDir = new I.THREE.Vector3();
-  const dir = I.camera.getWorldDirection(_aimDir);
-  let best = null, bestT = Math.min(pedDist == null ? 140 : pedDist, 140);
-  const ax = origin.x, ay = origin.y, az = origin.z;
-  for (const e of ctx.targets) {
-    if (e.kind !== 'cop' || e.dead || !e.pos) continue;
-    const cx = e.pos.x - ax, cy = (e.pos.y + (e.height || 1.6) * 0.6) - ay, cz = e.pos.z - az;
-    const t = cx * dir.x + cy * dir.y + cz * dir.z;     // projection onto ray
-    if (t < 0 || t > bestT) continue;
-    const px = ax + dir.x * t, py = ay + dir.y * t, pz = az + dir.z * t;
-    const d = Math.hypot(e.pos.x - px, (e.pos.y + (e.height || 1.6) * 0.6) - py, e.pos.z - pz);
-    if (d < (e.radius || 1) + 0.4) { best = e; bestT = t; }
-  }
-  if (best) { try { best.onHit(34, 'player', best.pos); } catch (e) {} return true; }
-  return false;
-}
-
-// ============================================================
-// WASTED / BUSTED — respawn in the town; never leaves on-foot mode
-// ============================================================
 function wireOutcomes() {
   GTA.bus.on('playerWasted', () => respawn('wasted'));
   GTA.bus.on('playerBusted', () => respawn('busted'));
@@ -293,20 +217,23 @@ function respawn(cause) {
     const lm = ctx.world ? ctx.world.randomLandmark(ctx.rng) : { pos: { x: 0, z: 8 } };
     I.player.pos.set(lm.pos.x, 0, lm.pos.z + 4);
     I.player.vy = 0;
-    ctx.player.health = ctx.player.maxHealth; ctx.player.armor = 0; ctx.player.alive = true;
+    ctx.player.health = ctx.player.maxHealth; ctx.player.alive = true;
     if (cause === 'busted' && ctx.systems.economy) ctx.systems.economy.api.add(-Math.floor((ctx.player.money || 0) * 0.1), 'bail');
-    GTA.bus.emit('toast', { html: cause === 'busted' ? '<b>BUSTED</b> — the cops haul you in. Wanted level cleared.' : '<b>WASTED</b> — you respawn in town.', ms: 4000 });
-    _lastPx = _lastPy = _lastPz = null;                                    // avoid a teleport velocity spike
-    GTA.bus.emit('playerRespawn', { pos: I.player.pos.clone(), cause });   // police clear, missions abort, stats
-    GTA.reset(ctx);                                                        // authoritative full reset (incl. wanted)
+    GTA.bus.emit('toast', { html: cause === 'busted' ? '<b>BUSTED</b> — the cops haul you in.' : '<b>WASTED</b> — Smeaglodin goes down. Respawning…', ms: 4200 });
+    _lastPx = _lastPy = _lastPz = null;
+    GTA.bus.emit('playerRespawn', { pos: I.player.pos.clone(), cause });
+    GTA.reset(ctx);
+    ctx.player.armor = 100;   // respawn with a fresh body-armor bar
   } catch (e) { console.error('[GTA bridge] respawn failed', e); }
 }
 
 // ============================================================
-// FEEDBACK — screen-shake + hit-flash, DOM-only (never touches onfoot3d's camera)
+// FEEDBACK — shake + hit-flash (DOM-only)
 // ============================================================
 function wireFeedback() {
   GTA.bus.on('shake', (p) => { _shakeMag = Math.min(1.4, _shakeMag + ((p && p.amount) || 0)); });
+  // bystanders panic at gunfire (combat owns firing now, so wire it via the crime feed)
+  GTA.bus.on('crime', (p) => { if (p && p.kind === 'gunfire' && I && I.startleNearby) { try { I.startleNearby(); } catch (e) {} } });
   GTA.bus.on('playerHurt', () => {
     ensureFlash();
     if (!_flashEl) return;
@@ -332,34 +259,105 @@ function applyShake(dt) {
 }
 
 // ============================================================
-// HOOKS — assigned onto window.ONFOOT; onfoot3d calls them when present
+// PICKUPS — guns (bridge) + ammo/health/armor (economy)
 // ============================================================
+function buildGunPickup(id, x, z) {
+  const THREE = I.THREE;
+  const grp = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({ color: 0x2b2f36, metalness: 0.6, roughness: 0.4 });
+  const accent = new THREE.MeshStandardMaterial({ color: id === 'ak47' ? 0x7a4a22 : 0x444a52, roughness: 0.7 });
+  // a stylized gun silhouette
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.14, 0.18), metal); body.position.y = 1.1;
+  const mag = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.34, 0.16), accent); mag.position.set(-0.05, 0.92, 0);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.14), accent); stock.position.set(0.5, 1.08, 0);
+  grp.add(body, mag, stock);
+  // glowing pillar so it's findable
+  const glow = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2.2, 14, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.16, side: THREE.DoubleSide }));
+  glow.position.y = 1.1; grp.add(glow);
+  grp.position.set(x, 0, z);
+  grp.traverse((o) => { if (o.isMesh && o.material.metalness !== undefined) o.castShadow = true; });
+  I.scene.add(grp);
+  return grp;
+}
+function spawnWeaponPickup(id, x, z) {
+  const grp = buildGunPickup(id, x, z);
+  weaponPickups.push({ grp, x, z, weaponId: id, taken: false });
+}
+function updateWeaponPickups(dt) {
+  const p = ctx.player.pos;
+  for (const wp of weaponPickups) {
+    if (wp.taken) continue;
+    wp.grp.rotation.y += dt * 1.4;
+    wp.grp.position.y = Math.sin(ctx.time.t * 2 + wp.x) * 0.12;
+    if (Math.hypot(p.x - wp.x, p.z - wp.z) < 1.9) {
+      wp.taken = true; wp.grp.visible = false;
+      const c = ctx.systems.combat && ctx.systems.combat.api;
+      if (c) { c.giveWeapon(wp.weaponId, true); }
+      const name = wp.weaponId === 'ak47' ? 'an AK-47' : wp.weaponId === 'smg' ? 'an SMG' : wp.weaponId === 'shotgun' ? 'a shotgun' : 'a weapon';
+      GTA.bus.emit('toast', { html: `Picked up <b>${name}</b>. <b>Tab</b> / <b>1-5</b> to switch.`, ms: 3500 });
+    }
+  }
+}
+function placePickups() {
+  // a starting arsenal scattered near the plaza + heist-relevant kit
+  spawnWeaponPickup('ak47', 10, -6);
+  spawnWeaponPickup('smg', -14, 10);
+  spawnWeaponPickup('shotgun', 16, 14);
+  spawnWeaponPickup('ak47', -2, -34);     // near the bank approach
+  // ammo / health / armor crates via economy's pickup manager
+  const drop = (kind, value, x, z) => GTA.bus.emit('spawnPickup', { kind, value, pos: { x, y: 0, z } });
+  drop('ammo', 90, 6, 6); drop('ammo', 120, -10, -10); drop('ammo', 120, 20, -20); drop('ammo', 90, -22, 18);
+  drop('armor', 100, 4, -8); drop('armor', 50, -18, -4);
+  drop('health', 40, 12, 12); drop('health', 40, -8, 20); drop('health', 40, 0, -28);
+}
+
+// ============================================================
+// HOOKS
+// ============================================================
+function wireMouse() {
+  if (_mouseWired) return;
+  _mouseWired = true;
+  window.addEventListener('mousedown', (e) => { if (!active) return; if (e.button === 0) { _mouseDown = true; _justMouse.add(0); } else _justMouse.add(e.button); }, true);
+  window.addEventListener('mouseup', (e) => { if (e.button === 0) _mouseDown = false; }, true);
+}
 function onEnter() {
   try {
     const OF = window.ONFOOT;
     I = OF && OF.internals;
     if (!I || !I.scene) { console.warn('[GTA bridge] ONFOOT.internals not ready'); return; }
+    OF.combatOwned = true;     // suppress onfoot3d's built-in pistol; combat.js owns weapons
     if (!booted) {
       buildCtx();
       wireHost();
-      if (!GTA.systems.world) GTA.register(makeWorldShim());      // idempotent: a failed-then-retried
-      if (!GTA.systems.combat) GTA.register(makeCombatShim());    // boot must not re-register/re-subscribe
+      wireMouse();
+      if (!GTA.systems.world) GTA.register(makeWorldShim());
       if (!GTA.systems.vehicles) GTA.register(makeVehiclesShim());
       wireOutcomes();
       wireFeedback();
       GTA.boot(ctx, { mode: 'onfoot' });
-      booted = true;             // record success right after boot, BEFORE buildMirrors can throw
+      booted = true;
       buildMirrors();
+      // world detail (props) once
+      if (!_detailBuilt) { try { buildWorldDetail(I.THREE, I.scene, { exclude: [{ x: 0, z: -42, r: 16 }] }); _detailBuilt = true; } catch (e) { console.error('[GTA bridge] world detail failed', e); } }
+      // loadout: Smeaglodin starts with a pistol + an AK-47, full health + armor
+      const c = ctx.systems.combat && ctx.systems.combat.api;
+      if (c) { c.giveWeapon('pistol', true); c.giveWeapon('ak47', false); }
+      ctx.player.health = ctx.player.maxHealth; ctx.player.armor = 100;
+      placePickups();
     } else {
-      // re-entry: clear transient state, keep money
       _lastPx = _lastPy = _lastPz = null;
-      ctx.player.health = ctx.player.maxHealth; ctx.player.armor = 0; ctx.player.alive = true;
+      ctx.player.health = ctx.player.maxHealth; ctx.player.alive = true;
       GTA.reset(ctx);
+      const m = ctx.systems.missions && ctx.systems.missions.api;   // un-stick a 'won' heist + hide overlay
+      if (m && m.forceRestart) m.forceRestart();
+      ctx.player.armor = 100;
+      for (const wp of weaponPickups) { wp.taken = false; wp.grp.visible = true; }
     }
     active = true;
     document.getElementById('gta-hud')?.classList.remove('hidden');
-    document.body.classList.add('gta-active');   // CSS hides the legacy #foot-stats-foot for the whole session
-    GTA.bus.emit('toast', { html: 'The city has rules now. <b>Shoot</b> to draw heat — the stars climb and the cops come. Lose them, or get Wasted.', ms: 7000 });
+    document.body.classList.add('gta-active');
+    GTA.bus.emit('toast', { html: 'Heist time. Get to the <b>bank</b> (radar marker), grab the <b>goop</b> from the vault, then <b>escape in a car</b>. Cops will come — fight or flee.', ms: 8000 });
   } catch (e) { console.error('[GTA bridge] onEnter failed; base on-foot mode unaffected', e); }
 }
 
@@ -367,75 +365,78 @@ function onExit() {
   try {
     active = false;
     document.getElementById('gta-hud')?.classList.add('hidden');
+    document.getElementById('gta-win')?.style.setProperty('display', 'none');
     document.body.classList.remove('gta-active');
     if (I && I.canvas) I.canvas.style.transform = '';
     if (_flashEl) _flashEl.style.opacity = '0';
-    _shakeMag = 0;
+    _shakeMag = 0; _mouseDown = false;
   } catch (e) { console.error('[GTA bridge] onExit failed', e); }
 }
 
 function onTick(dt) {
   if (!active || !booted) return;
   try {
-    // sync player look + body facing from onfoot3d (car heading while driving)
+    // just-pressed keys: read onfoot3d's edge-pressed set (captured at keydown
+    // time so fast taps of Tab/R/Digit aren't lost), then clear it for next frame.
+    _justKeys.clear();
+    if (I.justPressed) { for (const k of I.justPressed) _justKeys.add(k); I.justPressed.clear(); }
+    else { for (const k of I.keys) if (!_prevKeys.has(k)) _justKeys.add(k); _prevKeys = new Set(I.keys); }
+
     const driving = I.mode === 'drive' && I.playerVehicle;
     ctx.player.yaw = driving ? I.playerVehicle.heading : I.yaw;
     ctx.player.pitch = I.pitch;
     ctx.player.facing = I.player.facing;
     ctx.player.inVehicle = !!driving;
     ctx.player.vehicle = driving ? I.playerVehicle : null;
-    // derive player velocity from the host's position delta — the host integrates
-    // pos directly and exposes no velocity, but police's arrest 'stillness' gate
-    // (and ram knockback) read ctx.player.vel. pos IS the shared ref, so snapshot.
+
     const pp = I.player.pos;
     if (_lastPx !== null && dt > 0) {
       let vx = (pp.x - _lastPx) / dt, vz = (pp.z - _lastPz) / dt;
-      if (Math.hypot(vx, vz) > 40) { vx = 0; vz = 0; }   // reject teleport spikes (respawn/exit-car)
+      if (Math.hypot(vx, vz) > 40) { vx = 0; vz = 0; }
       ctx.player.vel.set(vx, 0, vz);
     } else ctx.player.vel.set(0, 0, 0);
     _lastPx = pp.x; _lastPy = pp.y; _lastPz = pp.z;
+    // while driving, the car moves but onfoot3d freezes player.pos — glue the
+    // logical player position to the car so the heist escape, radar, wanted, and
+    // police targeting all track the vehicle (the win check reads player.pos).
+    if (driving && I.playerVehicle && I.playerVehicle.pos) I.player.pos.copy(I.playerVehicle.pos);
+
     refreshMirrors();
     GTA.tick(dt, ctx);
+    updateWeaponPickups(dt);
     applyShake(dt);
+    _justMouse.clear();
   } catch (e) { console.error('[GTA bridge] onTick failed', e); }
 }
 
-function onFire(pedDist) {
-  if (!active) return false;
-  // returns true if a cop closer than the pedestrian claimed the shot (so the host
-  // skips its own ped kill — one bullet, one target).
-  try { emitCrime('gunfire', ctx.player.pos, 0.6); return shootCops(pedDist) === true; } catch (e) { return false; }
-}
-
+// onfoot3d still calls onKill (combat kills route through I.killPed -> killPed ->
+// OF.onKill) and onJack (carjack). onFire is unused now (pistol suppressed).
 function onKill(ped) {
   if (!active || !ped) return;
   try {
+    if (I && I.startleNearby) I.startleNearby();
     GTA.bus.emit('entityKilled', { entity: ped, kind: 'ped', pos: ped.pos, byPlayer: true });
     emitCrime('assault', ped.pos, 1);
-    if (GU.chance(ctx.rng, 0.45)) GTA.bus.emit('spawnPickup', { kind: 'cash', value: 20 + Math.floor(ctx.rng() * 60), pos: { x: ped.pos.x, y: 0, z: ped.pos.z } });
+    if (GU.chance(ctx.rng, 0.5)) GTA.bus.emit('spawnPickup', { kind: 'cash', value: 20 + Math.floor(ctx.rng() * 60), pos: { x: ped.pos.x, y: 0, z: ped.pos.z } });
   } catch (e) {}
 }
-
 function onJack(v) {
   if (!active) return;
-  // stealing an empty parked car is a minor offence — a flicker of heat, not a manhunt
   try { GTA.bus.emit('vehicle:jacked', { vehicle: v }); emitCrime('propertyDamage', v && v.pos, 0.3); } catch (e) {}
 }
 
 // ============================================================
-// INSTALL hooks onto window.ONFOOT (it may load before or after us)
+// INSTALL
 // ============================================================
 function install() {
   const OF = window.ONFOOT;
   if (!OF) return false;
   OF.onEnter = onEnter; OF.onExit = onExit; OF.onTick = onTick;
-  OF.onFire = onFire; OF.onKill = onKill; OF.onJack = onJack;
-  // if onfoot mode is already active (e.g. #gta auto-enter fired first), boot now
+  OF.onKill = onKill; OF.onJack = onJack;
   if (OF.active && !booted) onEnter();
   return true;
 }
 if (!install()) {
-  // onfoot3d.js not parsed yet — retry on next frames until ONFOOT exists
   let tries = 0;
   const iv = setInterval(() => { if (install() || ++tries > 120) clearInterval(iv); }, 16);
 }

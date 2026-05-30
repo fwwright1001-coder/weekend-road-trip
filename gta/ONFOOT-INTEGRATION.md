@@ -1,9 +1,22 @@
 # GTA systems layer — wired onto the on-foot mode
 
 This folder turns the hidden "step out of the car and walk around" mode
-(`onfoot3d.js`) into a full open-world crime loop: **wanted stars, police that
-spawn/chase/shoot and can be shot back, player health + armor + Wasted/Busted, a
-money economy, bounty missions, and a rotating minimap/radar.**
+(`onfoot3d.js`) into a full open-world crime game:
+
+- **The BANK HEIST main mission** (`onfoot-heist.js`): Smeaglodin gets to the
+  bank → grabs the **goop** from the vault (the alarm spikes the wanted level) →
+  **escapes in a car** to the getaway marker to win (+$5000). Cops can be fought
+  or fled.
+- **A multi-weapon arsenal** (`combat.js`): pistol + **AK-47** (full auto) +
+  SMG + shotgun, `Tab`/`1-5` to switch, per-weapon ammo + reload; **guns, ammo,
+  health, and armor pickups** scattered through the world.
+- **Wanted stars, police** that spawn/chase/shoot and can be shot back, **health
+  + body armor**, **Wasted/Busted** + respawn, a **money economy**, a rotating
+  **minimap/radar**, and screen-shake + hit-flash feedback.
+- **3D detail**: faces/bodies on people, a columned bank with a vault, nicer
+  cars, and street props (trees/hydrants/benches/road paint).
+
+Reach it via `#gta` in the URL, or finish the drive and press **F**.
 
 The driving game (`game.js`) is **untouched**. `onfoot3d.js` stays the host (it
 owns the scene, camera, player controller, town, pedestrians, pistol, and
