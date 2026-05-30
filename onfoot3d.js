@@ -214,26 +214,38 @@ function buildCarMesh(bodyColor) {
   const tl2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.08), tail); tl2.position.set(0.6, 0.78, 2.06);
   const hl1 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), lamp); hl1.position.set(-0.62, 0.78, -2.06);
   const hl2 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), lamp); hl2.position.set(0.62, 0.78, -2.06);
-  g.add(sill, hull, hood, cabin, rear, wind, tl1, tl2, hl1, hl2);
-  // wheels — front pair (-Z) then rear pair (+Z); the cylinder axis is along X so it rolls on Z
+  const bumperF = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.18, 0.14), chrome); bumperF.position.set(0, 0.5, -2.06);
+  const bumperR = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.18, 0.14), chrome); bumperR.position.set(0, 0.5, 2.06);
+  g.add(sill, hull, hood, cabin, rear, wind, tl1, tl2, hl1, hl2, bumperF, bumperR);
+  // wheels — front pair (-Z) then rear pair (+Z); axle is along X so they roll on Z.
+  // Front wheels live inside a steer-pivot Group so steer (pivot.rotation.y) and roll
+  // (wheel.rotation.x) compose cleanly instead of precessing under one Euler order.
   const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.38, 16); wheelGeo.rotateZ(Math.PI / 2);
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x111116, roughness: 0.9 });
-  const wheels = [];
+  const wheels = [], steerPivots = [];
+  let wi = 0;
   for (const [x, z] of [[-1.06, -1.4], [1.06, -1.4], [-1.06, 1.45], [1.06, 1.45]]) {
-    const w = new THREE.Mesh(wheelGeo, tireMat); w.position.set(x, 0.5, z); g.add(w); wheels.push(w);
+    const w = new THREE.Mesh(wheelGeo, tireMat);
+    if (wi < 2) {
+      const pivot = new THREE.Group(); pivot.position.set(x, 0.5, z);
+      pivot.add(w); g.add(pivot); steerPivots.push(pivot);   // w sits at pivot origin
+    } else {
+      w.position.set(x, 0.5, z); g.add(w);
+    }
+    wheels.push(w); wi++;
   }
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { group: g, wheels };
+  return { group: g, wheels, steerPivots };
 }
 
 const CAR_COLORS = [0xd8392e, 0x2f6f8f, 0x394150, 0xb0b4ba, 0x2f7a45, 0xc9a24f, 0x7a3a8f, 0x202428];
 // Build a car, register it as a drivable vehicle at (x,z) facing `heading`.
 function spawnVehicle(x, z, heading, color) {
-  const { group, wheels } = buildCarMesh(color);
+  const { group, wheels, steerPivots } = buildCarMesh(color);
   group.position.set(x, 0, z);
   group.rotation.y = heading;
   scene.add(group);
-  const v = { mesh: group, wheels, pos: new THREE.Vector3(x, 0, z), heading, speed: 0, occupied: false };
+  const v = { mesh: group, wheels, steerPivots, pos: new THREE.Vector3(x, 0, z), heading, speed: 0, occupied: false };
   vehicles.push(v);
   return v;
 }
@@ -717,10 +729,8 @@ function updateDriving(dt) {
   v.mesh.position.copy(v.pos);
   v.mesh.rotation.y = v.heading;
   v.mesh.rotation.z = lerpNum(v.mesh.rotation.z, -steer * steerAuth * 0.06, 0.2);
-  for (let i = 0; i < v.wheels.length; i++) {
-    v.wheels[i].rotation.x -= v.speed * dt * 0.6;        // roll
-    if (i < 2) v.wheels[i].rotation.y = steer * 0.4;     // front wheels visibly steer
-  }
+  for (let i = 0; i < v.wheels.length; i++) v.wheels[i].rotation.x -= v.speed * dt * 0.6;  // roll
+  for (const sp of v.steerPivots) sp.rotation.y = steer * 0.4;                              // front-wheel steer
 
   // chase camera: smoothly trail behind the car along its heading
   const target = _v.copy(v.pos); target.y += 1.3;
@@ -739,6 +749,7 @@ function enterVehicle(v) {
   mode = 'drive';
   playerVehicle = v;
   v.occupied = true;
+  keys.clear();                         // start the drive scheme from a clean input state
   player.mesh.visible = false;
   if (document.pointerLockElement === canvas) document.exitPointerLock();
   if (crosshairEl) crosshairEl.classList.add('hidden');
@@ -751,6 +762,7 @@ function enterVehicle(v) {
 function exitVehicle() {
   const v = playerVehicle;
   if (!v) { mode = 'foot'; return; }
+  keys.clear();                         // don't leak held throttle/steer into walk input
   v.speed = 0;
   v.occupied = false;
   v.mesh.rotation.z = 0;
@@ -759,6 +771,7 @@ function exitVehicle() {
   player.pos.set(v.pos.x + sx * 2.4, 0, v.pos.z + sz * 2.4);
   resolveCollision(player.pos, PLAYER_R);
   player.vy = 0; player.grounded = true; player.facing = v.heading;
+  yaw = v.heading; pitch = -0.1;         // align the on-foot orbit cam behind the player (no snap)
   player.mesh.visible = true;
   player.mesh.position.copy(player.pos);
   playerVehicle = null;
