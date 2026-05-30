@@ -59,6 +59,21 @@ Every hook body and every system tick is `try/catch`-wrapped and per-system
 isolated, so a bug in this layer can never brick the base on-foot mode or the
 driving game.
 
+## Physics & performance
+- **Ground-level bank**: the bank's interior floor sits at `y=0` like every town
+  building (it used to be on a ~1.28-tall podium while the player stays pinned at
+  `y=0`, with no step-up collision in the host — so you'd phase through the stone
+  base into the bank). The grandeur now comes from the colonnade/pediment/sign,
+  not elevation. `gta/tools/collision-probe.mjs` runs the REAL `resolveCollision`
+  against the REAL bank footprints and asserts the door is the only XZ opening
+  (walls hold for a walker at WALK/RUN worst-case `dt`, and for a car at top speed).
+- **Draw-call diet**: `onfoot-detail.js` bakes its hundreds of static prop/paint
+  meshes into InstancedMesh batches (one draw per geometry+material) — ~860 → ~70
+  draws, no visual change. `gta/tools/scene-stats.mjs` reports the full scene cost.
+- **Adaptive post-FX**: the realism pipeline (`onfoot-render.js`) watches frame
+  time and sheds SSAO, then bloom, when a machine can't hold framerate, restoring
+  them when it recovers (SMAA always stays on). Lets weaker GPUs run the build.
+
 ## Tests
 - `npm install && npm run smoke` (from `gta/`) runs a headless Node alpha test:
   boots every system + the bridge against a stubbed host and ticks 240+ frames

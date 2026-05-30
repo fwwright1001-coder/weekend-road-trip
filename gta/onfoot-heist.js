@@ -47,7 +47,7 @@ const heist = {
       // the GOOP — a glowing green blob on the vault pedestal
       const goopMat = new THREE.MeshStandardMaterial({ color: 0x6cff5a, emissive: 0x2bd11a, emissiveIntensity: 0.9, roughness: 0.3 });
       goopMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5, 1), goopMat);
-      goopMesh.position.set(bank.vaultPos.x, 2.9, bank.vaultPos.z);   // rest on the vault pedestal top
+      goopMesh.position.set(bank.vaultPos.x, 1.7, bank.vaultPos.z);   // rest on the (ground-level) vault pedestal top
       goopMesh.castShadow = true; ctx.scene.add(goopMesh);
 
       // objective beacon (a glowing pillar repositioned to the current marker)
@@ -80,7 +80,7 @@ const heist = {
     const p = ctx.player.pos;
     const t = ctx.time.t;
 
-    if (goopMesh && goopMesh.visible) { goopMesh.rotation.y += dt * 1.5; goopMesh.position.y = 2.9 + Math.sin(t * 2.5) * 0.12; }
+    if (goopMesh && goopMesh.visible) { goopMesh.rotation.y += dt * 1.5; goopMesh.position.y = 1.7 + Math.sin(t * 2.5) * 0.12; }
     if (beacon) beacon.material.opacity = 0.14 + Math.sin(t * 3) * 0.06;
 
     if (this.state === 'toBank') {

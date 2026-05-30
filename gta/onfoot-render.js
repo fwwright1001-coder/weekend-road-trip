@@ -39,11 +39,22 @@
  */
 export async function installRealism(THREE, renderer, scene, camera, canvas, opts = {}) {
   // ---- tunables (overridable via opts) -------------------------------------
-  const EXPOSURE      = opts.exposure        ?? 1.05;
+  const EXPOSURE      = opts.exposure        ?? 1.0;
   const MAX_PIXEL_RATIO = opts.maxPixelRatio ?? 1.5;
-  const BLOOM_STRENGTH  = opts.bloomStrength ?? 0.35;
+  // Bloom kept tight: only genuinely emissive things (signs/lamps/lit windows)
+  // should glow. A low threshold + high strength is what washes the scene out.
+  const BLOOM_STRENGTH  = opts.bloomStrength ?? 0.24;
   const BLOOM_RADIUS    = opts.bloomRadius   ?? 0.4;
-  const BLOOM_THRESHOLD = opts.bloomThreshold ?? 0.85;
+  const BLOOM_THRESHOLD = opts.bloomThreshold ?? 0.9;
+  // LIGHT REBALANCE — the host's lights (sun + hemisphere) were tuned for the
+  // plain pipeline (no tone mapping, no IBL). Once we add ACES + a RoomEnvironment
+  // image-based light, the scene is double-lit (too bright in lit spots, crushed
+  // in shadow). When realism is on we scale the host lights down and let the IBL
+  // provide ambient fill, for an even, balanced result. Multipliers off the host's
+  // own values, so this self-corrects if the host ever retunes its lights.
+  const SUN_MUL       = opts.sunMul  ?? 0.62;       // host sun 1.9 -> ~1.18
+  const HEMI_MUL      = opts.hemiMul ?? 0.5;        // host hemi 0.85 -> ~0.43
+  const ENV_INTENSITY = opts.envIntensity ?? 0.45;  // IBL contribution (Scene.environmentIntensity)
   const SSAO_KERNEL_RADIUS = opts.ssaoKernelRadius ?? 8;
   const SSAO_MIN_DISTANCE  = opts.ssaoMinDistance ?? 0.005;
   const SSAO_MAX_DISTANCE  = opts.ssaoMaxDistance ?? 0.1;
@@ -51,6 +62,12 @@ export async function installRealism(THREE, renderer, scene, camera, canvas, opt
   const ENABLE_BLOOM  = opts.bloom !== false;      // default on
   const ENABLE_SMAA   = opts.smaa !== false;       // default on
   const ENABLE_ENV    = opts.environment !== false; // default on (IBL)
+  // adaptive quality: shed the heavy passes (SSAO, then bloom) when the machine
+  // can't hold framerate, restore them when it recovers. SMAA always stays on
+  // (cheap + the #1 de-blocking win). Lets weaker GPUs run the same build.
+  const ADAPTIVE      = opts.adaptive !== false;   // default on
+  const FPS_DOWN      = opts.fpsDown ?? 42;         // below this avg fps -> drop a tier
+  const FPS_UP        = opts.fpsUp   ?? 58;         // above this avg fps -> restore a tier
 
   // ---- mutable pipeline handles --------------------------------------------
   let composer    = null;
@@ -62,6 +79,7 @@ export async function installRealism(THREE, renderer, scene, camera, canvas, opt
   let pmrem       = null;
   let envTexture  = null;
   let enabled     = false;     // true only once a working composer exists
+  const lights    = { hemi: null, sun: null, hemi0: 0, sun0: 0 };  // host lights we rebalance
 
   // The fallback renderer.render is ALWAYS safe to call. We start the public
   // object pointing at it; if the composer comes up, render() switches over.
@@ -150,6 +168,20 @@ export async function installRealism(THREE, renderer, scene, camera, canvas, opt
       envTexture = null;
     }
   }
+
+  // ---- light rebalance for the tone-mapped + IBL look ----------------------
+  // Find the host's hemisphere + sun, remember their originals, and scale them
+  // down so they don't stack with the IBL into an over-bright image. Also dial
+  // the IBL's own contribution via Scene.environmentIntensity (r0.163+).
+  try {
+    scene.traverse((o) => {
+      if (o.isHemisphereLight && !lights.hemi) { lights.hemi = o; lights.hemi0 = o.intensity; }
+      else if (o.isDirectionalLight && !lights.sun) { lights.sun = o; lights.sun0 = o.intensity; }
+    });
+    if (lights.hemi) lights.hemi.intensity = lights.hemi0 * HEMI_MUL;
+    if (lights.sun)  lights.sun.intensity  = lights.sun0  * SUN_MUL;
+    if (envTexture && 'environmentIntensity' in scene) scene.environmentIntensity = ENV_INTENSITY;
+  } catch (e) { warn('light rebalance failed', e); }
 
   // ==========================================================================
   // PHASE 2 — the EffectComposer post-processing chain. The whole block is
@@ -242,7 +274,29 @@ export async function installRealism(THREE, renderer, scene, camera, canvas, opt
     // If we got here, the composer chain is live. Switch render() onto it.
     enabled = true;
     api.enabled = true;
-    api.render = function renderComposed(/* dt */) {
+
+    // ---- adaptive quality governor ----------------------------------------
+    // tier 2 = SSAO + bloom + SMAA (full) · 1 = bloom + SMAA · 0 = SMAA only.
+    let _emaDt = 1 / 60;     // smoothed frame time (s)
+    let _cooldown = 90;      // frames to wait before the first/next change (settle EMA)
+    let _tier = 2;
+    api.quality = () => _tier;
+    const applyTier = () => {
+      if (ssaoPass)  ssaoPass.enabled  = _tier >= 2;
+      if (bloomPass) bloomPass.enabled = _tier >= 1;
+    };
+    const governor = (dt) => {
+      if (!ADAPTIVE) return;
+      if (typeof dt === 'number' && dt > 0 && dt < 0.5) _emaDt = _emaDt * 0.92 + dt * 0.08;
+      if (_cooldown > 0) { _cooldown--; return; }
+      const fps = 1 / _emaDt;
+      const haveDowngrade = (_tier === 2 && ssaoPass) || (_tier === 1 && bloomPass);
+      if (fps < FPS_DOWN && haveDowngrade) { _tier--; applyTier(); _cooldown = 120; }
+      else if (fps > FPS_UP && _tier < 2)  { _tier++; applyTier(); _cooldown = 150; }
+    };
+
+    api.render = function renderComposed(dt) {
+      governor(dt);
       try {
         composer.render();
       } catch (e) {
@@ -291,7 +345,32 @@ export async function installRealism(THREE, renderer, scene, camera, canvas, opt
     // api.render / api.setSize remain the safe direct-render defaults set above.
   }
 
+  // ---- live tuning (calibrate lighting in the console, no reload) ----------
+  // Exposed as window.ONFOOT_FX so it can be dialed in live, e.g.:
+  //   ONFOOT_FX.exposure(0.9)  ONFOOT_FX.env(0.5)  ONFOOT_FX.bloom(0.2, 0.92)
+  //   ONFOOT_FX.sun(1.1)       ONFOOT_FX.hemi(0.4) ONFOOT_FX.ssao(false)
+  //   ONFOOT_FX.dump()  -> the current settings (paste them back so I can bake them in)
+  api.exposure = (v) => { try { renderer.toneMappingExposure = v; } catch (_) {} return v; };
+  api.env = (v) => { try { if ('environmentIntensity' in scene) scene.environmentIntensity = v; } catch (_) {} return v; };
+  api.bloom = (s, t, r) => { try { if (bloomPass) { if (s != null) bloomPass.strength = s; if (t != null) bloomPass.threshold = t; if (r != null) bloomPass.radius = r; } } catch (_) {} };
+  api.sun = (v) => { try { if (lights.sun) lights.sun.intensity = v; } catch (_) {} return v; };
+  api.hemi = (v) => { try { if (lights.hemi) lights.hemi.intensity = v; } catch (_) {} return v; };
+  api.ssao = (on) => { try { if (ssaoPass) ssaoPass.enabled = !!on; } catch (_) {} };
+  api.dump = () => ({
+    exposure: safeNum(() => renderer.toneMappingExposure),
+    env: safeNum(() => ('environmentIntensity' in scene ? scene.environmentIntensity : null)),
+    sun: lights.sun ? lights.sun.intensity : null,
+    hemi: lights.hemi ? lights.hemi.intensity : null,
+    bloom: bloomPass ? { strength: bloomPass.strength, threshold: bloomPass.threshold, radius: bloomPass.radius } : null,
+    ssao: ssaoPass ? ssaoPass.enabled : null,
+    tier: typeof api.quality === 'function' ? api.quality() : null,
+    enabled,
+  });
+  try { if (typeof window !== 'undefined') window.ONFOOT_FX = api; } catch (_) {}
+
   return api;
+
+  function safeNum(fn) { try { return fn(); } catch (_) { return null; } }
 
   // ---- tiny logger (never throws, easy to silence via opts.quiet) ----------
   function warn(msg, err) {

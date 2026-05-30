@@ -94,38 +94,42 @@ export function buildBank(THREE, scene, opts = {}) {
   };
 
   // ============================================================
-  // 1) PODIUM + FRONT STEPS  (front face is +Z)
+  // 1) GROUND-LEVEL BASE + FLAT ENTRANCE  (front face is +Z)
   // ============================================================
-  // The whole building sits on a low podium of height STEP_BANK. The interior
-  // floor is at podium top so the player effectively steps up as they enter.
-  const podium = add(group, new THREE.BoxGeometry(W + 1.4, STEP_BANK, D + 1.0), stoneDark,
-    0, STEP_BANK / 2, 0);
-  podium.receiveShadow = true;
+  // PHYSICS: the interior floor sits at y=0 (ground level), exactly like every
+  // town building, so the player walks straight in through the door without any
+  // vertical step to phase through. (An elevated podium used to put the floor at
+  // ~1.28 while the player stayed pinned at y=0, which read as "walking through
+  // the wall into the bank" — there is no step-up collision in the host.)
+  // The grandeur now comes from the colonnade + pediment + sign, not elevation.
 
-  // Wide front steps, each a shrinking slab, marching out in +Z from the podium.
-  const stepsGroup = new THREE.Group();
-  group.add(stepsGroup);
-  const frontPodiumZ = HALF_D;   // +Z face of the podium
-  for (let i = 0; i < STEP_COUNT; i++) {
-    const sH = STEP_BANK - i * STEP_RISE;               // each step is a slab to ground
-    const sZ = frontPodiumZ + (i + 0.5) * STEP_DEPTH;   // marching outward
-    const sW = W + 1.4 - i * 0.6;                        // slightly narrowing
-    add(stepsGroup, new THREE.BoxGeometry(sW, sH, STEP_DEPTH + 0.02), marbleWarm,
-      0, sH / 2, sZ);
-  }
-  // flanking cheek-walls / plinths on either side of the stair
+  // a flush stone stylobate (thin base slab, footprint + small overhang). Only
+  // 0.12 tall, so a player standing on it at y=0 has imperceptible foot overlap.
+  const stylobate = add(group, new THREE.BoxGeometry(W + 1.6, 0.12, D + 1.2), stoneDark,
+    0, 0.06, 0);
+  stylobate.receiveShadow = true;
+
+  // a flat entrance landing fanning out in +Z (two cosmetic colour bands, flush
+  // to the ground — purely visual, nothing to climb).
+  const frontPodiumZ = HALF_D;   // +Z face of the building body (kept for col/sign math)
+  add(group, new THREE.BoxGeometry(W + 1.0, 0.06, 3.2), marbleWarm,
+    0, 0.03, frontPodiumZ + 1.7, { noShadow: true });
+  add(group, new THREE.BoxGeometry(W - 2.0, 0.08, 1.6), trim,
+    0, 0.04, frontPodiumZ + 0.9, { noShadow: true });
+
+  // flanking decorative plinths + ball finials at the front corners (ground
+  // anchored, well outside the door path so they never block the walk-in).
   for (const sx of [-1, 1]) {
-    add(stepsGroup, new THREE.BoxGeometry(1.2, STEP_BANK + 0.7, STEPS_TOTAL_Z + 0.6), stoneDark,
-      sx * (HALF_W + 0.1), (STEP_BANK + 0.7) / 2, frontPodiumZ + STEPS_TOTAL_Z / 2);
-    // ornamental ball finial on each cheek-wall
-    add(stepsGroup, new THREE.SphereGeometry(0.55, 14, 10), trim,
-      sx * (HALF_W + 0.1), STEP_BANK + 0.7 + 0.45, frontPodiumZ + 0.4);
+    add(group, new THREE.BoxGeometry(1.2, 1.5, 1.2), stoneDark,
+      sx * (HALF_W + 0.4), 0.75, frontPodiumZ + 0.6);
+    add(group, new THREE.SphereGeometry(0.5, 14, 10), trim,
+      sx * (HALF_W + 0.4), 1.5 + 0.4, frontPodiumZ + 0.6);
   }
 
   // ============================================================
   // 2) MAIN WALLS — side (X) + back (-Z), plus a FRONT wall split by the doorway
   // ============================================================
-  const floorY = STEP_BANK;                       // interior floor level
+  const floorY = 0;                               // interior floor at ground level (see section 1)
   const wallTopY = floorY + WALL_H;               // top of the side/back walls
 
   // interior floor slab (receives shadows of columns/pediment)

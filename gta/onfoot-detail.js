@@ -499,6 +499,19 @@ export function buildWorldDetail(THREE, scene, opts = {}) {
   for (const lz of uniq) addLaneDashes(lz, 'x', -(BOUND - 4), BOUND - 4);
 
   // ============================================================
+  // OPTIMIZE — collapse the hundreds of static prop/paint meshes into a handful
+  // of InstancedMesh batches (one draw call per geometry+material pair). All the
+  // dressing is static and already shares geometries/materials, so this is a big
+  // draw-call win (≈ 860 → ~70) with zero visual change. Defensive: any failure
+  // just leaves the plain meshes in place.
+  // ============================================================
+  let drawsBefore = 0, drawsAfter = 0;
+  if (opts.instance !== false) {
+    try { const r = instancifyStatics(THREE, root); drawsBefore = r.before; drawsAfter = r.after; }
+    catch (e) { try { console.warn('[worldDetail] instancing skipped', e); } catch (_) {} }
+  }
+
+  // ============================================================
   // FINALISE — one add to the scene; return the handle.
   // ============================================================
   scene.add(root);
@@ -509,8 +522,59 @@ export function buildWorldDetail(THREE, scene, opts = {}) {
     counts: { ...counts },
     seed: opts.seed != null ? opts.seed : 0x57DE7A11,
     bound: BOUND,
+    drawsBefore, drawsAfter,
   };
   return root;
+}
+
+// ------------------------------------------------------------
+// instancifyStatics — turn a tree of static single-material Meshes into a small
+// set of InstancedMesh batches keyed by (geometry, material). World matrices are
+// baked into the instances, so the look is byte-identical; only the draw-call
+// count drops. Buckets with a single member are left as plain meshes (nothing to
+// gain). Frustum culling is disabled per batch because an InstancedMesh culls by
+// the BASE geometry's bounds, not the spread of its instances — without this,
+// props spread across the map would wrongly vanish when the origin prop is
+// off-screen. (One always-drawn batch is far cheaper than the meshes it replaces.)
+// Returns { before, after } draw-call counts for reporting.
+// ------------------------------------------------------------
+function instancifyStatics(THREE, root) {
+  if (!THREE.InstancedMesh) return { before: 0, after: 0 };
+  root.updateMatrixWorld(true);
+  const buckets = new Map();          // key -> { geo, mat, items:[Mesh] }
+  let before = 0;
+  root.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh || Array.isArray(o.material) || !o.geometry || !o.material) return;
+    before++;
+    const key = o.geometry.uuid + '|' + o.material.uuid;
+    let b = buckets.get(key);
+    if (!b) { b = { geo: o.geometry, mat: o.material, items: [] }; buckets.set(key, b); }
+    b.items.push(o);
+  });
+
+  let after = 0;
+  const m4 = new THREE.Matrix4();
+  for (const b of buckets.values()) {
+    if (b.items.length < 2) { after++; continue; }   // leave singletons as-is
+    const inst = new THREE.InstancedMesh(b.geo, b.mat, b.items.length);
+    inst.castShadow = b.items.some((m) => m.castShadow);
+    inst.receiveShadow = b.items.some((m) => m.receiveShadow);
+    inst.frustumCulled = false;
+    for (let i = 0; i < b.items.length; i++) {
+      b.items[i].updateWorldMatrix(true, false);
+      inst.setMatrixAt(i, b.items[i].matrixWorld);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    root.add(inst);
+    after++;
+    for (const m of b.items) m.removeFromParent();
+  }
+  // sweep up now-empty prop Groups so the tree stays tidy (purely cosmetic)
+  const empties = [];
+  root.traverse((o) => { if (o !== root && o.isGroup && o.children.length === 0) empties.push(o); });
+  for (const g of empties) g.removeFromParent();
+
+  return { before, after };
 }
 
 export default buildWorldDetail;
