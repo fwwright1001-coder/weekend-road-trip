@@ -98,6 +98,7 @@ let actx = null;
 function gunSound() {
   try {
     if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();   // recover from autoplay/tab-visibility suspension
     const t = actx.currentTime;
     // short noise burst + low thump
     const buf = actx.createBuffer(1, 1024, actx.sampleRate);
@@ -550,12 +551,15 @@ function update(dt) {
   resizeIfNeeded();
 
   // --- player movement relative to camera yaw ---
-  _fwd.set(Math.sin(yaw), 0, Math.cos(yaw));            // forward (toward where we look, on XZ)
-  _right.set(_fwd.z, 0, -_fwd.x);                       // right-hand strafe
+  // The camera looks toward +_fwd (see camera block below), so forward = +_fwd
+  // and screen-right = +_right. _right is _fwd rotated +90deg about Y so that
+  // {_right, up, _fwd} matches the camera basis (W into screen, D screen-right).
+  _fwd.set(Math.sin(yaw), 0, Math.cos(yaw));            // camera horizontal forward (into screen)
+  _right.set(-Math.cos(yaw), 0, Math.sin(yaw));         // camera-right (screen right)
   const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? RUN : WALK;
   let mx = 0, mz = 0;
-  if (keys.has('KeyW') || keys.has('ArrowUp')) { mx -= _fwd.x; mz -= _fwd.z; }
-  if (keys.has('KeyS') || keys.has('ArrowDown')) { mx += _fwd.x; mz += _fwd.z; }
+  if (keys.has('KeyW') || keys.has('ArrowUp')) { mx += _fwd.x; mz += _fwd.z; }
+  if (keys.has('KeyS') || keys.has('ArrowDown')) { mx -= _fwd.x; mz -= _fwd.z; }
   if (keys.has('KeyA') || keys.has('ArrowLeft')) { mx -= _right.x; mz -= _right.z; }
   if (keys.has('KeyD') || keys.has('ArrowRight')) { mx += _right.x; mz += _right.z; }
   const ml = Math.hypot(mx, mz);
