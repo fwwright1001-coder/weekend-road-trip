@@ -31,11 +31,14 @@
       <div id="foot-crosshair" class="hidden" aria-hidden="true"></div>
       <div id="foot-hud" class="hidden">
         <div id="foot-toast" class="hidden"></div>
-        <div class="foot-stats">
+        <div class="foot-stats" id="foot-stats-foot">
           <div class="foot-stat"><span class="foot-label">AMMO</span><b id="foot-ammo">12 / 12</b></div>
           <div class="foot-stat"><span class="foot-label">DOWNED</span><b id="foot-kills">0</b></div>
         </div>
-        <div class="foot-controls">WASD move · MOUSE look · CLICK shoot · R reload · SPACE jump · SHIFT run · E by car to leave</div>
+        <div class="foot-stats hidden" id="foot-stats-drive">
+          <div class="foot-stat"><span class="foot-label">MPH</span><b id="foot-speed">0</b></div>
+        </div>
+        <div class="foot-controls">WASD move · MOUSE look · CLICK shoot · R reload · SPACE jump · SHIFT run · E steal/exit car · P quit</div>
       </div>
 
       <!-- ============ HUD overlay (visible during gameplay) ============ -->

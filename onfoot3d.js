@@ -45,6 +45,21 @@ const NPC_COUNT = 16;
 const BOUND = 58;            // half-size of the walkable town square
 const RESPAWN_DELAY = 4.0;   // seconds a downed ped stays before a new one strolls in
 
+// ---- driving (arcade, GTA-ish) ---------------------------------------------
+const CAR_ACCEL = 26;        // throttle accel (units/s^2)
+const CAR_BRAKE = 42;        // braking decel while moving forward
+const CAR_REVERSE_ACCEL = 16;// reverse accel once stopped
+const CAR_MAX_SPEED = 36;    // forward top speed (units/s)
+const CAR_MAX_REVERSE = -12; // reverse top speed
+const CAR_DRAG = 0.6;        // rolling resistance under throttle (per s)
+const CAR_COAST_DRAG = 1.4;  // engine braking when off throttle
+const CAR_HANDBRAKE_DRAG = 4.0; // Space: scrub speed hard
+const CAR_TURN = 2.3;        // steering rate (rad/s) at full authority
+const CAR_RADIUS = 1.9;      // collision pad vs buildings
+const CAR_CAM_DIST = 9.5;    // chase-cam distance behind the car
+const CAR_CAM_HEIGHT = 4.6;  // chase-cam height
+const RUN_OVER_SPEED = 5;    // min speed to knock down a ped you drive into
+
 // ---- public handle ---------------------------------------------------------
 const OF = {
   active: false,
@@ -80,7 +95,9 @@ const player = {
 
 const peds = [];             // {mesh, mat[], pos, vel, target, state, t, dead, fall}
 const aabbs = [];            // building footprints {minX,maxX,minZ,maxZ}
-let carMesh = null;          // the parked convertible (exit prompt anchor)
+const vehicles = [];         // {mesh, wheels[], pos, heading, speed, occupied}
+let mode = 'foot';           // 'foot' | 'drive'
+let playerVehicle = null;    // the car you're currently driving, or null
 
 // tracer / muzzle visuals
 let tracer, tracerT = 0, muzzleFlash, flashT = 0;
@@ -90,7 +107,7 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vect
 const _fwd = new THREE.Vector3(), _right = new THREE.Vector3();
 
 // HUD elements (created/looked-up lazily)
-let hudEl, ammoEl, killsEl, promptEl, toastEl, crosshairEl;
+let hudEl, ammoEl, killsEl, promptEl, toastEl, crosshairEl, speedEl, footStatsEl, driveStatsEl;
 let kills = 0;
 
 // tiny self-contained audio for the gun (never touches game.js's audio)
@@ -173,26 +190,52 @@ function buildBuilding(rng) {
   return { mesh: g, w, d };
 }
 
-// The parked red convertible (simplified from render3d's buildCar). Faces -Z.
-function buildParkedCar() {
+// A drivable car (simplified from render3d's buildCar). Faces -Z at heading 0
+// per the convention that +Z is "forward" — but the driving model integrates
+// position along (sin h, cos h), so we orient the body so its nose points that
+// way: the model's nose is -Z, so we add the wheels and let rotation.y = heading
+// spin the whole group (nose ends up along +forward; cosmetic only).
+// Returns { group, wheels[] }. wheels[0..1] front, [2..3] rear (for steer/spin).
+function buildCarMesh(bodyColor) {
   const g = new THREE.Group();
-  const red = new THREE.MeshPhysicalMaterial({ color: 0xd8392e, roughness: 0.32, metalness: 0.0, clearcoat: 0.85, clearcoatRoughness: 0.25 });
+  const body = new THREE.MeshPhysicalMaterial({ color: bodyColor, roughness: 0.34, metalness: 0.0, clearcoat: 0.8, clearcoatRoughness: 0.25 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x1b1b20, roughness: 0.7 });
   const chrome = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.85, roughness: 0.3 });
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.6, 4.1), red); hull.position.y = 0.62;
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.32, 1.5), red); hood.position.set(0, 0.86, -1.25);
-  const rear = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.4, 1.2), red); rear.position.set(0, 0.9, 1.35);
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fc4d8, roughness: 0.1, transparent: true, opacity: 0.5 });
+  const tail = new THREE.MeshStandardMaterial({ color: 0xff3838, emissive: 0xcc1010, emissiveIntensity: 1.1, roughness: 0.4 });
+  const lamp = new THREE.MeshStandardMaterial({ color: 0xfff3c0, emissive: 0xfff0b0, emissiveIntensity: 1.2 });
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.6, 4.1), body); hull.position.y = 0.62;
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.32, 1.5), body); hood.position.set(0, 0.86, -1.25);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.62, 1.7), body); cabin.position.set(0, 1.12, 0.2);
+  const rear = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.4, 1.2), body); rear.position.set(0, 0.9, 1.35);
   const sill = new THREE.Mesh(new THREE.BoxGeometry(2.08, 0.28, 3.4), dark); sill.position.y = 0.4;
-  const tub = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 1.9), dark); tub.position.set(0, 0.95, 0.15);
-  const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.12, 0.12), chrome); barTop.position.set(0, 1.55, 0.95);
-  g.add(sill, hull, hood, rear, tub, barTop);
-  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.38, 18); wheelGeo.rotateZ(Math.PI / 2);
+  const wind = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.5, 0.08), glass); wind.position.set(0, 1.32, -0.66); wind.rotation.x = -0.35;
+  const tl1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.08), tail); tl1.position.set(-0.6, 0.78, 2.06);
+  const tl2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.08), tail); tl2.position.set(0.6, 0.78, 2.06);
+  const hl1 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), lamp); hl1.position.set(-0.62, 0.78, -2.06);
+  const hl2 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), lamp); hl2.position.set(0.62, 0.78, -2.06);
+  g.add(sill, hull, hood, cabin, rear, wind, tl1, tl2, hl1, hl2);
+  // wheels — front pair (-Z) then rear pair (+Z); the cylinder axis is along X so it rolls on Z
+  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.38, 16); wheelGeo.rotateZ(Math.PI / 2);
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x111116, roughness: 0.9 });
+  const wheels = [];
   for (const [x, z] of [[-1.06, -1.4], [1.06, -1.4], [-1.06, 1.45], [1.06, 1.45]]) {
-    const w = new THREE.Mesh(wheelGeo, tireMat); w.position.set(x, 0.5, z); g.add(w);
+    const w = new THREE.Mesh(wheelGeo, tireMat); w.position.set(x, 0.5, z); g.add(w); wheels.push(w);
   }
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return g;
+  return { group: g, wheels };
+}
+
+const CAR_COLORS = [0xd8392e, 0x2f6f8f, 0x394150, 0xb0b4ba, 0x2f7a45, 0xc9a24f, 0x7a3a8f, 0x202428];
+// Build a car, register it as a drivable vehicle at (x,z) facing `heading`.
+function spawnVehicle(x, z, heading, color) {
+  const { group, wheels } = buildCarMesh(color);
+  group.position.set(x, 0, z);
+  group.rotation.y = heading;
+  scene.add(group);
+  const v = { mesh: group, wheels, pos: new THREE.Vector3(x, 0, z), heading, speed: 0, occupied: false };
+  vehicles.push(v);
+  return v;
 }
 
 // ============================================================
@@ -288,11 +331,14 @@ function ensureInit() {
     }
   }
 
-  // the parked convertible at the plaza
-  carMesh = buildParkedCar();
-  carMesh.position.set(-1.2, 0, 5.5);
-  carMesh.rotation.y = 0.25;
-  scene.add(carMesh);
+  // drivable cars: the red convertible at the plaza + parked cars on the streets
+  // (x=±12 / z=±12 sit in the cross-streets between the building blocks)
+  spawnVehicle(-1.2, 5.5, 0.2, 0xd8392e);   // your convertible, beside spawn
+  spawnVehicle(12, 2, Math.PI / 2, 0x2f6f8f);
+  spawnVehicle(-12, -4, 0, 0x394150);
+  spawnVehicle(2, 13, Math.PI, 0x2f7a45);
+  spawnVehicle(-12, 14, Math.PI / 2, 0xc9a24f);
+  spawnVehicle(12, -14, 0, 0x7a3a8f);
 
   // the player
   player.mesh = buildPerson({ skin: 0xd9a679, shirt: 0x2f6f8f, pants: 0x2b2b33, hair: 0x3a2a1a }, true);
@@ -390,10 +436,16 @@ function onKeyDown(e) {
   e.stopImmediatePropagation();
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   keys.add(e.code);
-  if (e.code === 'Space' && player.grounded) { player.vy = JUMP_V; player.grounded = false; }
-  if (e.code === 'KeyR') reload();
-  if (e.code === 'KeyE' && nearCar()) exit();           // get back in the car
-  if (e.code === 'KeyP') exit();                          // emergency leave
+  if (e.code === 'KeyE') {                                // enter / exit a car
+    if (mode === 'drive') exitVehicle();
+    else { const v = nearestVehicle(3.8); if (v) enterVehicle(v); }
+    return;
+  }
+  if (e.code === 'KeyP') { exit(); return; }             // leave the whole on-foot mode
+  if (mode === 'foot') {
+    if (e.code === 'Space' && player.grounded) { player.vy = JUMP_V; player.grounded = false; }
+    if (e.code === 'KeyR') reload();
+  }
 }
 function onKeyUp(e) {
   if (!OF.active) return;
@@ -401,7 +453,7 @@ function onKeyUp(e) {
   keys.delete(e.code);
 }
 function onMouseDown(e) {
-  if (!OF.active) return;
+  if (!OF.active || mode !== 'foot') return;             // no shooting from the driver's seat
   if (!locked) { canvas.requestPointerLock(); return; }
   if (e.button === 0) fire();
 }
@@ -413,13 +465,23 @@ function onMouseMove(e) {
 }
 function onPointerLockChange() { locked = document.pointerLockElement === canvas; }
 
-function nearCar() { return carMesh && player.pos.distanceTo(carMesh.position) < 3.4; }
+// nearest un-occupied car within maxDist of the player on foot
+function nearestVehicle(maxDist) {
+  let best = null, bd = maxDist;
+  for (const v of vehicles) {
+    if (v.occupied) continue;
+    const d = Math.hypot(v.pos.x - player.pos.x, v.pos.z - player.pos.z);
+    if (d < bd) { bd = d; best = v; }
+  }
+  return best;
+}
 
 function reload() {
   if (player.reloadT <= 0 && player.ammo < AMMO_MAX) { player.reloadT = RELOAD_TIME; }
 }
 
 function fire() {
+  if (mode !== 'foot') return;
   if (player.fireT > 0 || player.reloadT > 0) return;
   if (player.ammo <= 0) { reload(); return; }
   player.ammo--; player.fireT = FIRE_COOLDOWN;
@@ -493,12 +555,15 @@ function enter() {
     canvas.classList.remove('hidden');
     if (hudEl) hudEl.classList.remove('hidden');
 
-    // reset player to the plaza next to the car
+    // reset to on-foot at the plaza next to the car (clear any prior drive state)
+    mode = 'foot'; playerVehicle = null;
+    if (player.mesh) player.mesh.visible = true;
+    for (const v of vehicles) { v.occupied = false; v.speed = 0; v.mesh.rotation.z = 0; }
     player.pos.set(2.4, 0, 6); player.vy = 0; player.grounded = true;
     player.ammo = AMMO_MAX; player.reloadT = 0; player.fireT = 0;
     yaw = Math.PI; pitch = -0.1; recoil = 0; kills = 0;
     keys.clear();
-    showToast('You step out of the convertible. The town is yours.<br><b>Click</b> to look around · <b>WASD</b> walk · <b>Click</b> shoot · <b>E</b> by the car to leave');
+    showToast('You step out of the convertible. The town is yours.<br><b>Click</b> to look around &middot; <b>WASD</b> walk &middot; <b>Click</b> shoot &middot; <b>E</b> to steal any car');
     updateHud();
 
     lastT = 0;
@@ -549,11 +614,21 @@ function loop(time) {
 
 function update(dt) {
   resizeIfNeeded();
+  if (mode === 'drive') updateDriving(dt);
+  else updateOnFoot(dt);
 
+  // pedestrians live whether you're on foot or cruising past
+  for (const p of peds) updatePed(p, dt);
+
+  // visual timers (tracer / muzzle flash)
+  if (tracerT > 0) { tracerT -= dt; if (tracerT <= 0) tracer.material.opacity = 0; }
+  if (flashT > 0) { flashT -= dt; if (flashT <= 0) muzzleFlash.material.opacity = 0; }
+}
+
+function updateOnFoot(dt) {
   // --- player movement relative to camera yaw ---
   // The camera looks toward +_fwd (see camera block below), so forward = +_fwd
-  // and screen-right = +_right. _right is _fwd rotated +90deg about Y so that
-  // {_right, up, _fwd} matches the camera basis (W into screen, D screen-right).
+  // and screen-right = +_right (matches the camera basis: W into screen, D right).
   _fwd.set(Math.sin(yaw), 0, Math.cos(yaw));            // camera horizontal forward (into screen)
   _right.set(-Math.cos(yaw), 0, Math.sin(yaw));         // camera-right (screen right)
   const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? RUN : WALK;
@@ -584,23 +659,112 @@ function update(dt) {
   if (player.reloadT > 0) { player.reloadT -= dt; if (player.reloadT <= 0) { player.ammo = AMMO_MAX; updateHud(); } }
   if (player.fireT > 0) player.fireT -= dt;
 
-  // --- pedestrians ---
-  for (const p of peds) updatePed(p, dt);
-
   // --- camera: third-person orbit behind the player ---
   const cz = Math.cos(pitch);
   _dir.set(Math.sin(yaw) * cz, Math.sin(pitch), Math.cos(yaw) * cz); // look direction
   const head = _v.copy(player.pos).setY(EYE);
   camera.position.copy(head).addScaledVector(_dir, -CAM_DIST);       // behind the head
   camera.position.y += 0.4 + recoil * 2;
-  // keep camera from clipping into the ground
   if (camera.position.y < 0.6) camera.position.y = 0.6;
   camera.lookAt(head.x + _dir.x, head.y + _dir.y + recoil, head.z + _dir.z);
   recoil = Math.max(0, recoil - dt * 0.6);
+}
 
-  // --- visual timers ---
-  if (tracerT > 0) { tracerT -= dt; if (tracerT <= 0) tracer.material.opacity = 0; }
-  if (flashT > 0) { flashT -= dt; if (flashT <= 0) muzzleFlash.material.opacity = 0; }
+// ============================================================
+// DRIVING — arcade car physics + chase cam
+// ============================================================
+function updateDriving(dt) {
+  const v = playerVehicle;
+  const throttle = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+  const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
+  const handbrake = keys.has('Space');
+
+  // longitudinal: throttle, brake, reverse
+  if (throttle > 0) v.speed += CAR_ACCEL * dt;
+  else if (throttle < 0) {
+    if (v.speed > 0.3) v.speed -= CAR_BRAKE * dt;       // brake while rolling forward
+    else v.speed -= CAR_REVERSE_ACCEL * dt;             // then reverse
+  }
+  // resistance: handbrake > engine-braking (coasting) > rolling
+  const drag = handbrake ? CAR_HANDBRAKE_DRAG : (throttle === 0 ? CAR_COAST_DRAG : CAR_DRAG);
+  v.speed -= v.speed * drag * dt;
+  v.speed = Math.max(CAR_MAX_REVERSE, Math.min(CAR_MAX_SPEED, v.speed));
+  if (Math.abs(v.speed) < 0.03) v.speed = 0;
+
+  // steering authority grows with speed and flips in reverse (like real cars)
+  const steerAuth = Math.max(-1, Math.min(1, v.speed / 6));
+  v.heading += steer * CAR_TURN * steerAuth * dt;
+
+  // integrate position along heading; bleed speed on a wall hit
+  const fx = Math.sin(v.heading), fz = Math.cos(v.heading);
+  const px = v.pos.x, pz = v.pos.z;
+  v.pos.x += fx * v.speed * dt;
+  v.pos.z += fz * v.speed * dt;
+  resolveCollision(v.pos, CAR_RADIUS);
+  const moved = Math.hypot(v.pos.x - px, v.pos.z - pz);
+  const intended = Math.abs(v.speed) * dt;
+  if (intended > 0.05 && moved < intended * 0.5) v.speed *= 0.25;  // crunched into a building
+
+  // run over any live ped you plough into at speed
+  if (Math.abs(v.speed) > RUN_OVER_SPEED) {
+    for (const p of peds) {
+      if (p.dead) continue;
+      if (Math.hypot(p.pos.x - v.pos.x, p.pos.z - v.pos.z) < 1.7) { killPed(p); startleNearby(); }
+    }
+  }
+
+  // apply to the mesh: position, heading, a little body roll, wheel spin + steer
+  v.mesh.position.copy(v.pos);
+  v.mesh.rotation.y = v.heading;
+  v.mesh.rotation.z = lerpNum(v.mesh.rotation.z, -steer * steerAuth * 0.06, 0.2);
+  for (let i = 0; i < v.wheels.length; i++) {
+    v.wheels[i].rotation.x -= v.speed * dt * 0.6;        // roll
+    if (i < 2) v.wheels[i].rotation.y = steer * 0.4;     // front wheels visibly steer
+  }
+
+  // chase camera: smoothly trail behind the car along its heading
+  const target = _v.copy(v.pos); target.y += 1.3;
+  const desired = _v2.set(v.pos.x - fx * CAR_CAM_DIST, CAR_CAM_HEIGHT, v.pos.z - fz * CAR_CAM_DIST);
+  camera.position.lerp(desired, 1 - Math.pow(0.0015, dt));   // frame-rate-independent smoothing
+  if (camera.position.y < 1.2) camera.position.y = 1.2;
+  camera.lookAt(target.x + fx * 4, target.y, target.z + fz * 4);
+
+  updateHud();
+}
+
+// ============================================================
+// ENTER / EXIT A VEHICLE
+// ============================================================
+function enterVehicle(v) {
+  mode = 'drive';
+  playerVehicle = v;
+  v.occupied = true;
+  player.mesh.visible = false;
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+  if (crosshairEl) crosshairEl.classList.add('hidden');
+  // snap the camera straight behind the car so there's no swoop
+  const fx = Math.sin(v.heading), fz = Math.cos(v.heading);
+  camera.position.set(v.pos.x - fx * CAR_CAM_DIST, CAR_CAM_HEIGHT, v.pos.z - fz * CAR_CAM_DIST);
+  showToast('You jack the car. <b>W/S</b> drive &middot; <b>A/D</b> steer &middot; <b>SPACE</b> handbrake &middot; <b>E</b> get out');
+  updateHud();
+}
+function exitVehicle() {
+  const v = playerVehicle;
+  if (!v) { mode = 'foot'; return; }
+  v.speed = 0;
+  v.occupied = false;
+  v.mesh.rotation.z = 0;
+  // step out beside the car (door side), then shove clear of any wall
+  const sx = Math.cos(v.heading), sz = -Math.sin(v.heading);   // car's side unit vector
+  player.pos.set(v.pos.x + sx * 2.4, 0, v.pos.z + sz * 2.4);
+  resolveCollision(player.pos, PLAYER_R);
+  player.vy = 0; player.grounded = true; player.facing = v.heading;
+  player.mesh.visible = true;
+  player.mesh.position.copy(player.pos);
+  playerVehicle = null;
+  mode = 'foot';
+  if (crosshairEl) crosshairEl.classList.remove('hidden');
+  updateHud();
 }
 
 function updatePed(p, dt) {
@@ -673,12 +837,24 @@ function ensureHud() {
   promptEl = document.getElementById('foot-prompt');
   toastEl = document.getElementById('foot-toast');
   crosshairEl = document.getElementById('foot-crosshair');
+  speedEl = document.getElementById('foot-speed');
+  footStatsEl = document.getElementById('foot-stats-foot');
+  driveStatsEl = document.getElementById('foot-stats-drive');
 }
 function updateHud() {
-  if (!ammoEl) return;
-  ammoEl.textContent = player.reloadT > 0 ? 'RELOADING…' : `${player.ammo} / ${AMMO_MAX}`;
-  if (killsEl) killsEl.textContent = String(kills);
-  if (crosshairEl) crosshairEl.classList.toggle('hidden', !OF.active);
+  if (!hudEl) return;
+  if (mode === 'drive') {
+    if (footStatsEl) footStatsEl.classList.add('hidden');
+    if (driveStatsEl) driveStatsEl.classList.remove('hidden');
+    if (speedEl && playerVehicle) speedEl.textContent = String(Math.round(Math.abs(playerVehicle.speed) * 3.1));
+    if (crosshairEl) crosshairEl.classList.add('hidden');
+  } else {
+    if (driveStatsEl) driveStatsEl.classList.add('hidden');
+    if (footStatsEl) footStatsEl.classList.remove('hidden');
+    if (ammoEl) ammoEl.textContent = player.reloadT > 0 ? 'RELOADING…' : `${player.ammo} / ${AMMO_MAX}`;
+    if (killsEl) killsEl.textContent = String(kills);
+    if (crosshairEl) crosshairEl.classList.toggle('hidden', !OF.active);
+  }
 }
 let toastT = 0;
 function showToast(html) {
@@ -713,6 +889,7 @@ function lerpAngle(a, b, t) {
   if (d < -Math.PI) d += Math.PI * 2;
   return a + d * t;
 }
+function lerpNum(a, b, t) { return a + (b - a) * t; }
 
 // ============================================================
 // WIN-SCREEN WATCHER — reveal the easter egg only after a real finish
