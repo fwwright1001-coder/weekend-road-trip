@@ -27,9 +27,9 @@ the existing on-foot mode with a folder copy and a handful of small edits, so it
 can ship the moment the on-foot foundation is ready — without ever risking the
 base game.
 
-▶ **Play it live:** https://fwwright1001-coder.github.io/weekend-road-trip/gta-sandbox/ *(live once merged to `main`)*
+▶ **Play it live:** https://fwwright1001-coder.github.io/weekend-road-trip/gta-sandbox/
 🕹️ **Run it locally:** `cd gta-sandbox && python -m http.server 8080` → http://localhost:8080/
-💻 **Repo:** https://github.com/fwwright1001-coder/weekend-road-trip/tree/feature/gta-sandbox-layer/gta-sandbox
+💻 **Repo:** https://github.com/fwwright1001-coder/weekend-road-trip/tree/main/gta-sandbox
 
 ---
 
