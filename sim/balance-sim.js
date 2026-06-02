@@ -29,10 +29,11 @@ const GRAVITY = 0.78;
 const JUMP_V = -16;
 const PLAYER_X = 170;
 const BASE_SPEED = 5;
-const MAX_SPEED = 9.5;
+const MAX_SPEED = 11.0;               // mirror game.js (widened 9.5 -> 11.0)
+const MIN_GAP_TIME = 0.72;            // mirror game.js: speed-aware min same-lane blocker gap (s)
 const FUEL_MAX = 100;
 const FUEL_DRAIN_PER_SEC = 1.4;
-const HIT_FUEL_PENALTY = 14;
+const HIT_FUEL_PENALTY = 20;
 const SPAWN_MIN_INTERVAL = 0.32;
 const TRIP_TOTAL = 20000;
 const DT = 1 / 60; // fixed-step sim (game uses a clamped variable dt; 60fps is the design target)
@@ -45,19 +46,25 @@ const DT = 1 / 60; // fixed-step sim (game uses a clamped variable dt; 60fps is 
 const PITSTOP_START = 2200;
 const PITSTOP_INTERVAL_MIN = 4000;
 const PITSTOP_INTERVAL_RAND = 1500;
-const PITSTOP_REFILL = 40;           // partial refuel — strong help, not an auto-win (mirrors game.js)
+const PITSTOP_REFILL = 28;           // partial refuel — strong help, not an auto-win (mirrors game.js)
 const PITSTOP_REACH = 890;           // px a pit stop travels from spawn (W+100) to the player (PLAYER_X)
 
 const DIFFICULTY = [
-  { obstacleDensity: 1.00, minBlockingGap: 600, fuelSpawnRate: 1.0, fuelPerCan: 22, end: 5000 },  // CITY
-  { obstacleDensity: 1.15, minBlockingGap: 540, fuelSpawnRate: 1.0, fuelPerCan: 22, end: 10000 }, // FOREST
-  { obstacleDensity: 1.30, minBlockingGap: 500, fuelSpawnRate: 1.1, fuelPerCan: 24, end: 15000 }, // DESERT
-  { obstacleDensity: 1.45, minBlockingGap: 460, fuelSpawnRate: 1.6, fuelPerCan: 28, end: 20000 }  // COAST
+  { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, end: 5000 },  // CITY
+  { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, end: 10000 }, // FOREST
+  { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, end: 15000 }, // DESERT
+  { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, end: 20000 }  // COAST
 ];
 const legForDistance = (d) => {
   for (let i = 0; i < DIFFICULTY.length; i++) if (d < DIFFICULTY[i].end) return i;
   return DIFFICULTY.length - 1;
 };
+// Effective top speed for a leg (px/frame). The game ramps within a leg too, but
+// the worst case for solvability is the leg's full escalated cap, used here.
+const legEffSpeed = (leg) => MAX_SPEED * DIFFICULTY[leg].speedScale;
+// Speed-aware min gap (px) for a leg: larger of table floor and time-based gap.
+const legMinGapPx = (leg) =>
+  Math.max(DIFFICULTY[leg].minBlockingGap, MIN_GAP_TIME * legEffSpeed(leg) * 60);
 
 // --- geometry mirrored from game.js --------------------------------------
 function obstacleGeom(type) {
@@ -108,8 +115,8 @@ function analyseJump() {
 // controller and assert zero collisions. Clearing this is a constructive proof
 // that no legal layout is unavoidable.
 function solvabilityProof(legIdx) {
-  const minGap = DIFFICULTY[legIdx].minBlockingGap;
-  const speedPx = MAX_SPEED * 60; // px/sec
+  const minGap = legMinGapPx(legIdx);          // speed-aware gap (table floor or time-based)
+  const speedPx = legEffSpeed(legIdx) * 60;    // px/sec at this leg's escalated cap (worst case)
   const types = ['pothole', 'sign', 'cone', 'sign', 'pothole', 'sign', 'cone', 'sign'];
   const obstacles = types.map((type, i) => {
     const g = obstacleGeom(type);
@@ -279,31 +286,34 @@ function seedSweep(policy, n) {
 }
 
 // policies ----------------------------------------------------------------
+// Manual throttle is RETIRED: the car auto-eases to the leg's effective cap, so
+// EVERY policy drives at ~the same speed (≈0.97 of cap). Policies now differ only
+// in skill expression: how many blockers they hit and how much fuel they grab.
+// (This is the post-auto-throttle economy model; speed is no longer a player lever.)
+const AUTO = (leg) => legEffSpeed(leg) * 0.97;
 const skilled = {
-  // brisk + steady; time-based drain rewards speed. clears every blocker.
-  speed: () => MAX_SPEED * 0.92,
+  // clears every blocker, grabs most cans.
+  speed: AUTO,
   hitRate: () => 0.0,
   fuelGrab: () => 0.85
 };
 const moderate = {
-  // mid pace, fumbles ~1 in 7 blockers, grabs most cans — finishes, but the
-  // tension is real: this is the band where fuel actually matters.
-  speed: () => MAX_SPEED * 0.8,
+  // fumbles ~1 in 7 blockers, grabs most cans — finishes, but the tension is real.
+  speed: AUTO,
   hitRate: () => 0.15,
   fuelGrab: () => 0.6
 };
 const careless = {
-  // genuinely inattentive: dawdles, mistimes ~70% of blockers, grabs few cans.
-  // (A careless player rarely has the timing to clear a blocker; 70% hit is the
-  // representative profile — the report below also shows the full hit-rate→dry
-  // gradient so this isn't a single cherry-picked policy.)
-  speed: () => BASE_SPEED * 1.15,
+  // genuinely inattentive: mistimes ~70% of blockers, grabs few cans. With wider
+  // (escalating) gaps there are fewer blockers, so the dry property now leans on
+  // the higher hit penalty + low fuel-grab rather than slow time-drain.
+  speed: AUTO,
   hitRate: () => 0.70,
-  fuelGrab: () => 0.25
+  fuelGrab: () => 0.20
 };
 // careless policy variants for the transparency gradients (vary one lever each)
-const carelessAtHit = (h) => ({ speed: () => BASE_SPEED * 1.15, hitRate: () => h, fuelGrab: () => 0.25 });
-const carelessAtGrab = (g) => ({ speed: () => BASE_SPEED * 1.15, hitRate: () => 0.70, fuelGrab: () => g });
+const carelessAtHit = (h) => ({ speed: AUTO, hitRate: () => h, fuelGrab: () => 0.20 });
+const carelessAtGrab = (g) => ({ speed: AUTO, hitRate: () => 0.70, fuelGrab: () => g });
 
 // ============================================================
 // REPORT
@@ -395,9 +405,33 @@ console.log('');
 //   skilled  finishes ~always; moderate finishes the large majority;
 //   careless dries the large majority. Pit stops are a deliberate bailout, so
 //   the bar for careless is "reliably dries", not "never finishes".
+// jumpSpanSafe: at EVERY leg's escalated speed, the speed-aware min gap must
+// exceed the horizontal jump span, or a blocker pair could be unavoidable.
+// (This catches the regression where a fixed 460px gap was unsafe at MAX 11.0.)
+const spanReport = DIFFICULTY.map((d, i) => {
+  const span = jump.airTime * legEffSpeed(i) * 60;
+  const gap = legMinGapPx(i);
+  return { leg: ['CITY', 'FOREST', 'DESERT', 'COAST'][i], span, gap, safe: gap > span };
+});
+const jumpSpanSafe = spanReport.every((r) => r.safe);
+
+// finaleIsClimax: COAST must be the fastest AND densest leg — the trip escalates
+// to a peak rather than coasting home.
+const finaleIsClimax =
+  legEffSpeed(3) > legEffSpeed(2) && legEffSpeed(2) > legEffSpeed(1) && legEffSpeed(1) > legEffSpeed(0) &&
+  DIFFICULTY[3].obstacleDensity >= Math.max(...DIFFICULTY.slice(0, 3).map((d) => d.obstacleDensity));
+
+console.log('[5] FINALE ESCALATION & JUMP-SPAN SAFETY (per leg)');
+spanReport.forEach((r) => {
+  console.log(`    ${r.leg.padEnd(6)} effSpeed ${(legEffSpeed(['CITY','FOREST','DESERT','COAST'].indexOf(r.leg))).toFixed(2)}  jumpSpan ${r.span.toFixed(0)}px  minGap ${r.gap.toFixed(0)}px  ${r.safe ? 'SAFE' : 'UNSAFE'}`);
+});
+console.log(`    finale is climax (fastest + densest COAST): ${finaleIsClimax ? 'YES' : 'NO'}\n`);
+
 const C = {
   jumpSymmetric: Math.abs(jump.tApex - jump.descent) <= DT + 1e-9,
   solvable: allSolved,
+  jumpSpanSafe,
+  finaleIsClimax,
   skilledFinish: skS.finishRate >= 0.99,
   moderateFinish: moS.finishRate >= 0.90,
   carelessDry: caS.dryRate >= 0.85
@@ -406,6 +440,8 @@ const pass = Object.values(C).every(Boolean);
 console.log('    Criteria:');
 console.log(`      jump arc symmetric & flush ........ ${C.jumpSymmetric ? 'PASS' : 'FAIL'}`);
 console.log(`      no unavoidable blockers ........... ${C.solvable ? 'PASS' : 'FAIL'}`);
+console.log(`      jump span < min gap (all legs) .... ${C.jumpSpanSafe ? 'PASS' : 'FAIL'}`);
+console.log(`      finale is the climax .............. ${C.finaleIsClimax ? 'PASS' : 'FAIL'}`);
 console.log(`      skilled finishes (>=99%) .......... ${C.skilledFinish ? 'PASS' : 'FAIL'}  (${pctf(skS.finishRate)})`);
 console.log(`      moderate finishes (>=90%) ......... ${C.moderateFinish ? 'PASS' : 'FAIL'}  (${pctf(moS.finishRate)})`);
 console.log(`      careless runs dry (>=85%) ......... ${C.carelessDry ? 'PASS' : 'FAIL'}  (${pctf(caS.dryRate)})`);

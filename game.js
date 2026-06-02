@@ -51,22 +51,26 @@
   const JUMP_V = -16;
   const PLAYER_X = 170;
   const BASE_SPEED = 5;
-  const MAX_SPEED = 9.5;
-  const SPEED_ACCEL = 0.07;
+  const MAX_SPEED = 11.0;          // widened top end (was 9.5); per-leg speedScale escalates toward it
+  const SPEED_ACCEL = 0.07;        // (retained for reference; manual throttle retired — speed auto-escalates)
   const SPEED_BRAKE = 0.16;
   const SPEED_DRAG = 0.018;
+  const MIN_GAP_TIME = 0.72;       // min seconds between same-lane blockers; the real (speed-aware) gap
+                                   // is max(table px, MIN_GAP_TIME * effSpeed). Exceeds the jump arc
+                                   // (~0.683s) at every leg's escalated speed — see sim/balance-sim.js.
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
   const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (Bot 4 consumes it)
-  const HIT_FUEL_PENALTY = 14;     // per-hit fuel cost. Hits are now always avoidable (see minBlockingGap),
-                                   // so this is a pure skill signal — bumped 12->14 so careless play (many
-                                   // hits) can still run dry even with pit-stop refuels (see BALANCE.md).
+  const HIT_FUEL_PENALTY = 20;     // per-hit fuel cost. Hits are always avoidable (see minBlockingGap), so
+                                   // this is a pure skill signal. Bumped 14->20 alongside the auto-throttle
+                                   // retune: faster trips drain less by time, so hits must carry the stakes
+                                   // (careless play still reliably runs dry — see sim/balance-sim.js).
   const SNACK_POINTS = 50;
   const FUEL_PICKUP_BONUS = 25;
   const FUEL_PICKUP_REFILL = 22;   // default fuel-per-can; per-leg override lives in DIFFICULTY
-  const PITSTOP_REFILL = 40;       // fuel added per pit stop (was a FULL refuel). A full reset made the
-                                   // lose condition unreachable; +40 is still the biggest single fuel
-                                   // pickup + 500 pts, but no longer an auto-win. See BALANCE.md.
+  const PITSTOP_REFILL = 28;       // fuel added per pit stop. Trimmed 40->28 with the auto-throttle retune
+                                   // so pit stops are a strong help, not a careless-player bailout. Still the
+                                   // biggest single fuel pickup + 500 pts, but the lose condition stays real.
   const SPAWN_MIN_INTERVAL = 0.32; // hard floor on seconds between spawn rolls
   const BIOME_BONUS = 500;
 
@@ -199,11 +203,14 @@
   // The COAST row is intentionally the kindest on fuel: the finale should feel
   // like a payoff for a clean run, not a wall. De-clustering (minBlockingGap)
   // plus the fuel bump together fix the "runs dry at ~96%" cliff.
+  //   speedScale      : per-leg pacing multiplier. Effective top speed for a leg
+  //                     is MAX_SPEED * speedScale, ramped within the leg, so the
+  //                     trip ACCELERATES toward COAST — the finale is the climax.
   const DIFFICULTY = [
-    { obstacleDensity: 1.00, minBlockingGap: 600, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // CITY
-    { obstacleDensity: 1.15, minBlockingGap: 540, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // FOREST
-    { obstacleDensity: 1.30, minBlockingGap: 500, fuelSpawnRate: 1.1, fuelPerCan: 24, speedScale: 1.00 }, // DESERT
-    { obstacleDensity: 1.45, minBlockingGap: 460, fuelSpawnRate: 1.6, fuelPerCan: 28, speedScale: 1.00 }  // COAST
+    { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00 }, // CITY
+    { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12 }, // FOREST
+    { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28 }, // DESERT
+    { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45 }  // COAST
   ];
 
   const SCREEN = {
@@ -1521,8 +1528,13 @@
   // naturally thins dense legs instead of queuing an unreachable wall off-screen.
   function tryPlaceObstacle(type, minGap) {
     const o = makeObstacle(type);                 // spawns at x = W + 60
+    // Speed-aware gap: at escalated leg speed a fixed px gap can be tighter than
+    // the jump arc. Enforce the larger of the table floor and a time-based gap
+    // (MIN_GAP_TIME at the leg's effective speed), which provably clears the arc.
+    const effSpeed = MAX_SPEED * legSpeedScale();
+    const gap = Math.max(minGap || 0, MIN_GAP_TIME * effSpeed * 60);
     const prevX = rightmostObstacleX();
-    if (prevX > -Infinity && (o.x - prevX) < (minGap || 0)) return false;
+    if (prevX > -Infinity && (o.x - prevX) < gap) return false;
     state.obstacles.push(o);
     return true;
   }
@@ -1953,6 +1965,18 @@
   function currentDifficulty() {
     currentBiome();
     return DIFFICULTY[state.biomeIdx] || DIFFICULTY[DIFFICULTY.length - 1];
+  }
+  // Effective per-leg speed multiplier, ramped across the leg so each biome
+  // visibly accelerates into the next (no hard speed steps at biome borders).
+  function legSpeedScale() {
+    currentBiome();
+    const i = state.biomeIdx;
+    const scale = DIFFICULTY[i].speedScale;
+    const prevScale = i > 0 ? DIFFICULTY[i - 1].speedScale : scale;
+    const legStart = i === 0 ? 0 : BIOMES[i - 1].end;
+    const legEnd = BIOMES[i].end;
+    const f = Math.max(0, Math.min(1, (state.distance - legStart) / (legEnd - legStart)));
+    return prevScale + (scale - prevScale) * f;
   }
   function nextBiome() {
     return BIOMES[Math.min(state.biomeIdx + 1, BIOMES.length - 1)];
@@ -3076,15 +3100,11 @@
     if (duckHeld && !state._duckHeldPrev) audio.playDuck();   // duck SFX on press (kbd + gamepad)
     state._duckHeldPrev = duckHeld;
     state.player.ducking = duckHeld;
-    const wantAccel = actionDown('accel');
-    const wantBrake = actionDown('brake');
-    if (wantAccel) state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
-    else if (wantBrake) state.speed = Math.max(BASE_SPEED * 0.5, state.speed - SPEED_BRAKE);
-    else {
-      // drift toward base speed
-      if (state.speed > BASE_SPEED) state.speed -= SPEED_DRAG;
-      else if (state.speed < BASE_SPEED) state.speed += SPEED_DRAG;
-    }
+    // Auto-throttle: manual accel/brake retired (A/D now drive lane changes).
+    // Speed eases toward the per-leg effective cap (MAX_SPEED * ramped speedScale),
+    // so the car always presses forward and the trip accelerates toward COAST.
+    const cap = MAX_SPEED * legSpeedScale();
+    state.speed += (cap - state.speed) * Math.min(1, 0.05 * (dt * 60));
 
     updatePlayer(dt);
     updateWorld(dt);
