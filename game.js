@@ -70,7 +70,7 @@
   const laneBaseYFor = (i) => GROUND_Y + LANE_DY[Math.max(0, Math.min(LANE_COUNT - 1, i))];
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
-  const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (Bot 4 consumes it)
+  const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (the audio/UI layer consumes it)
   const HIT_FUEL_PENALTY = 20;     // per-hit fuel cost. Hits are always avoidable (see minBlockingGap), so
                                    // this is a pure skill signal. Bumped 14->20 alongside the auto-throttle
                                    // retune: faster trips drain less by time, so hits must carry the stakes
@@ -86,7 +86,7 @@
 
   // Developer flag. Off in shipped builds; enable via "?debug" in the URL or
   // localStorage 'wrt.debug'='1'. Gates the backtick hitbox/difficulty overlay
-  // (Bot 3) AND auto-running the self-test harness on boot (Bot 4).
+  // (physics/balance) AND auto-running the self-test harness on boot (audio/a11y).
   const DEBUG = (() => {
     try {
       return /[?&]debug(=1)?(&|$)/.test(location.search) || localStorage.getItem('wrt.debug') === '1';
@@ -405,7 +405,7 @@
     collectibles: [],
     particles: [],
     spawnTimer: 0,
-    // --- Fuel-low contract (Bot 3 produces, Bots 2/4 consume; read-only) ---
+    // --- Fuel-low contract (physics produces, HUD/audio consume; read-only) ---
     // `fuelLow` is true while fuel sits in the danger band (< FUEL_LOW_FRAC of
     // FUEL_MAX) and is not yet empty. `fuelLowJustEntered` is a single-frame
     // rising edge consumers can latch a one-shot warning (sound/flash) to.
@@ -813,7 +813,7 @@
   const liveRegion = document.getElementById('a11y-live');
 
   // ============================================================
-  // ACCESSIBILITY (Bot 4: a11y workstream)
+  // ACCESSIBILITY (a11y workstream)
   // ============================================================
   // Polite screen-reader announcements (screen changes, leg transitions, low
   // fuel, run outcome). Clearing first guarantees identical repeats re-announce.
@@ -841,7 +841,7 @@
     canvas.setAttribute('aria-label', label);
   }
   // One-time ARIA wiring for the canvas + DOM HUD. Applied from JS so the HUD
-  // markup (Bot 2's lane) is left untouched — we only add attributes at runtime.
+  // markup (owned by the HUD layer) is left untouched — we only add attributes at runtime.
   function initA11y() {
     try {
       if (canvas) canvas.setAttribute('role', 'img');
@@ -1909,7 +1909,7 @@
   // index.html) sit in screen space over the canvas. Canvas-drawn toasts must
   // never render inside those bands or they read as a glitch — the old COMBO
   // toast drew at y=60, colliding with the TRIP card. All coordinates below are
-  // in the fixed VIEW_W x VIEW_H logical space Bot 1's render transform guarantees.
+  // in the fixed VIEW_W x VIEW_H logical space the render transform guarantees.
   const HUD_SAFE_TOP = 88;            // bottom of the SCORE/STAGE/TRIP card band (+margin)
   // COMBO toast sits in a clear band BELOW the card band AND the biome banner
   // (the banner occupies y 96..166). Centered ~0.40*VIEW_H so that even at the
@@ -2639,7 +2639,7 @@
 
   // Player car — GT / Le Mans racer body (the only car). Ported from the
   // car-prototype (faces right, same 80px footprint + hitbox). Wheels are planted
-  // on Bot 3's ROAD_SURFACE_Y contact line (body-only bob); body colour comes from
+  // on the ROAD_SURFACE_Y contact line (body-only bob); body colour comes from
   // the per-run random livery, with a random door number.
   function drawWheelGT(cx, cy, angle, r) {
     r = r || 11;
@@ -3151,7 +3151,7 @@
       if (wash) { ctx.fillStyle = wash; ctx.fillRect(0, 0, W, H); }
     }
   }
-  // Pulsing red screen-edge glow while fuel is critical (Bot 3's state.fuelLow).
+  // Pulsing red screen-edge glow while fuel is critical (the physics layer's state.fuelLow).
   // Motion, so gated by reduce-motion — the steady HUD 'low' bar still shows.
   function drawLowFuelPulse() {
     if (!state.fuelLow || reduceMotionOn()) return;
@@ -3302,7 +3302,7 @@
     state.distance += state.speed * dt * 60;
     state.score += state.speed * dt * 3;        // passive distance score (trimmed 8->3: skill, not idling, should dominate)
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
-    // Fuel-low feedback hook (Bot 3 produces; Bots 2/4 consume). We compute the
+    // Fuel-low feedback hook (physics produces; HUD/audio consume). We compute the
     // rising edge against the *previous* value before overwriting it, so a
     // consumer can fire a one-shot warning without tracking history itself.
     const lowNow = state.fuel > 0 && state.fuel < FUEL_MAX * FUEL_LOW_FRAC;
@@ -3334,9 +3334,9 @@
     }
     checkProgressAchievements();
 
-    // Low-fuel warning: Bot 3 flags the rising edge (state.fuelLowJustEntered);
+    // Low-fuel warning: the physics layer flags the rising edge (state.fuelLowJustEntered);
     // we play the one-shot beep + announce here. It re-arms automatically after a
-    // refuel because Bot 3 only sets the flag on a fresh crossing into the low band.
+    // refuel because the physics layer only sets the flag on a fresh crossing into the low band.
     if (state.fuelLowJustEntered) {
       audio.playLowFuel();
       announce('Low fuel');
@@ -3456,7 +3456,7 @@
   // the exact collision boxes the physics/collision code uses, the ground-
   // contact reference line, and a live per-leg difficulty readout — so balance
   // and hitbox tuning are inspectable in the running game. Authored in the
-  // logical VIEW space (Bot 1's transform maps it to device pixels for free).
+  // logical VIEW space (the render transform maps it to device pixels for free).
   function drawDebugOverlay() {
     ctx.save();
     ctx.lineWidth = 1.5;
@@ -3510,7 +3510,7 @@
     ctx.fillStyle = 'rgba(12,14,24,0.85)';
     const bw = 180, bh = 36;
     ctx.fillRect(W - bw - 20, 20, bw, bh);
-    const bannerC = toastColor('#f5d76e');   // palette-aware (Bot 2 colorblind map)
+    const bannerC = toastColor('#f5d76e');   // palette-aware (colorblind map)
     ctx.strokeStyle = bannerC;
     ctx.lineWidth = 1;
     ctx.strokeRect(W - bw - 20, 20, bw, bh);

@@ -1,7 +1,7 @@
-# Balance & Physics Rationale — Bot 3
+# Balance & Physics Rationale
 
 Scope: gameplay tuning, physics, and difficulty balance in `game.js`. No changes to
-canvas resolution (Bot 1), HUD/CSS (Bot 2), or audio/menus (Bot 4).
+canvas resolution, HUD/CSS, or audio/menus.
 
 All numbers below are produced by `node sim/balance-sim.js`, a deterministic headless
 harness that **mirrors the exact constants and core update math in `game.js`**. It is
@@ -157,12 +157,12 @@ honestly rather than hidden behind a cherry-picked seed or single policy.
 
 ---
 
-## 5. Fuel-low feedback hook (Bot 3 → Bot 4 contract)
+## 5. Fuel-low feedback hook (physics → audio/UI contract)
 
 `state.fuelLow` (boolean) is `true` while fuel is below `FUEL_LOW_FRAC` (15%) and not yet
 empty. `state.fuelLowJustEntered` is a single-frame rising edge for one-shot warnings.
 Both are **produced** here (in `updateGame`) and are **read-only** for consumers — no
-audio/UI is implemented on this side (Bot 4/Bot 2 own that).
+audio/UI is implemented on this side (the audio/HUD layers own that).
 
 ---
 
@@ -181,7 +181,7 @@ audio/UI is implemented on this side (Bot 4/Bot 2 own that).
 `DEBUG` constant (default **false**). When `true`, the backtick key toggles an on-canvas
 overlay drawing the real collision hitboxes (player/obstacles/collectibles), the
 `ROAD_SURFACE_Y` contact line, and a live per-leg difficulty readout. Drawn purely in the
-logical 960×540 space so it survives Bot 1's render transform. Inert in shipped builds.
+logical 960×540 space so it survives the render transform. Inert in shipped builds.
 
 ---
 

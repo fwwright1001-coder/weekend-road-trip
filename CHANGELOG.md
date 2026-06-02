@@ -2,6 +2,25 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-02 — Three-lane system + depth retune (beta) & portfolio wrapper
+
+- **Second decision axis: three lanes.** A/D + ←/→ hop between three lanes with
+  a snappy 0.16s tween and a buffered chain window; you can change lanes mid-jump.
+  Manual throttle retired — speed auto-escalates per leg.
+- **Cross-lane obstacle patterns** (single / wall-with-one-gap / full-width
+  layered wall / chicane) with a per-lane solvability invariant: a non-layered
+  pattern never blocks all three lanes, and the headless sim *proves* an open
+  lane is always reachable in time on every leg.
+- **Climaxing difficulty:** per-leg speed escalation + rising pattern complexity
+  so the coast is the fastest, hardest leg (it used to be the calmest).
+- **Skill-dominant scoring:** uncapped combo multiplier, near-miss bonuses for
+  skimming adjacent-lane hazards, lane-risk bonuses; passive distance trimmed.
+- **Engineering rigor surfaced:** balance-sim now asserts 10 criteria incl. lane
+  solvability/reachability and skill-dominance; GitHub Actions CI runs the sim +
+  self-tests; MIT LICENSE; [ARCHITECTURE.md](ARCHITECTURE.md) case study.
+- Built in 8 sim-gated commits via multi-agent orchestration (audit → design
+  panel → gated build → adversarial review); 3 review findings fixed.
+
 ## 2026-05-29 — Obstacle detail, smoother transitions, dynamic pit stops
 
 - **Obstacles redrawn** (visual only — hitboxes unchanged): potholes get a
@@ -97,7 +116,7 @@ and the whole system re-audited end to end.
 - **Audio:** a single shared `AudioContext` created only on the first user
   gesture (no autoplay-policy errors); mute + master volume via a master-gain
   bus; the SFX toggle gates one-shots. New effects: duck, combo milestone, and
-  a low-fuel warning that fires on Bot 3's `state.fuelLowJustEntered`.
+  a low-fuel warning that fires on the physics layer's `state.fuelLowJustEntered`.
 - **Accessibility:** visible `:focus-visible` ring on every control; canvas
   `role="img"` with a live state `aria-label`; HUD fuel/trip bars exposed as
   ARIA progressbars; a polite screen-reader live region announces screen /

@@ -1,72 +1,105 @@
 # Weekend Road Trip
 
-A polished 2D side-scrolling browser game built for ENGR 5513 — Applied AI in Engineering (Summer 2026, Lipscomb MSAI).
+[![CI](https://github.com/fwwright1001-coder/weekend-road-trip/actions/workflows/ci.yml/badge.svg)](https://github.com/fwwright1001-coder/weekend-road-trip/actions/workflows/ci.yml)
+&nbsp;Vanilla JS · Zero dependencies · No build step
 
-**Theme:** An American Weekend Vacation — Coast to Coast.
+A three-lane arcade driver where balance and fairness are **proven by a headless
+simulation**, not eyeballed — and built by orchestrating AI agents under a
+process with deterministic, machine-checked gates.
 
-## Protagonist & Motivation
+**▶ Play:** https://fwwright1001-coder.github.io/weekend-road-trip/
 
-You play **Marty**, a software engineer who's been heads-down shipping for eleven months straight. Today his PTO finally cleared. He throws a duffel in his red GT, points it west, and drives. The goal is simple: dodge the potholes, duck the low STOP signs, grab roadside snacks and fuel cans, and don't run out of gas before you reach the ocean. The trip takes him through four American biomes — city at dawn, pine forest in the morning, scorched desert in the afternoon, and the Pacific coast at sunset.
+![Weekend Road Trip — three-lane gameplay](submission-media/hero-lanes.png)
+
+> Drive Marty's GT coast-to-coast on one tank of gas: weave three lanes, jump
+> potholes, duck low signs, skim hazards for near-miss combos, and outrun a
+> difficulty curve that peaks at the coast. Reach the ocean before the tank dries.
+
+---
+
+## Why this repo is interesting
+
+This is a grad-course game, but the engineering is the point:
+
+- **A fairness invariant a machine proves.** Three lanes + jump + duck makes "is
+  every layout survivable?" a real question. The spawner enforces a reachable-set
+  invariant (an open lane always exists and is reachable in time), and
+  [`sim/balance-sim.js`](sim/balance-sim.js) *proves* it — an optimal controller
+  clears the densest legal obstacle streams with zero collisions, across 10
+  acceptance criteria. It once caught a layout that was physically unsolvable at
+  escalated speed, in design, before it shipped.
+- **AI-orchestrated, gate-verified development.** Features were built by fleets
+  of agents (parallel audits, judge-panel design, adversarial review) running in
+  isolated `git worktree`s under written contracts — but every commit had to
+  leave the simulation and self-tests green. Agents propose; deterministic checks
+  dispose. **Full story: [ARCHITECTURE.md](ARCHITECTURE.md).**
+- **Production hygiene in a toy.** DPR-aware rendering, keyboard/gamepad/touch
+  parity, an accessibility pass (reduce-motion, colorblind, ARIA), CI, and a QC
+  audit trail in [`qc/`](qc/).
+
+---
 
 ## Play
 
-Open `index.html` in any modern browser (Chrome, Edge, Firefox, Safari). No build step, no install, no dependencies.
+Open `index.html` in any modern browser — no build, no install, no dependencies.
+For best results serve locally:
 
-For best performance, serve it locally:
 ```bash
-python -m http.server 8090
-# then open http://localhost:8090
+python -m http.server 8090   # then open http://localhost:8090
 ```
 
-## Controls
+### Controls
 
 | Key | Action |
 |---|---|
+| `A` / `←` · `D` / `→` | Change lanes (near ↔ far) |
 | `Space` / `W` / `↑` | Jump over potholes & cones |
-| `S` / `↓` | Duck under low STOP signs |
-| `D` / `→` | Accelerate |
-| `A` / `←` | Brake |
-| `P` / `Esc` | Pause |
-| `M` | Mute / unmute audio |
-| `?` | Toggle controls overlay |
-| `Enter` | Confirm on menus |
-| Gamepad | A jump, B/down duck, triggers or D-pad drive |
+| `S` / `↓` | Duck under low signs |
+| `P` / `Esc` | Pause · `M` mute · `?` controls · `Enter` confirm |
+| Gamepad / Touch | A jump, B duck, D-pad/stick or ▲▼ buttons change lanes |
+
+The throttle is **automatic** — speed escalates each leg, so the coast is the
+fastest, hairiest stretch. Your inputs are all about *positioning*.
+
+---
 
 ## Game systems
 
-- **Four biomes** with per-biome time-of-day palettes: city dawn, forest morning, desert afternoon, coast sunset
-- **5-layer parallax** scrolling: gradient sky + sun & clouds, silhouette mountains, biome-specific mid scenery, near-ground detail
-- **Player car** with animated wheels, body bob, accel/brake tilt, headlights, driver figure
-- **Obstacles**: potholes (jump), traffic cones (jump), STOP signs (duck)
-- **Collectibles**: fuel cans (+health, +score), snacks (+score) — both bob and glow
-- **Particle effects**: exhaust, take-off dust, landing dust, impact sparks, pickup bursts
-- **Screen shake** + damage flash on collisions
-- **Biome entry banners** when you cross into a new region
-- **Score** = distance + collectible bonuses + biome-clear bonuses
-- **Health/fuel** depletes over time and on hits; refilled by fuel cans
-- **Win** when you reach the coast (6000 distance units); **lose** when your tank hits zero
-- **High scores** with 3-character editable initials, top 5, persisted to `localStorage`
-- **18 in-game achievements** with unlock toasts and a persistent achievements gallery
-- **Ghost Race mode** records replay telemetry, saves a local ghost, and exports/imports shareable JSON so another player can race your transparent ghost car
-- **Gamepad support** through the browser Gamepad API in addition to keyboard controls
-- **Accessibility/settings panel** with screen-shake toggle, high-contrast colorblind palette, and ghost visibility toggle
-- **Local persistence** for scores, achievements, settings, mute state, and the current ghost replay
+- **Three lanes** with snappy buffered hops; dodge by lane, or jump/duck for
+  full-width hazards. You can change lanes mid-jump.
+- **Cross-lane obstacle patterns** — single, wall-with-one-gap, full-width walls
+  (one verb clears them), and chicane weaves — always with a fair line through.
+- **Climaxing difficulty:** four biomes (city dawn → forest → desert → coast
+  sunset) with auto-escalating speed and rising pattern complexity.
+- **Skill-dominant scoring:** uncapped combo multiplier, **near-miss** bonuses
+  for skimming adjacent-lane hazards, and **lane-risk** bonuses for grabbing
+  pickups in dangerous lanes (a fast weaver outscores a passive grinder ~8×).
+- **Ghost Race:** records per-frame telemetry and exports/imports shareable JSON
+  so anyone can race your transparent ghost — async, no backend.
+- 5-layer parallax, procedural art & audio, particles + screen shake, 20
+  achievements, high scores, and full local persistence.
+- Keyboard + gamepad + touch; DPR-aware crisp rendering; accessibility settings.
 
-## Main screens
+![Ghost Race — async head-to-head replay](submission-media/weekend-road-trip-ghost-race.gif)
 
-1. **Title screen** — story, START button, high-score & controls access
-2. **Gameplay screen** — the actual side-scroller with HUD overlays
-3. **High scores screen** — top 5 leaderboard with initials, scores, dates
-4. **Achievements screen** — persistent checklist of unlocked skill goals
-5. **Ghost Race screen** — copy, paste, load, and clear replay ghost JSON
-6. **Settings screen** — accessibility and replay visibility toggles
+---
 
-Plus paused / game-over / win / initials-entry / help screens as needed.
+## Testing & CI
+
+```bash
+node sim/balance-sim.js     # 10 balance/physics acceptance criteria (exit 0 = pass)
+node qa/run-selftests.js    # persistence / settings / a11y self-tests (12 checks)
+```
+
+Both run on every push/PR via [GitHub Actions](.github/workflows/ci.yml) and were
+the merge gate on every commit. See [`BALANCE.md`](BALANCE.md) for the balance
+rationale and [`qc/`](qc/) for the play-test audit trail.
 
 ## Tech
 
-Vanilla HTML5 + Canvas 2D + JavaScript. HTML/CSS overlays for menus and HUD (crisp typography). Single folder, zero dependencies, no build step.
+Vanilla HTML5 + Canvas 2D + JavaScript; HTML/CSS overlays for menus & HUD. Single
+folder, zero dependencies, no build step. MIT licensed.
 
 ## Author
 
-Forrest Wright — Lipscomb MSAI '26 — ENGR 5513 Summer 2026
+Forrest Wright — Lipscomb MSAI '26 — ENGR 5513 (Applied AI in Engineering), Summer 2026

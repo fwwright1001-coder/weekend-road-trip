@@ -1,0 +1,29 @@
+name: CI
+
+# The game is dependency-free vanilla JS, but balance and physics are guarded by
+# two headless Node checks that must stay green on every push / PR:
+#   - sim/balance-sim.js : proves jump-arc symmetry, per-lane solvability +
+#     reachability, a climaxing difficulty curve, and the fuel economy bands.
+#     Exits non-zero if any of its 10 acceptance criteria fail.
+#   - qa/run-selftests.js : persistence round-trips, settings/scores/achievements,
+#     reduce-motion default, audio init. Exits non-zero on any failure.
+# These are the same gates enforced locally on every commit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Balance & physics simulation (10 acceptance criteria)
+        run: node sim/balance-sim.js
+      - name: Self-test harness
+        run: node qa/run-selftests.js

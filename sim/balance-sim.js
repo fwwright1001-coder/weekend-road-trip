@@ -3,7 +3,7 @@
  * Weekend Road Trip — headless balance / physics simulation
  * ------------------------------------------------------------
  * This is the reviewable, deterministic stand-in for a "recorded run". It
- * MIRRORS the exact constants and core update math in game.js (Bot 3's
+ * MIRRORS the exact constants and core update math in game.js (the game's
  * physics/spawn/balance) and proves the four acceptance criteria without a
  * browser:
  *
@@ -443,7 +443,7 @@ function bar(pct, width = 20) {
 }
 
 console.log('================================================================');
-console.log(' WEEKEND ROAD TRIP — balance & physics simulation (Bot 3)');
+console.log(' WEEKEND ROAD TRIP — balance & physics simulation');
 console.log('================================================================\n');
 
 // 1. jump arc

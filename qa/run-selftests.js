@@ -1,6 +1,6 @@
 /* ============================================================
  * Headless runner for the in-game self-test harness.
- * ENGR 5513 — Weekend Road Trip — Bot 4 (audio / a11y / settings)
+ * ENGR 5513 — Weekend Road Trip — self-test harness (audio / a11y / settings)
  * ============================================================
  * Loads the REAL game.js inside a minimal browser shim (no jsdom dependency)
  * and invokes window.runSelfTests() — the same function the console exposes —
