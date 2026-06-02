@@ -51,22 +51,36 @@
   const JUMP_V = -16;
   const PLAYER_X = 170;
   const BASE_SPEED = 5;
-  const MAX_SPEED = 9.5;
-  const SPEED_ACCEL = 0.07;
+  const MAX_SPEED = 11.0;          // widened top end (was 9.5); per-leg speedScale escalates toward it
+  const SPEED_ACCEL = 0.07;        // (retained for reference; manual throttle retired — speed auto-escalates)
   const SPEED_BRAKE = 0.16;
   const SPEED_DRAG = 0.018;
+  const MIN_GAP_TIME = 0.72;       // min seconds between same-lane blockers; the real (speed-aware) gap
+                                   // is max(table px, MIN_GAP_TIME * effSpeed). Exceeds the jump arc
+                                   // (~0.683s) at every leg's escalated speed — see sim/balance-sim.js.
+  // Lanes: 3 horizontal bands. Lane 1 (center) keeps the legacy GROUND_Y datum so
+  // all pre-lane jump/duck/scenery/ghost math is the backward-compatible default.
+  const LANE_COUNT = 3;
+  const LANE_DY = [44, 0, -44];    // vertical offset from GROUND_Y: 0=near/bottom, 1=center, 2=far/top
+  const LANE_TWEEN_DUR = 0.16;     // seconds for one lane hop
+  const LANE_BUFFER = 0.18;        // queued lane-press window. Must be >= LANE_TWEEN_DUR so a
+                                   // press made early in a hop survives to the completion check
+                                   // (a 0.12s buffer would expire before a 0.16s tween finished).
+  const LANE_COMMIT_FRAC = 0.5;    // past this tween fraction you occupy only the destination lane
+  const laneBaseYFor = (i) => GROUND_Y + LANE_DY[Math.max(0, Math.min(LANE_COUNT - 1, i))];
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
   const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (Bot 4 consumes it)
-  const HIT_FUEL_PENALTY = 14;     // per-hit fuel cost. Hits are now always avoidable (see minBlockingGap),
-                                   // so this is a pure skill signal — bumped 12->14 so careless play (many
-                                   // hits) can still run dry even with pit-stop refuels (see BALANCE.md).
+  const HIT_FUEL_PENALTY = 20;     // per-hit fuel cost. Hits are always avoidable (see minBlockingGap), so
+                                   // this is a pure skill signal. Bumped 14->20 alongside the auto-throttle
+                                   // retune: faster trips drain less by time, so hits must carry the stakes
+                                   // (careless play still reliably runs dry — see sim/balance-sim.js).
   const SNACK_POINTS = 50;
   const FUEL_PICKUP_BONUS = 25;
   const FUEL_PICKUP_REFILL = 22;   // default fuel-per-can; per-leg override lives in DIFFICULTY
-  const PITSTOP_REFILL = 40;       // fuel added per pit stop (was a FULL refuel). A full reset made the
-                                   // lose condition unreachable; +40 is still the biggest single fuel
-                                   // pickup + 500 pts, but no longer an auto-win. See BALANCE.md.
+  const PITSTOP_REFILL = 28;       // fuel added per pit stop. Trimmed 40->28 with the auto-throttle retune
+                                   // so pit stops are a strong help, not a careless-player bailout. Still the
+                                   // biggest single fuel pickup + 500 pts, but the lose condition stays real.
   const SPAWN_MIN_INTERVAL = 0.32; // hard floor on seconds between spawn rolls
   const BIOME_BONUS = 500;
 
@@ -199,11 +213,20 @@
   // The COAST row is intentionally the kindest on fuel: the finale should feel
   // like a payoff for a clean run, not a wall. De-clustering (minBlockingGap)
   // plus the fuel bump together fix the "runs dry at ~96%" cliff.
+  //   speedScale      : per-leg pacing multiplier. Effective top speed for a leg
+  //                     is MAX_SPEED * speedScale, ramped within the leg, so the
+  //                     trip ACCELERATES toward COAST — the finale is the climax.
+  //   patternWeights  : spawn mix across lanes — single (1 lane), wallGap (2 lanes
+  //                     blocked, 1 open), layered (full-width single-verb wall:
+  //                     all-jump or all-duck), chicane (two offset singles, a weave).
+  //   maxLaneSpan     : max lanes a non-layered pattern may block (1 = singles only,
+  //                     2 = wallGap/chicane allowed). The fairness invariant: a
+  //                     non-layered pattern never blocks all 3 lanes (>=1 stays open).
   const DIFFICULTY = [
-    { obstacleDensity: 1.00, minBlockingGap: 600, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // CITY
-    { obstacleDensity: 1.15, minBlockingGap: 540, fuelSpawnRate: 1.0, fuelPerCan: 22, speedScale: 1.00 }, // FOREST
-    { obstacleDensity: 1.30, minBlockingGap: 500, fuelSpawnRate: 1.1, fuelPerCan: 24, speedScale: 1.00 }, // DESERT
-    { obstacleDensity: 1.45, minBlockingGap: 460, fuelSpawnRate: 1.6, fuelPerCan: 28, speedScale: 1.00 }  // COAST
+    { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, maxLaneSpan: 1, patternWeights: { single: 0.80, wallGap: 0.15, layered: 0.05, chicane: 0.00 } }, // CITY
+    { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, maxLaneSpan: 1, patternWeights: { single: 0.55, wallGap: 0.30, layered: 0.10, chicane: 0.05 } }, // FOREST
+    { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, maxLaneSpan: 2, patternWeights: { single: 0.38, wallGap: 0.34, layered: 0.18, chicane: 0.10 } }, // DESERT
+    { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, maxLaneSpan: 2, patternWeights: { single: 0.25, wallGap: 0.34, layered: 0.23, chicane: 0.18 } }  // COAST
   ];
 
   const SCREEN = {
@@ -256,7 +279,9 @@
     { id: 'snack', title: 'Roadside Calories', desc: 'Collect a snack pickup.' },
     { id: 'fuel', title: 'Tank Top-Off', desc: 'Collect a fuel can.' },
     { id: 'pitstop', title: 'Full-Service Stop', desc: 'Pull through a pit stop.' },
-    { id: 'combo-5', title: 'Perfect Snack Line', desc: 'Build a 5x pickup combo.' },
+    { id: 'combo-5', title: 'Perfect Snack Line', desc: 'Build a 5-chain combo.' },
+    { id: 'combo-15', title: 'In the Zone', desc: 'Build a 15-chain combo.' },
+    { id: 'combo-25', title: 'Untouchable', desc: 'Max out a 25-chain combo.' },
     { id: 'max-speed', title: 'Cruise Control Hero', desc: 'Reach top speed.' },
     { id: 'low-fuel', title: 'Running on Fumes', desc: 'Keep driving below 15 percent fuel.' },
     { id: 'forest', title: 'Into the Pines', desc: 'Reach the forest biome.' },
@@ -392,13 +417,23 @@
     shakeMag: 0,
     // player
     player: {
-      y: GROUND_Y,
-      vy: 0,
+      y: GROUND_Y,             // drawn/collision y = laneBaseY - jumpOff (derived each frame)
+      vy: 0,                   // jump velocity in jumpOff space (positive = rising)
+      jumpOff: 0,              // height above the current lane base (>=0)
       ducking: false,
       jumping: false,
       tilt: 0,
       wheelAngle: 0,
-      bob: 0
+      bob: 0,
+      // lanes (geometry live now; input/tween land in the next commit)
+      lane: 1,                 // 0 = far/top, 1 = center (= legacy GROUND_Y), 2 = near/bottom
+      laneTarget: 1,
+      laneBaseY: GROUND_Y,
+      laneFromBaseY: GROUND_Y,
+      laneTweenT: 0,
+      laneBufferDir: 0,
+      laneBufferT: 0,
+      laneTilt: 0
     },
     // initials entry
     initials: ['A', 'A', 'A'],
@@ -427,8 +462,13 @@
     // scores
     scores: []
   };
-  const COMBO_WINDOW = 4.0;  // seconds since last pickup before combo resets
-  const COMBO_MAX = 5;
+  const COMBO_BASE_WINDOW = 4.0;  // base seconds before combo resets; shrinks as combo climbs
+  const COMBO_CEILING = 25;       // soft cap on combo COUNT (bounds runaway), but the multiplier
+                                  // keeps climbing — combo is now the score engine, not a flat x5.
+  // Score multiplier from combo count: 1x, 1.6x, 2.2x ... combo5=3.4x, combo10=6.4x, combo20=12.4x.
+  const comboMult = (c) => 1 + Math.max(0, c - 1) * 0.6;
+  // Decay window tightens with combo so a long chain demands near-continuous skill.
+  const comboWindow = (c) => Math.max(1.5, COMBO_BASE_WINDOW - c * 0.12);
 
   // ============================================================
   // STORAGE
@@ -705,6 +745,10 @@
       // short descending two-tone — distinct from the noise hit
       this.blip({ freq: 520, freq2: 300, dur: 0.18, type: 'triangle', vol: 0.16 });
     },
+    playLaneHop() {
+      // quick low "whoosh" tick for a lane change — subtle so rapid weaving doesn't grate
+      this.blip({ freq: 300, freq2: 420, dur: 0.07, type: 'sine', vol: 0.10 });
+    },
     playBiome()  {
       // ascending arpeggio C E G
       [523, 659, 784].forEach((f, i) => setTimeout(() =>
@@ -879,8 +923,9 @@
   const KEYMAP = {
     jump: ['Space', 'KeyW', 'ArrowUp'],
     duck: ['KeyS', 'ArrowDown'],
-    accel: ['KeyD', 'ArrowRight'],
-    brake: ['KeyA', 'ArrowLeft'],
+    // Manual throttle retired (speed auto-escalates); A/D + ←/→ now change lanes.
+    laneUp: ['KeyD', 'ArrowRight'],     // toward the far/top lane (index +1)
+    laneDown: ['KeyA', 'ArrowLeft'],    // toward the near/bottom lane (index -1)
     confirm: ['Enter'],
     pause: ['KeyP', 'Escape'],
     help: ['Slash']
@@ -897,6 +942,11 @@
       e.preventDefault();
     }
     state.keys.add(e.code);
+    // OS key-repeat must NOT re-fire edge-triggered actions (jump, lane hops):
+    // held keys still register in state.keys above for continuous reads
+    // (duck via actionDown), but routing only runs on the genuine first press.
+    // This matches the gamepad edge-trigger and enforces one-hop-per-press.
+    if (e.repeat) return;
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
     // Hidden debug overlay — only reachable in DEBUG builds.
     if (e.code === 'Backquote') { if (DEBUG) state.debug = !state.debug; return; }
@@ -929,7 +979,7 @@
   (function bindTouchControls() {
     const tcEl = document.getElementById('touch-controls');
     if (!tcEl || !tcEl.querySelectorAll) return;
-    const HOLD = { duck: 'KeyS', accel: 'KeyD', brake: 'KeyA' };   // held actions -> key codes
+    const HOLD = { duck: 'KeyS' };   // duck is the only held touch action now
     tcEl.querySelectorAll('[data-tc]').forEach((btn) => {
       const action = btn.dataset.tc;
       const code = HOLD[action];
@@ -938,6 +988,8 @@
         audio.init();                                   // unlock audio on first touch
         btn.classList.add('pressed');
         if (action === 'jump') { if (state.screen === SCREEN.PLAYING) tryJump(); }
+        else if (action === 'laneUp') { if (state.screen === SCREEN.PLAYING) hopLane(+1); }
+        else if (action === 'laneDown') { if (state.screen === SCREEN.PLAYING) hopLane(-1); }
         else if (action === 'pause') { if (state.screen === SCREEN.PLAYING) show(SCREEN.PAUSED); }
         else if (code) { state.keys.add(code); touchHeld.add(code); }
       };
@@ -971,6 +1023,8 @@
       case SCREEN.PLAYING:
         if (isAction('jump', code)) tryJump();
         if (isAction('duck', code)) state.player.ducking = true;
+        if (isAction('laneUp', code)) hopLane(+1);
+        if (isAction('laneDown', code)) hopLane(-1);
         if (isAction('pause', code)) show(SCREEN.PAUSED);
         if (isAction('help', code)) openHelp();
         break;
@@ -1045,13 +1099,12 @@
     const b = (idx) => !!(gp.buttons[idx] && gp.buttons[idx].pressed);
     const axisX = gp.axes[0] || 0;
     const axisY = gp.axes[1] || 0;
-    const triggerBrake = gp.buttons[6] ? gp.buttons[6].value > 0.2 : false;
-    const triggerAccel = gp.buttons[7] ? gp.buttons[7].value > 0.2 : false;
     const next = {
       jump: b(0) || b(12),
       duck: b(1) || b(13) || axisY > 0.45,
-      accel: triggerAccel || b(15) || axisX > 0.45,
-      brake: triggerBrake || b(14) || axisX < -0.45,
+      // lane changes are edge-triggered (dpad L/R or left-stick X)
+      laneUp: b(15) || axisX > 0.45,
+      laneDown: b(14) || axisX < -0.45,
       confirm: b(0),
       pause: b(9),
       help: b(8)
@@ -1059,7 +1112,7 @@
 
     const prev = state.pad;
     state.padConnected = true;
-    ['jump', 'confirm', 'pause', 'help'].forEach((action) => {
+    ['jump', 'laneUp', 'laneDown', 'confirm', 'pause', 'help'].forEach((action) => {
       if (next[action] && !prev[action]) handlePadAction(action);
     });
     state.padPrev = prev;
@@ -1074,6 +1127,8 @@
         break;
       case SCREEN.PLAYING:
         if (action === 'jump') tryJump();
+        if (action === 'laneUp') hopLane(+1);
+        if (action === 'laneDown') hopLane(-1);
         if (action === 'pause') show(SCREEN.PAUSED);
         if (action === 'help') openHelp();
         break;
@@ -1166,9 +1221,18 @@
     state.pendingScore = 0;
     state.player.y = GROUND_Y;
     state.player.vy = 0;
+    state.player.jumpOff = 0;
     state.player.jumping = false;
     state.player.jumpBufferT = 0;
     state.player.ducking = false;
+    state.player.lane = 1;
+    state.player.laneTarget = 1;
+    state.player.laneBaseY = GROUND_Y;
+    state.player.laneFromBaseY = GROUND_Y;
+    state.player.laneTweenT = 0;
+    state.player.laneBufferDir = 0;
+    state.player.laneBufferT = 0;
+    state.player.laneTilt = 0;
     state._duckHeldPrev = false;
     state._lowFuelWarned = false;
     state._ariaTick = 0;
@@ -1372,8 +1436,8 @@
   function ghostControlsMask() {
     return (actionDown('jump') ? 1 : 0) |
       (actionDown('duck') ? 2 : 0) |
-      (actionDown('accel') ? 4 : 0) |
-      (actionDown('brake') ? 8 : 0);
+      (actionDown('laneUp') ? 4 : 0) |
+      (actionDown('laneDown') ? 8 : 0);
   }
   function recordGhostFrame(force = false) {
     if (!state.ghostRecording) return;
@@ -1415,7 +1479,7 @@
   // ============================================================
   const JUMP_BUFFER = 0.12; // press jump up to 120ms before landing and it still fires
   function doJump() {
-    state.player.vy = JUMP_V;
+    state.player.vy = -JUMP_V;     // jumpOff space: +vy = rising (JUMP_V is the legacy upward magnitude)
     state.player.jumping = true;
     state.player.jumpBufferT = 0;
     spawnDust(PLAYER_X + 30, ROAD_SURFACE_Y, 8);
@@ -1431,15 +1495,34 @@
       state.player.jumpBufferT = JUMP_BUFFER;
     }
   }
+  // Lane change (edge-triggered, one hop per press). Mid-tween presses are
+  // buffered and fire on completion — we commit to the destination first so the
+  // reachable set stays discrete (the fairness invariant depends on it).
+  function startLaneHop(target) {
+    const p = state.player;
+    p.laneFromBaseY = laneBaseYFor(p.lane);
+    p.laneTarget = target;
+    p.laneTweenT = LANE_TWEEN_DUR;
+  }
+  function hopLane(dir) {
+    const p = state.player;
+    if (p.laneTweenT > 0) { p.laneBufferDir = dir; p.laneBufferT = LANE_BUFFER; return; }
+    const target = Math.max(0, Math.min(LANE_COUNT - 1, p.lane + dir));
+    if (target === p.lane) { screenShake(4, 0.12); return; }  // into the rail — tiny nudge
+    startLaneHop(target);
+    audio.playLaneHop();
+  }
   function updatePlayer(dt) {
     // Frame-rate-independent vertical physics: scale by 60fps-equivalent steps
     // so hang time is identical on 60Hz and 144Hz displays.
     const f = dt * 60;
-    state.player.vy += GRAVITY * f;
-    state.player.y += state.player.vy * f;
-    if (state.player.y >= GROUND_Y) {
+    // Vertical jump physics in jumpOff space (height above the lane base, >=0).
+    // Mirror-image of the legacy y-integrator, so the arc is byte-identical.
+    state.player.vy -= GRAVITY * f;
+    state.player.jumpOff += state.player.vy * f;
+    if (state.player.jumpOff <= 0) {
       const wasJumping = state.player.jumping;
-      state.player.y = GROUND_Y;
+      state.player.jumpOff = 0;
       state.player.vy = 0;
       if (wasJumping) {
         state.player.jumping = false;
@@ -1449,21 +1532,62 @@
       }
     }
     if (state.player.jumpBufferT > 0) state.player.jumpBufferT -= dt;
+    // Lane tween — smoothstep the lane base toward the target lane.
+    const p = state.player;
+    if (p.laneTweenT > 0) {
+      p.laneTweenT = Math.max(0, p.laneTweenT - dt);
+      const prog = 1 - p.laneTweenT / LANE_TWEEN_DUR;       // 0..1
+      const sm = prog * prog * (3 - 2 * prog);              // smoothstep
+      const toBaseY = laneBaseYFor(p.laneTarget);
+      p.laneBaseY = p.laneFromBaseY + (toBaseY - p.laneFromBaseY) * sm;
+      // bank into the hop (sign: hopping up/far = lean one way)
+      p.laneTilt = Math.sin(prog * Math.PI) * 0.12 * Math.sign(toBaseY - p.laneFromBaseY);
+      if (p.laneTweenT === 0) {
+        p.lane = p.laneTarget;
+        p.laneBaseY = toBaseY;
+        spawnDust(PLAYER_X + 24, p.laneBaseY + CAR_FOOT_OFFSET, 6);
+        // fire a press queued mid-hop (commit-to-destination, then continue)
+        if (p.laneBufferT > 0 && p.laneBufferDir !== 0) {
+          const dir = p.laneBufferDir; p.laneBufferDir = 0; p.laneBufferT = 0;
+          const nt = Math.max(0, Math.min(LANE_COUNT - 1, p.lane + dir));
+          if (nt !== p.lane) startLaneHop(nt);
+        }
+      }
+    } else {
+      p.laneBaseY = laneBaseYFor(p.lane);
+      p.laneTilt += (0 - p.laneTilt) * 0.2;
+    }
+    if (p.laneBufferT > 0) p.laneBufferT -= dt;
+    state.player.y = state.player.laneBaseY - state.player.jumpOff;
     // gentle body wobble — sells the suspension
     state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
     // wheel rotation
     state.player.wheelAngle += state.speed * 0.18 * f;
-    // braking/accel tilt
-    const wantAccel = actionDown('accel');
-    const wantBrake = actionDown('brake');
-    const targetTilt = wantAccel ? -0.04 : wantBrake ? 0.06 : 0;
-    state.player.tilt += (targetTilt - state.player.tilt) * 0.12;
+    // body tilt now comes from lane hops (manual throttle retired)
+    state.player.tilt += (state.player.laneTilt - state.player.tilt) * 0.3;
   }
   function playerBox() {
     const h = state.player.ducking ? 32 : 52;
     const w = 76;
     const y = state.player.y - h + 10;
     return { x: PLAYER_X, y, w, h };
+  }
+  // Lanes the car occupies for collision. Mid-hop it straddles BOTH lanes until
+  // it commits (>= LANE_COMMIT_FRAC of the tween), then only the destination.
+  function occupiedLanes() {
+    const p = state.player;
+    if (p.laneTweenT > 0) {
+      const prog = 1 - p.laneTweenT / LANE_TWEEN_DUR;
+      return prog < LANE_COMMIT_FRAC ? [p.lane, p.laneTarget] : [p.laneTarget];
+    }
+    return [p.lane];
+  }
+  // True if a blocker sits in `lane` close to the player (used for lane-risk bonus).
+  function laneHasNearbyBlocker(lane) {
+    for (const o of state.obstacles) {
+      if (o.lane === lane && !o.hit && o.x > PLAYER_X - 50 && o.x < PLAYER_X + 320) return true;
+    }
+    return false;
   }
 
   // ============================================================
@@ -1476,86 +1600,119 @@
   //   drawCollectibles() + handle the pickup branch in updateWorld().
   // Obstacle types so far: 'pothole', 'cone', 'sign'
   // Collectible types so far: 'fuel', 'snack', 'pitstop'
+  const randLane = () => Math.floor(Math.random() * LANE_COUNT);
+  const blockerType = () => (Math.random() < 0.30 ? 'sign' : ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)]);
+
   function spawn() {
     const diff = currentDifficulty();
-    // Per-leg fuel boost: expand the fuel slice and shrink the obstacle slices
-    // proportionally, preserving the original pothole:cone:sign composition.
-    // Baseline weights were ground 0.50 / sign 0.22 / snack 0.18 / fuel 0.10.
     const fuelChance = Math.min(0.4, 0.10 * (diff.fuelSpawnRate || 1));
     const snackChance = 0.18;
-    const obstMass = Math.max(0, 1 - fuelChance - snackChance);
-    const groundChance = obstMass * (0.50 / 0.72);  // pothole/cone share of obstacles
-    const signChance = obstMass * (0.22 / 0.72);    // sign share of obstacles
 
     // Guarantee one fuel can early so a run can't die to first-leg spawn
     // clustering before any fuel appears (the high early-variance issue).
     if (!state.guaranteedFuelDone && state.distance > 700) {
       state.guaranteedFuelDone = true;
-      state.collectibles.push(makeCollectible('fuel'));
+      state.collectibles.push(makeCollectible('fuel', 1));
       return;
     }
 
     const r = Math.random();
-    if (r < groundChance) {
-      const t = ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)];
-      tryPlaceObstacle(t, diff.minBlockingGap);
-    } else if (r < groundChance + signChance) {
-      tryPlaceObstacle('sign', diff.minBlockingGap);
-    } else if (r < groundChance + signChance + snackChance) {
-      state.collectibles.push(makeCollectible('snack'));
-    } else {
-      state.collectibles.push(makeCollectible('fuel'));
+    if (r < fuelChance) { state.collectibles.push(makeCollectible('fuel', randLane())); return; }
+    if (r < fuelChance + snackChance) { state.collectibles.push(makeCollectible('snack', randLane())); return; }
+    spawnPattern(diff);
+  }
+
+  // Roll a cross-lane blocker pattern, clamped so a non-layered pattern never
+  // blocks all 3 lanes (the open-lane fairness invariant; layered is the
+  // all-same-verb exception, solvable by jump/duck with no lateral escape).
+  function spawnPattern(diff) {
+    const w = diff.patternWeights || { single: 1, wallGap: 0, layered: 0, chicane: 0 };
+    const maxBlock = diff.maxLaneSpan || 1;
+    let r = Math.random(), pat;
+    if ((r -= w.single) < 0) pat = 'single';
+    else if ((r -= w.wallGap) < 0) pat = 'wallGap';
+    else if ((r -= w.layered) < 0) pat = 'layered';
+    else pat = 'chicane';
+    if ((pat === 'wallGap' || pat === 'chicane') && maxBlock < 2) pat = 'single';
+
+    if (pat === 'single') {
+      placePattern([{ type: blockerType(), lane: randLane() }], diff.minBlockingGap);
+    } else if (pat === 'wallGap') {
+      const open = randLane();
+      const items = [0, 1, 2].filter((l) => l !== open).map((l) => ({ type: blockerType(), lane: l }));
+      placePattern(items, diff.minBlockingGap);
+    } else if (pat === 'layered') {
+      // full-width wall of ONE verb: all-jump (pothole/cone) or all-duck (sign)
+      const t = Math.random() < 0.5 ? 'pothole' : 'sign';
+      placePattern([0, 1, 2].map((l) => ({ type: t, lane: l })), diff.minBlockingGap);
+    } else { // chicane: two offset singles in different lanes — a quick weave
+      const a = randLane();
+      const b = (a + (Math.random() < 0.5 ? 1 : 2)) % LANE_COUNT;
+      const dx = effGapPx(diff.minBlockingGap) * 0.55;
+      placePattern([{ type: blockerType(), lane: a }, { type: blockerType(), lane: b, dx }], diff.minBlockingGap);
     }
   }
 
-  // Rightmost (most-recently-spawned) obstacle x, or -Infinity if none pending.
-  function rightmostObstacleX() {
+  // Speed-aware gap (px): larger of the table floor and a time-based gap at the
+  // leg's effective speed — provably exceeds the jump arc at any leg's speed.
+  function effGapPx(minGap) {
+    return Math.max(minGap || 0, MIN_GAP_TIME * MAX_SPEED * legSpeedScale() * 60);
+  }
+  // Rightmost pending obstacle x IN A GIVEN LANE (per-lane gap), or -Infinity.
+  function rightmostObstacleX(lane) {
     let m = -Infinity;
-    for (const o of state.obstacles) if (o.x > m) m = o.x;
+    for (const o of state.obstacles) if (o.lane === lane && o.x > m) m = o.x;
     return m;
   }
-
-  // Place a blocking obstacle only if it clears `minGap` px from the previous
-  // one. If it would cluster too tightly we skip it — this guarantees a
-  // jump/duck-able gap at any speed (no unavoidable back-to-back blockers) and
-  // naturally thins dense legs instead of queuing an unreachable wall off-screen.
-  function tryPlaceObstacle(type, minGap) {
-    const o = makeObstacle(type);                 // spawns at x = W + 60
-    const prevX = rightmostObstacleX();
-    if (prevX > -Infinity && (o.x - prevX) < (minGap || 0)) return false;
-    state.obstacles.push(o);
+  function laneClear(lane, x, gap) {
+    const px = rightmostObstacleX(lane);
+    return px === -Infinity || (x - px) >= gap;
+  }
+  // Atomically place a pattern's items only if EVERY touched lane clears the gap
+  // (so a pattern never lands half-formed and never clusters within a lane).
+  function placePattern(items, minGap) {
+    const gap = effGapPx(minGap);
+    const baseX = W + 60;
+    for (const it of items) if (!laneClear(it.lane, baseX + (it.dx || 0), gap)) return false;
+    for (const it of items) state.obstacles.push(makeObstacle(it.type, it.lane, it.dx || 0));
     return true;
   }
-  function makeObstacle(type) {
-    const o = { type, x: W + 60, hit: false };
+  function makeObstacle(type, lane = 1, dx = 0) {
+    const base = laneBaseYFor(lane);
+    const o = { type, x: W + 60 + dx, hit: false, lane };
     if (type === 'pothole') {
-      o.w = 64; o.h = 18; o.y = GROUND_Y + 2;
+      o.w = 64; o.h = 18; o.y = base + 2;
     } else if (type === 'cone') {
-      o.w = 24; o.h = 36; o.y = GROUND_Y - o.h + 8;
+      o.w = 24; o.h = 36; o.y = base - o.h + 8;
     } else if (type === 'sign') {
       // Panel sits at standing-driver head height — must duck to pass under.
       // Hitbox = panel only; the visible post below is decorative.
-      o.w = 78; o.h = 30; o.y = GROUND_Y - 60;
+      o.w = 78; o.h = 30; o.y = base - 60;
     }
     return o;
   }
-  function makeCollectible(type) {
+  function makeCollectible(type, lane = 1) {
+    const base = laneBaseYFor(lane);
     return {
       type,
       x: W + 60,
       w: 28,
       h: 28,
-      y: Math.random() < 0.4 ? GROUND_Y - 86 : GROUND_Y - 34,
+      lane,
+      y: Math.random() < 0.35 ? base - 86 : base - 34,
       taken: false,
       bob: Math.random() * Math.PI * 2
     };
   }
   function makePitstop() {
+    // Pit stops always spawn in the center lane — a guaranteed-collectible safety
+    // valve (you don't have to gamble a lane choice to refuel).
     return {
       type: 'pitstop',
       x: W + 100,
       w: 64,
       h: 56,
+      lane: 1,
       y: GROUND_Y - 56,
       taken: false,
       bob: 0
@@ -1649,10 +1806,26 @@
     state.collectibles = state.collectibles.filter((c) => c.x + c.w > -30);
     state.semis = state.semis.filter((s) => s.x > -340);
 
-    // Collisions
+    // Collisions — lane-gated: only obstacles in the player's occupied lane(s) bite.
     const pb = playerBox();
+    const lanes = occupiedLanes();
     for (const o of state.obstacles) {
       if (o.hit) continue;
+      if (!lanes.includes(o.lane)) {
+        // Near-miss: an un-hit blocker in an ADJACENT lane sliding past the player
+        // rewards riding the edge of danger — bumps combo and scores.
+        if (!o.nearMissed && Math.abs(o.lane - state.player.lane) === 1 &&
+            o.x + o.w < PLAYER_X + 24 && o.x + o.w > PLAYER_X - 30) {
+          o.nearMissed = true;
+          state.combo = Math.min(COMBO_CEILING, state.combo + 1);
+          state.comboTimer = comboWindow(state.combo);
+          const pts = Math.round(35 * comboMult(state.combo));
+          state.score += pts;
+          state.comboPopupT = 0.5;
+          spawnScorePopup(PLAYER_X + 30, o.y - 8, `NEAR MISS +${pts}`, '#9fd8ff');
+        }
+        continue;
+      }
       if (rectsOverlap(pb, o)) {
         o.hit = true;
         state.fuel -= HIT_FUEL_PENALTY;
@@ -1673,24 +1846,35 @@
     }
     for (const c of state.collectibles) {
       if (c.taken) continue;
-      if (rectsOverlap(pb, c)) {
+      // Pit stops are a full-width refuel station — collected from any lane by
+      // horizontal overlap (matches the sim's grounded 100%-collection model).
+      // Everything else is lane-gated: be in its lane to grab it (lane-risk).
+      const got = c.type === 'pitstop'
+        ? (pb.x < c.x + c.w && pb.x + pb.w > c.x)
+        : (lanes.includes(c.lane) && rectsOverlap(pb, c));
+      if (got) {
         c.taken = true;
-        // Bump combo
-        state.combo = Math.min(COMBO_MAX, state.combo + 1);
-        state.comboTimer = COMBO_WINDOW;
+        // Bump combo (uncapped multiplier, soft-capped count)
+        state.combo = Math.min(COMBO_CEILING, state.combo + 1);
+        state.comboTimer = comboWindow(state.combo);
         state.comboPopupT = 0.6;
         state.runStats.pickups += 1;
-        if (state.combo >= COMBO_MAX) unlockAchievement('combo-5');
-        const mult = state.combo;
+        if (state.combo >= 5) unlockAchievement('combo-5');
+        if (state.combo >= 15) unlockAchievement('combo-15');
+        if (state.combo >= 25) unlockAchievement('combo-25');
+        // Lane-risk bonus: grabbing a can in a lane that also holds a nearby
+        // blocker is a deliberate risky line — reward it.
+        const risky = c.type !== 'pitstop' && laneHasNearbyBlocker(c.lane);
+        const mult = comboMult(state.combo) * (risky ? 1.5 : 1);
         if (state.combo >= 2) audio.playCombo(state.combo);   // combo milestone feedback
         if (c.type === 'fuel') {
           state.runStats.fuel += 1;
-          const pts = FUEL_PICKUP_BONUS * mult;
+          const pts = Math.round(FUEL_PICKUP_BONUS * mult);
           const refill = currentDifficulty().fuelPerCan || FUEL_PICKUP_REFILL;
           state.fuel = Math.min(FUEL_MAX, state.fuel + refill);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
-          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (risky ? ' RISK!' : ''), '#7ee27e');
           audio.playFuel();
           unlockAchievement('fuel');
         } else if (c.type === 'pitstop') {
@@ -1698,7 +1882,7 @@
           // impossible; PITSTOP_REFILL keeps it a strong rescue, not an auto-win.)
           state.runStats.pitstops += 1;
           state.fuel = Math.min(FUEL_MAX, state.fuel + PITSTOP_REFILL);
-          const pts = 500 * mult;
+          const pts = Math.round(500 * mult);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `PIT STOP!  +${pts}`, '#7ee27e');
@@ -1706,10 +1890,10 @@
           unlockAchievement('pitstop');
         } else {
           state.runStats.snacks += 1;
-          const pts = SNACK_POINTS * mult;
+          const pts = Math.round(SNACK_POINTS * mult);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
-          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#f5d76e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (risky ? ' RISK!' : ''), '#f5d76e');
           audio.playSnack();
           unlockAchievement('snack');
         }
@@ -1953,6 +2137,18 @@
   function currentDifficulty() {
     currentBiome();
     return DIFFICULTY[state.biomeIdx] || DIFFICULTY[DIFFICULTY.length - 1];
+  }
+  // Effective per-leg speed multiplier, ramped across the leg so each biome
+  // visibly accelerates into the next (no hard speed steps at biome borders).
+  function legSpeedScale() {
+    currentBiome();
+    const i = state.biomeIdx;
+    const scale = DIFFICULTY[i].speedScale;
+    const prevScale = i > 0 ? DIFFICULTY[i - 1].speedScale : scale;
+    const legStart = i === 0 ? 0 : BIOMES[i - 1].end;
+    const legEnd = BIOMES[i].end;
+    const f = Math.max(0, Math.min(1, (state.distance - legStart) / (legEnd - legStart)));
+    return prevScale + (scale - prevScale) * f;
   }
   function nextBiome() {
     return BIOMES[Math.min(state.biomeIdx + 1, BIOMES.length - 1)];
@@ -2317,32 +2513,45 @@
   }
 
   function drawGround(biome) {
-    // Grass strip
+    // Three-lane asphalt: the road now spans all lane contact lines, with dashed
+    // dividers between lanes. Lane 1 (center) keeps the legacy datum.
+    const roadTop = laneBaseYFor(2) - 8;                       // just above the far lane
+    const roadBot = laneBaseYFor(0) + CAR_FOOT_OFFSET + 12;    // just below the near lane
+    // Grass behind the road
     ctx.fillStyle = biomeColor(biome, 'grass');
-    ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
-    // Road
+    ctx.fillRect(0, roadTop - 24, W, H - (roadTop - 24));
+    // Asphalt band
     ctx.fillStyle = biomeColor(biome, 'road');
-    ctx.fillRect(0, GROUND_Y + 12, W, 62);
-    // Road edge highlight
+    ctx.fillRect(0, roadTop, W, roadBot - roadTop);
+    // Edge highlights
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(0, GROUND_Y + 12, W, 2);
-    ctx.fillRect(0, GROUND_Y + 72, W, 2);
-    // Dashed center line, scrolls with distance
+    ctx.fillRect(0, roadTop, W, 2);
+    ctx.fillRect(0, roadBot - 2, W, 2);
+    // Dashed lane dividers (between the 3 lanes), scrolling with distance
     ctx.fillStyle = biomeColor(biome, 'dashColor');
-    const dashW = 52;
-    const gap = 32;
-    const cycle = dashW + gap;
+    const dashW = 52, gap = 32, cycle = dashW + gap;
     const dashOff = state.distance % cycle;
-    for (let x = -dashOff; x < W; x += cycle) {
-      ctx.fillRect(x, GROUND_Y + 40, dashW, 5);
+    const dividers = [
+      (laneBaseYFor(2) + laneBaseYFor(1)) / 2 + CAR_FOOT_OFFSET,
+      (laneBaseYFor(1) + laneBaseYFor(0)) / 2 + CAR_FOOT_OFFSET
+    ];
+    for (const dy of dividers) {
+      for (let x = -dashOff; x < W; x += cycle) ctx.fillRect(x, dy, dashW, 4);
     }
-    // Subtle vignette on the road shoulder
-    const vg = ctx.createLinearGradient(0, GROUND_Y + 12, 0, GROUND_Y + 74);
-    vg.addColorStop(0, 'rgba(0,0,0,0.0)');
-    vg.addColorStop(0.5, 'rgba(0,0,0,0.0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.35)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, GROUND_Y + 12, W, 62);
+    // Depth shading: dim the far (top) lane, brighten the near (bottom) lane
+    const sh = ctx.createLinearGradient(0, roadTop, 0, roadBot);
+    sh.addColorStop(0, 'rgba(0,0,0,0.22)');
+    sh.addColorStop(0.55, 'rgba(0,0,0,0.0)');
+    sh.addColorStop(1, 'rgba(255,255,255,0.05)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(0, roadTop, W, roadBot - roadTop);
+    // Current-lane glow under the car for readability
+    const glowY = state.player.laneBaseY + CAR_FOOT_OFFSET;
+    const gg = ctx.createRadialGradient(PLAYER_X + 38, glowY, 4, PLAYER_X + 38, glowY, 130);
+    gg.addColorStop(0, 'rgba(255,240,180,0.12)');
+    gg.addColorStop(1, 'rgba(255,240,180,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, roadTop, W, roadBot - roadTop);
   }
 
   // ============================================================
@@ -2466,12 +2675,15 @@
     const floorY = y + 2 + bob * 0.3, tailY = y - 14 * k + bob, deckY = y - 16 * k + bob;
     const noseY = y - 11 * k + bob, hoodY = y - 18 * k + bob, canopyY = y - 28 * k + bob;
     const wingY = y - 25 * k + bob, doorCY = y - 9 * k + bob;
-    // ground shadow (no tilt; scales with jump height)
+    // ground shadow stays on the CURRENT lane's contact line; scales with the
+    // jump height only (jumpOff), not the lane offset.
     ctx.save();
-    const shadowScale = jumping ? 0.5 + Math.min(1, (groundY - y) / 90) * 0.5 : 1;
+    const jOff = state.player.jumpOff || 0;
+    const shadowScale = jumping ? 0.5 + Math.min(1, jOff / 90) * 0.5 : 1;
+    const shadowY = state.player.laneBaseY + CAR_FOOT_OFFSET;
     ctx.fillStyle = `rgba(0,0,0,${0.32 * shadowScale})`;
     ctx.beginPath();
-    ctx.ellipse(x + w / 2, ROAD_SURFACE_Y, (w / 2 + 5) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + w / 2, shadowY, (w / 2 + 5) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
     const cx = x + w / 2, cyRot = y - 14 * k;
@@ -3076,15 +3288,11 @@
     if (duckHeld && !state._duckHeldPrev) audio.playDuck();   // duck SFX on press (kbd + gamepad)
     state._duckHeldPrev = duckHeld;
     state.player.ducking = duckHeld;
-    const wantAccel = actionDown('accel');
-    const wantBrake = actionDown('brake');
-    if (wantAccel) state.speed = Math.min(MAX_SPEED, state.speed + SPEED_ACCEL);
-    else if (wantBrake) state.speed = Math.max(BASE_SPEED * 0.5, state.speed - SPEED_BRAKE);
-    else {
-      // drift toward base speed
-      if (state.speed > BASE_SPEED) state.speed -= SPEED_DRAG;
-      else if (state.speed < BASE_SPEED) state.speed += SPEED_DRAG;
-    }
+    // Auto-throttle: manual accel/brake retired (A/D now drive lane changes).
+    // Speed eases toward the per-leg effective cap (MAX_SPEED * ramped speedScale),
+    // so the car always presses forward and the trip accelerates toward COAST.
+    const cap = MAX_SPEED * legSpeedScale();
+    state.speed += (cap - state.speed) * Math.min(1, 0.05 * (dt * 60));
 
     updatePlayer(dt);
     updateWorld(dt);
@@ -3092,7 +3300,7 @@
     updateScorePopups(dt);
 
     state.distance += state.speed * dt * 60;
-    state.score += state.speed * dt * 8;        // small distance score
+    state.score += state.speed * dt * 3;        // passive distance score (trimmed 8->3: skill, not idling, should dominate)
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
     // Fuel-low feedback hook (Bot 3 produces; Bots 2/4 consume). We compute the
     // rising edge against the *previous* value before overwriting it, so a
@@ -3143,11 +3351,11 @@
       spawnExhaust(PLAYER_X + 4, state.player.y - 10);
       exhaustTimer = 0.07;
     }
-    // Tyre smoke under hard braking at speed.
-    if (wantBrake && state.speed > BASE_SPEED + 1) {
+    // Tyre smoke when skidding into a lane change at speed.
+    if (state.player.laneTweenT > 0 && state.speed > BASE_SPEED + 1) {
       brakeSmokeTimer -= dt;
       if (brakeSmokeTimer <= 0) {
-        spawnTireSmoke(PLAYER_X + 22, ROAD_SURFACE_Y - 2);
+        spawnTireSmoke(PLAYER_X + 22, state.player.laneBaseY + CAR_FOOT_OFFSET - 2);
         brakeSmokeTimer = 0.04;
       }
     } else {
