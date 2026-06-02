@@ -73,6 +73,10 @@ const LANE_TWEEN_DUR = 0.16;
 const LANE_COMMIT_FRAC = 0.5;
 const REACTION_R = 0.25;                // human+actuation reaction budget (s)
 const SPAWN_LEAD_PX = (W + 60) - PLAYER_X;  // px a blocker travels from spawn to the player
+// Combo scoring (mirror game.js)
+const COMBO_CEILING = 25;
+const comboMult = (c) => 1 + Math.max(0, c - 1) * 0.6;
+const comboWindow = (c) => Math.max(1.5, 4.0 - c * 0.12);
 // Per-leg pattern weights + maxLaneSpan (mirror game.js)
 const PATTERN = [
   { maxLaneSpan: 1, w: { single: 0.80, wallGap: 0.15, layered: 0.05, chicane: 0.00 } },
@@ -348,6 +352,36 @@ function economyRun(policy, seed) {
   };
 }
 
+// SKILL vs DISTANCE: does a fast "weaver" (near-misses + sustained combo) score
+// far above a passive "grinder" (just drives, grabs little)? Mirrors the new
+// score formula: passive distance * 3, +500/leg, pickups & near-misses * comboMult.
+function scoreModel(policy, seed) {
+  const rng = makeRng(seed);
+  let distance = 0, spawnTimer = 0, score = 0, combo = 0, comboT = 0, lastLeg = -1;
+  while (distance < TRIP_TOTAL) {
+    const leg = legForDistance(distance);
+    if (leg > lastLeg) { score += 500; lastLeg = leg; }   // biome-clear bonus
+    const d = DIFFICULTY[leg];
+    const speed = AUTO(leg);
+    const bump = (val) => { combo = Math.min(COMBO_CEILING, combo + 1); comboT = comboWindow(combo); score += Math.round(val * comboMult(combo)); };
+    spawnTimer -= DT;
+    if (spawnTimer <= 0) {
+      const fuelChance = Math.min(0.4, 0.10 * d.fuelSpawnRate), snackChance = 0.18;
+      const r = rng();
+      if (r < fuelChance) { if (rng() < policy.grab) bump(25); }
+      else if (r < fuelChance + snackChance) { if (rng() < policy.grab) bump(50); }
+      else { const n = samplePatternBlockers(leg, rng); for (let k = 0; k < n; k++) if (rng() < policy.nearMiss) bump(35); }
+      spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.045) / d.obstacleDensity);
+    }
+    score += speed * DT * 3;
+    distance += speed * 60 * DT;
+    if (combo > 0) { comboT -= DT; if (comboT <= 0) combo = 0; }
+  }
+  return Math.round(score);
+}
+const grinder = { grab: 0.20, nearMiss: 0.00 };   // passive: drives, grabs little, no risk
+const weaver = { grab: 0.85, nearMiss: 0.70 };     // aggressive: near-misses + sustained combo
+
 // Aggregate a policy over many seeds so a claim never rests on one lucky seed.
 function seedSweep(policy, n) {
   let finishes = 0, driedBeforeCoast = 0;
@@ -522,8 +556,19 @@ let lanesSolved = true, reachOk = true;
 });
 console.log(`    => ${lanesSolved && reachOk ? 'PROVEN: an open lane is always reachable in time on every leg.' : 'FAIL: a leg has an unreachable/over-wide pattern.'}\n`);
 
+// SKILL_DOMINATES_DISTANCE — a weaver should outscore a grinder by >= 2.5x.
+const SEEDS_SCORE = 60;
+let weaverSum = 0, grinderSum = 0;
+for (let s = 1; s <= SEEDS_SCORE; s++) { weaverSum += scoreModel(weaver, s * 5779 + 3); grinderSum += scoreModel(grinder, s * 5779 + 3); }
+const weaverAvg = Math.round(weaverSum / SEEDS_SCORE), grinderAvg = Math.round(grinderSum / SEEDS_SCORE);
+const skillRatio = weaverAvg / grinderAvg;
+const skillDominates = skillRatio >= 2.5;
+console.log('[7] SKILL vs DISTANCE');
+console.log(`    weaver avg score ${weaverAvg}  vs  grinder avg score ${grinderAvg}  =>  ${skillRatio.toFixed(2)}x  (need >=2.5x)\n`);
+
 const C = {
   jumpSymmetric: Math.abs(jump.tApex - jump.descent) <= DT + 1e-9,
+  skillDominates,
   solvable: allSolved,
   jumpSpanSafe,
   finaleIsClimax,
@@ -541,6 +586,7 @@ console.log(`      jump span < min gap (all legs) .... ${C.jumpSpanSafe ? 'PASS'
 console.log(`      finale is the climax .............. ${C.finaleIsClimax ? 'PASS' : 'FAIL'}`);
 console.log(`      lanes solvable (open lane clears).. ${C.lanesSolvable ? 'PASS' : 'FAIL'}`);
 console.log(`      open lane reachable in time ....... ${C.laneReach ? 'PASS' : 'FAIL'}`);
+console.log(`      skill dominates distance (>=2.5x).. ${C.skillDominates ? 'PASS' : 'FAIL'}  (${skillRatio.toFixed(2)}x)`);
 console.log(`      skilled finishes (>=99%) .......... ${C.skilledFinish ? 'PASS' : 'FAIL'}  (${pctf(skS.finishRate)})`);
 console.log(`      moderate finishes (>=90%) ......... ${C.moderateFinish ? 'PASS' : 'FAIL'}  (${pctf(moS.finishRate)})`);
 console.log(`      careless runs dry (>=85%) ......... ${C.carelessDry ? 'PASS' : 'FAIL'}  (${pctf(caS.dryRate)})`);

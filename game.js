@@ -277,7 +277,9 @@
     { id: 'snack', title: 'Roadside Calories', desc: 'Collect a snack pickup.' },
     { id: 'fuel', title: 'Tank Top-Off', desc: 'Collect a fuel can.' },
     { id: 'pitstop', title: 'Full-Service Stop', desc: 'Pull through a pit stop.' },
-    { id: 'combo-5', title: 'Perfect Snack Line', desc: 'Build a 5x pickup combo.' },
+    { id: 'combo-5', title: 'Perfect Snack Line', desc: 'Build a 5-chain combo.' },
+    { id: 'combo-15', title: 'In the Zone', desc: 'Build a 15-chain combo.' },
+    { id: 'combo-25', title: 'Untouchable', desc: 'Max out a 25-chain combo.' },
     { id: 'max-speed', title: 'Cruise Control Hero', desc: 'Reach top speed.' },
     { id: 'low-fuel', title: 'Running on Fumes', desc: 'Keep driving below 15 percent fuel.' },
     { id: 'forest', title: 'Into the Pines', desc: 'Reach the forest biome.' },
@@ -458,8 +460,13 @@
     // scores
     scores: []
   };
-  const COMBO_WINDOW = 4.0;  // seconds since last pickup before combo resets
-  const COMBO_MAX = 5;
+  const COMBO_BASE_WINDOW = 4.0;  // base seconds before combo resets; shrinks as combo climbs
+  const COMBO_CEILING = 25;       // soft cap on combo COUNT (bounds runaway), but the multiplier
+                                  // keeps climbing — combo is now the score engine, not a flat x5.
+  // Score multiplier from combo count: 1x, 1.6x, 2.2x ... combo5=3.4x, combo10=6.4x, combo20=12.4x.
+  const comboMult = (c) => 1 + Math.max(0, c - 1) * 0.6;
+  // Decay window tightens with combo so a long chain demands near-continuous skill.
+  const comboWindow = (c) => Math.max(1.5, COMBO_BASE_WINDOW - c * 0.12);
 
   // ============================================================
   // STORAGE
@@ -1568,6 +1575,13 @@
     }
     return [p.lane];
   }
+  // True if a blocker sits in `lane` close to the player (used for lane-risk bonus).
+  function laneHasNearbyBlocker(lane) {
+    for (const o of state.obstacles) {
+      if (o.lane === lane && !o.hit && o.x > PLAYER_X - 50 && o.x < PLAYER_X + 320) return true;
+    }
+    return false;
+  }
 
   // ============================================================
   // OBSTACLES & COLLECTIBLES
@@ -1790,7 +1804,21 @@
     const lanes = occupiedLanes();
     for (const o of state.obstacles) {
       if (o.hit) continue;
-      if (!lanes.includes(o.lane)) continue;
+      if (!lanes.includes(o.lane)) {
+        // Near-miss: an un-hit blocker in an ADJACENT lane sliding past the player
+        // rewards riding the edge of danger — bumps combo and scores.
+        if (!o.nearMissed && Math.abs(o.lane - state.player.lane) === 1 &&
+            o.x + o.w < PLAYER_X + 24 && o.x + o.w > PLAYER_X - 30) {
+          o.nearMissed = true;
+          state.combo = Math.min(COMBO_CEILING, state.combo + 1);
+          state.comboTimer = comboWindow(state.combo);
+          const pts = Math.round(35 * comboMult(state.combo));
+          state.score += pts;
+          state.comboPopupT = 0.5;
+          spawnScorePopup(PLAYER_X + 30, o.y - 8, `NEAR MISS +${pts}`, '#9fd8ff');
+        }
+        continue;
+      }
       if (rectsOverlap(pb, o)) {
         o.hit = true;
         state.fuel -= HIT_FUEL_PENALTY;
@@ -1819,22 +1847,27 @@
         : (lanes.includes(c.lane) && rectsOverlap(pb, c));
       if (got) {
         c.taken = true;
-        // Bump combo
-        state.combo = Math.min(COMBO_MAX, state.combo + 1);
-        state.comboTimer = COMBO_WINDOW;
+        // Bump combo (uncapped multiplier, soft-capped count)
+        state.combo = Math.min(COMBO_CEILING, state.combo + 1);
+        state.comboTimer = comboWindow(state.combo);
         state.comboPopupT = 0.6;
         state.runStats.pickups += 1;
-        if (state.combo >= COMBO_MAX) unlockAchievement('combo-5');
-        const mult = state.combo;
+        if (state.combo >= 5) unlockAchievement('combo-5');
+        if (state.combo >= 15) unlockAchievement('combo-15');
+        if (state.combo >= 25) unlockAchievement('combo-25');
+        // Lane-risk bonus: grabbing a can in a lane that also holds a nearby
+        // blocker is a deliberate risky line — reward it.
+        const risky = c.type !== 'pitstop' && laneHasNearbyBlocker(c.lane);
+        const mult = comboMult(state.combo) * (risky ? 1.5 : 1);
         if (state.combo >= 2) audio.playCombo(state.combo);   // combo milestone feedback
         if (c.type === 'fuel') {
           state.runStats.fuel += 1;
-          const pts = FUEL_PICKUP_BONUS * mult;
+          const pts = Math.round(FUEL_PICKUP_BONUS * mult);
           const refill = currentDifficulty().fuelPerCan || FUEL_PICKUP_REFILL;
           state.fuel = Math.min(FUEL_MAX, state.fuel + refill);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
-          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#7ee27e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (risky ? ' RISK!' : ''), '#7ee27e');
           audio.playFuel();
           unlockAchievement('fuel');
         } else if (c.type === 'pitstop') {
@@ -1842,7 +1875,7 @@
           // impossible; PITSTOP_REFILL keeps it a strong rescue, not an auto-win.)
           state.runStats.pitstops += 1;
           state.fuel = Math.min(FUEL_MAX, state.fuel + PITSTOP_REFILL);
-          const pts = 500 * mult;
+          const pts = Math.round(500 * mult);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#7ee27e');
           spawnScorePopup(c.x + c.w / 2, c.y, `PIT STOP!  +${pts}`, '#7ee27e');
@@ -1850,10 +1883,10 @@
           unlockAchievement('pitstop');
         } else {
           state.runStats.snacks += 1;
-          const pts = SNACK_POINTS * mult;
+          const pts = Math.round(SNACK_POINTS * mult);
           state.score += pts;
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#f5d76e');
-          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (mult > 1 ? `  x${mult}` : ''), '#f5d76e');
+          spawnScorePopup(c.x + c.w / 2, c.y, `+${pts}` + (risky ? ' RISK!' : ''), '#f5d76e');
           audio.playSnack();
           unlockAchievement('snack');
         }
@@ -3244,7 +3277,7 @@
     updateScorePopups(dt);
 
     state.distance += state.speed * dt * 60;
-    state.score += state.speed * dt * 8;        // small distance score
+    state.score += state.speed * dt * 3;        // passive distance score (trimmed 8->3: skill, not idling, should dominate)
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
     // Fuel-low feedback hook (Bot 3 produces; Bots 2/4 consume). We compute the
     // rising edge against the *previous* value before overwriting it, so a
