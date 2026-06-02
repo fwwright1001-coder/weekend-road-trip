@@ -701,6 +701,10 @@
     playSnack()  { this.blip({ freq: 880, freq2: 1320, dur: 0.10, type: 'triangle', vol: 0.22 }); },
     playFuel()   { this.blip({ freq: 660, freq2: 990, dur: 0.16, type: 'triangle', vol: 0.25 }); },
     playHit()    { this.noiseHit(); },
+    playComboBreak() {
+      // short descending two-tone — distinct from the noise hit
+      this.blip({ freq: 520, freq2: 300, dur: 0.18, type: 'triangle', vol: 0.16 });
+    },
     playBiome()  {
       // ascending arpeggio C E G
       [523, 659, 784].forEach((f, i) => setTimeout(() =>
@@ -1163,6 +1167,7 @@
     state.player.y = GROUND_Y;
     state.player.vy = 0;
     state.player.jumping = false;
+    state.player.jumpBufferT = 0;
     state.player.ducking = false;
     state._duckHeldPrev = false;
     state._lowFuelWarned = false;
@@ -1180,6 +1185,7 @@
     state.semis = [];
     state.nextSemiAt = 8;
     state.nextPitstopAt = 2200;
+    state.guaranteedFuelDone = false;
     state.birds = [];
     state.nextBirdAt = 3;
     state.ghostRecording = makeGhostRecording();
@@ -1407,13 +1413,22 @@
   // ============================================================
   // PLAYER
   // ============================================================
+  const JUMP_BUFFER = 0.12; // press jump up to 120ms before landing and it still fires
+  function doJump() {
+    state.player.vy = JUMP_V;
+    state.player.jumping = true;
+    state.player.jumpBufferT = 0;
+    spawnDust(PLAYER_X + 30, ROAD_SURFACE_Y, 8);
+    audio.playJump();
+    unlockAchievement('first-jump');
+  }
   function tryJump() {
     if (!state.player.jumping) {
-      state.player.vy = JUMP_V;
-      state.player.jumping = true;
-      spawnDust(PLAYER_X + 30, ROAD_SURFACE_Y, 8);
-      audio.playJump();
-      unlockAchievement('first-jump');
+      doJump();
+    } else {
+      // Airborne — buffer the press so back-to-back obstacles don't need
+      // pixel-perfect timing; it fires the instant we touch down.
+      state.player.jumpBufferT = JUMP_BUFFER;
     }
   }
   function updatePlayer(dt) {
@@ -1429,8 +1444,11 @@
       if (wasJumping) {
         state.player.jumping = false;
         spawnDust(PLAYER_X + 24, ROAD_SURFACE_Y, 14);
+        // Honor a jump pressed just before touchdown.
+        if (state.player.jumpBufferT > 0) doJump();
       }
     }
+    if (state.player.jumpBufferT > 0) state.player.jumpBufferT -= dt;
     // gentle body wobble — sells the suspension
     state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
     // wheel rotation
@@ -1468,6 +1486,14 @@
     const obstMass = Math.max(0, 1 - fuelChance - snackChance);
     const groundChance = obstMass * (0.50 / 0.72);  // pothole/cone share of obstacles
     const signChance = obstMass * (0.22 / 0.72);    // sign share of obstacles
+
+    // Guarantee one fuel can early so a run can't die to first-leg spawn
+    // clustering before any fuel appears (the high early-variance issue).
+    if (!state.guaranteedFuelDone && state.distance > 700) {
+      state.guaranteedFuelDone = true;
+      state.collectibles.push(makeCollectible('fuel'));
+      return;
+    }
 
     const r = Math.random();
     if (r < groundChance) {
@@ -1635,6 +1661,11 @@
         screenShake(10, 0.35);
         spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
         spawnScorePopup(o.x + o.w / 2, o.y - 10, '-' + HIT_FUEL_PENALTY + ' FUEL', '#ff6b3a');
+        if (state.combo >= 2) {
+          // Tell the player their streak just died — was silent before.
+          spawnScorePopup(PLAYER_X + 38, GROUND_Y - 96, 'COMBO LOST', '#ffd166');
+          audio.playComboBreak();
+        }
         state.combo = 0; // hit breaks combo
         audio.playHit();
         unlockAchievement('first-hit');
