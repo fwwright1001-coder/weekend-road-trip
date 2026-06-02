@@ -2506,32 +2506,45 @@
   }
 
   function drawGround(biome) {
-    // Grass strip
+    // Three-lane asphalt: the road now spans all lane contact lines, with dashed
+    // dividers between lanes. Lane 1 (center) keeps the legacy datum.
+    const roadTop = laneBaseYFor(2) - 8;                       // just above the far lane
+    const roadBot = laneBaseYFor(0) + CAR_FOOT_OFFSET + 12;    // just below the near lane
+    // Grass behind the road
     ctx.fillStyle = biomeColor(biome, 'grass');
-    ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
-    // Road
+    ctx.fillRect(0, roadTop - 24, W, H - (roadTop - 24));
+    // Asphalt band
     ctx.fillStyle = biomeColor(biome, 'road');
-    ctx.fillRect(0, GROUND_Y + 12, W, 62);
-    // Road edge highlight
+    ctx.fillRect(0, roadTop, W, roadBot - roadTop);
+    // Edge highlights
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(0, GROUND_Y + 12, W, 2);
-    ctx.fillRect(0, GROUND_Y + 72, W, 2);
-    // Dashed center line, scrolls with distance
+    ctx.fillRect(0, roadTop, W, 2);
+    ctx.fillRect(0, roadBot - 2, W, 2);
+    // Dashed lane dividers (between the 3 lanes), scrolling with distance
     ctx.fillStyle = biomeColor(biome, 'dashColor');
-    const dashW = 52;
-    const gap = 32;
-    const cycle = dashW + gap;
+    const dashW = 52, gap = 32, cycle = dashW + gap;
     const dashOff = state.distance % cycle;
-    for (let x = -dashOff; x < W; x += cycle) {
-      ctx.fillRect(x, GROUND_Y + 40, dashW, 5);
+    const dividers = [
+      (laneBaseYFor(2) + laneBaseYFor(1)) / 2 + CAR_FOOT_OFFSET,
+      (laneBaseYFor(1) + laneBaseYFor(0)) / 2 + CAR_FOOT_OFFSET
+    ];
+    for (const dy of dividers) {
+      for (let x = -dashOff; x < W; x += cycle) ctx.fillRect(x, dy, dashW, 4);
     }
-    // Subtle vignette on the road shoulder
-    const vg = ctx.createLinearGradient(0, GROUND_Y + 12, 0, GROUND_Y + 74);
-    vg.addColorStop(0, 'rgba(0,0,0,0.0)');
-    vg.addColorStop(0.5, 'rgba(0,0,0,0.0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.35)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, GROUND_Y + 12, W, 62);
+    // Depth shading: dim the far (top) lane, brighten the near (bottom) lane
+    const sh = ctx.createLinearGradient(0, roadTop, 0, roadBot);
+    sh.addColorStop(0, 'rgba(0,0,0,0.22)');
+    sh.addColorStop(0.55, 'rgba(0,0,0,0.0)');
+    sh.addColorStop(1, 'rgba(255,255,255,0.05)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(0, roadTop, W, roadBot - roadTop);
+    // Current-lane glow under the car for readability
+    const glowY = state.player.laneBaseY + CAR_FOOT_OFFSET;
+    const gg = ctx.createRadialGradient(PLAYER_X + 38, glowY, 4, PLAYER_X + 38, glowY, 130);
+    gg.addColorStop(0, 'rgba(255,240,180,0.12)');
+    gg.addColorStop(1, 'rgba(255,240,180,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, roadTop, W, roadBot - roadTop);
   }
 
   // ============================================================
@@ -2655,12 +2668,15 @@
     const floorY = y + 2 + bob * 0.3, tailY = y - 14 * k + bob, deckY = y - 16 * k + bob;
     const noseY = y - 11 * k + bob, hoodY = y - 18 * k + bob, canopyY = y - 28 * k + bob;
     const wingY = y - 25 * k + bob, doorCY = y - 9 * k + bob;
-    // ground shadow (no tilt; scales with jump height)
+    // ground shadow stays on the CURRENT lane's contact line; scales with the
+    // jump height only (jumpOff), not the lane offset.
     ctx.save();
-    const shadowScale = jumping ? 0.5 + Math.min(1, (groundY - y) / 90) * 0.5 : 1;
+    const jOff = state.player.jumpOff || 0;
+    const shadowScale = jumping ? 0.5 + Math.min(1, jOff / 90) * 0.5 : 1;
+    const shadowY = state.player.laneBaseY + CAR_FOOT_OFFSET;
     ctx.fillStyle = `rgba(0,0,0,${0.32 * shadowScale})`;
     ctx.beginPath();
-    ctx.ellipse(x + w / 2, ROAD_SURFACE_Y, (w / 2 + 5) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + w / 2, shadowY, (w / 2 + 5) * shadowScale, 7 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
     const cx = x + w / 2, cyRot = y - 14 * k;
