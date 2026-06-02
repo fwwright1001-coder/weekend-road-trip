@@ -730,6 +730,10 @@
       // short descending two-tone — distinct from the noise hit
       this.blip({ freq: 520, freq2: 300, dur: 0.18, type: 'triangle', vol: 0.16 });
     },
+    playLaneHop() {
+      // quick low "whoosh" tick for a lane change — subtle so rapid weaving doesn't grate
+      this.blip({ freq: 300, freq2: 420, dur: 0.07, type: 'sine', vol: 0.10 });
+    },
     playBiome()  {
       // ascending arpeggio C E G
       [523, 659, 784].forEach((f, i) => setTimeout(() =>
@@ -904,8 +908,9 @@
   const KEYMAP = {
     jump: ['Space', 'KeyW', 'ArrowUp'],
     duck: ['KeyS', 'ArrowDown'],
-    accel: ['KeyD', 'ArrowRight'],
-    brake: ['KeyA', 'ArrowLeft'],
+    // Manual throttle retired (speed auto-escalates); A/D + ←/→ now change lanes.
+    laneUp: ['KeyD', 'ArrowRight'],     // toward the far/top lane (index +1)
+    laneDown: ['KeyA', 'ArrowLeft'],    // toward the near/bottom lane (index -1)
     confirm: ['Enter'],
     pause: ['KeyP', 'Escape'],
     help: ['Slash']
@@ -954,7 +959,7 @@
   (function bindTouchControls() {
     const tcEl = document.getElementById('touch-controls');
     if (!tcEl || !tcEl.querySelectorAll) return;
-    const HOLD = { duck: 'KeyS', accel: 'KeyD', brake: 'KeyA' };   // held actions -> key codes
+    const HOLD = { duck: 'KeyS' };   // duck is the only held touch action now
     tcEl.querySelectorAll('[data-tc]').forEach((btn) => {
       const action = btn.dataset.tc;
       const code = HOLD[action];
@@ -963,6 +968,8 @@
         audio.init();                                   // unlock audio on first touch
         btn.classList.add('pressed');
         if (action === 'jump') { if (state.screen === SCREEN.PLAYING) tryJump(); }
+        else if (action === 'laneUp') { if (state.screen === SCREEN.PLAYING) hopLane(+1); }
+        else if (action === 'laneDown') { if (state.screen === SCREEN.PLAYING) hopLane(-1); }
         else if (action === 'pause') { if (state.screen === SCREEN.PLAYING) show(SCREEN.PAUSED); }
         else if (code) { state.keys.add(code); touchHeld.add(code); }
       };
@@ -996,6 +1003,8 @@
       case SCREEN.PLAYING:
         if (isAction('jump', code)) tryJump();
         if (isAction('duck', code)) state.player.ducking = true;
+        if (isAction('laneUp', code)) hopLane(+1);
+        if (isAction('laneDown', code)) hopLane(-1);
         if (isAction('pause', code)) show(SCREEN.PAUSED);
         if (isAction('help', code)) openHelp();
         break;
@@ -1070,13 +1079,12 @@
     const b = (idx) => !!(gp.buttons[idx] && gp.buttons[idx].pressed);
     const axisX = gp.axes[0] || 0;
     const axisY = gp.axes[1] || 0;
-    const triggerBrake = gp.buttons[6] ? gp.buttons[6].value > 0.2 : false;
-    const triggerAccel = gp.buttons[7] ? gp.buttons[7].value > 0.2 : false;
     const next = {
       jump: b(0) || b(12),
       duck: b(1) || b(13) || axisY > 0.45,
-      accel: triggerAccel || b(15) || axisX > 0.45,
-      brake: triggerBrake || b(14) || axisX < -0.45,
+      // lane changes are edge-triggered (dpad L/R or left-stick X)
+      laneUp: b(15) || axisX > 0.45,
+      laneDown: b(14) || axisX < -0.45,
       confirm: b(0),
       pause: b(9),
       help: b(8)
@@ -1084,7 +1092,7 @@
 
     const prev = state.pad;
     state.padConnected = true;
-    ['jump', 'confirm', 'pause', 'help'].forEach((action) => {
+    ['jump', 'laneUp', 'laneDown', 'confirm', 'pause', 'help'].forEach((action) => {
       if (next[action] && !prev[action]) handlePadAction(action);
     });
     state.padPrev = prev;
@@ -1099,6 +1107,8 @@
         break;
       case SCREEN.PLAYING:
         if (action === 'jump') tryJump();
+        if (action === 'laneUp') hopLane(+1);
+        if (action === 'laneDown') hopLane(-1);
         if (action === 'pause') show(SCREEN.PAUSED);
         if (action === 'help') openHelp();
         break;
@@ -1406,8 +1416,8 @@
   function ghostControlsMask() {
     return (actionDown('jump') ? 1 : 0) |
       (actionDown('duck') ? 2 : 0) |
-      (actionDown('accel') ? 4 : 0) |
-      (actionDown('brake') ? 8 : 0);
+      (actionDown('laneUp') ? 4 : 0) |
+      (actionDown('laneDown') ? 8 : 0);
   }
   function recordGhostFrame(force = false) {
     if (!state.ghostRecording) return;
@@ -1465,6 +1475,23 @@
       state.player.jumpBufferT = JUMP_BUFFER;
     }
   }
+  // Lane change (edge-triggered, one hop per press). Mid-tween presses are
+  // buffered and fire on completion — we commit to the destination first so the
+  // reachable set stays discrete (the fairness invariant depends on it).
+  function startLaneHop(target) {
+    const p = state.player;
+    p.laneFromBaseY = laneBaseYFor(p.lane);
+    p.laneTarget = target;
+    p.laneTweenT = LANE_TWEEN_DUR;
+  }
+  function hopLane(dir) {
+    const p = state.player;
+    if (p.laneTweenT > 0) { p.laneBufferDir = dir; p.laneBufferT = LANE_BUFFER; return; }
+    const target = Math.max(0, Math.min(LANE_COUNT - 1, p.lane + dir));
+    if (target === p.lane) { screenShake(4, 0.12); return; }  // into the rail — tiny nudge
+    startLaneHop(target);
+    audio.playLaneHop();
+  }
   function updatePlayer(dt) {
     // Frame-rate-independent vertical physics: scale by 60fps-equivalent steps
     // so hang time is identical on 60Hz and 144Hz displays.
@@ -1485,19 +1512,39 @@
       }
     }
     if (state.player.jumpBufferT > 0) state.player.jumpBufferT -= dt;
-    // Lane base is pinned to the current lane here (the tween lands next commit);
-    // the drawn/collision y is the lane datum minus the jump height.
-    state.player.laneBaseY = laneBaseYFor(state.player.lane);
+    // Lane tween — smoothstep the lane base toward the target lane.
+    const p = state.player;
+    if (p.laneTweenT > 0) {
+      p.laneTweenT = Math.max(0, p.laneTweenT - dt);
+      const prog = 1 - p.laneTweenT / LANE_TWEEN_DUR;       // 0..1
+      const sm = prog * prog * (3 - 2 * prog);              // smoothstep
+      const toBaseY = laneBaseYFor(p.laneTarget);
+      p.laneBaseY = p.laneFromBaseY + (toBaseY - p.laneFromBaseY) * sm;
+      // bank into the hop (sign: hopping up/far = lean one way)
+      p.laneTilt = Math.sin(prog * Math.PI) * 0.12 * Math.sign(toBaseY - p.laneFromBaseY);
+      if (p.laneTweenT === 0) {
+        p.lane = p.laneTarget;
+        p.laneBaseY = toBaseY;
+        spawnDust(PLAYER_X + 24, p.laneBaseY + CAR_FOOT_OFFSET, 6);
+        // fire a press queued mid-hop (commit-to-destination, then continue)
+        if (p.laneBufferT > 0 && p.laneBufferDir !== 0) {
+          const dir = p.laneBufferDir; p.laneBufferDir = 0; p.laneBufferT = 0;
+          const nt = Math.max(0, Math.min(LANE_COUNT - 1, p.lane + dir));
+          if (nt !== p.lane) startLaneHop(nt);
+        }
+      }
+    } else {
+      p.laneBaseY = laneBaseYFor(p.lane);
+      p.laneTilt += (0 - p.laneTilt) * 0.2;
+    }
+    if (p.laneBufferT > 0) p.laneBufferT -= dt;
     state.player.y = state.player.laneBaseY - state.player.jumpOff;
     // gentle body wobble — sells the suspension
     state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
     // wheel rotation
     state.player.wheelAngle += state.speed * 0.18 * f;
-    // braking/accel tilt
-    const wantAccel = actionDown('accel');
-    const wantBrake = actionDown('brake');
-    const targetTilt = wantAccel ? -0.04 : wantBrake ? 0.06 : 0;
-    state.player.tilt += (targetTilt - state.player.tilt) * 0.12;
+    // body tilt now comes from lane hops (manual throttle retired)
+    state.player.tilt += (state.player.laneTilt - state.player.tilt) * 0.3;
   }
   function playerBox() {
     const h = state.player.ducking ? 32 : 52;
@@ -3196,11 +3243,11 @@
       spawnExhaust(PLAYER_X + 4, state.player.y - 10);
       exhaustTimer = 0.07;
     }
-    // Tyre smoke under hard braking at speed.
-    if (wantBrake && state.speed > BASE_SPEED + 1) {
+    // Tyre smoke when skidding into a lane change at speed.
+    if (state.player.laneTweenT > 0 && state.speed > BASE_SPEED + 1) {
       brakeSmokeTimer -= dt;
       if (brakeSmokeTimer <= 0) {
-        spawnTireSmoke(PLAYER_X + 22, ROAD_SURFACE_Y - 2);
+        spawnTireSmoke(PLAYER_X + 22, state.player.laneBaseY + CAR_FOOT_OFFSET - 2);
         brakeSmokeTimer = 0.04;
       }
     } else {
