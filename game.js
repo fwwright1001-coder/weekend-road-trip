@@ -63,7 +63,9 @@
   const LANE_COUNT = 3;
   const LANE_DY = [44, 0, -44];    // vertical offset from GROUND_Y: 0=near/bottom, 1=center, 2=far/top
   const LANE_TWEEN_DUR = 0.16;     // seconds for one lane hop
-  const LANE_BUFFER = 0.12;        // queued lane-press window (mirrors the jump buffer)
+  const LANE_BUFFER = 0.18;        // queued lane-press window. Must be >= LANE_TWEEN_DUR so a
+                                   // press made early in a hop survives to the completion check
+                                   // (a 0.12s buffer would expire before a 0.16s tween finished).
   const LANE_COMMIT_FRAC = 0.5;    // past this tween fraction you occupy only the destination lane
   const laneBaseYFor = (i) => GROUND_Y + LANE_DY[Math.max(0, Math.min(LANE_COUNT - 1, i))];
   const FUEL_MAX = 100;
@@ -940,6 +942,11 @@
       e.preventDefault();
     }
     state.keys.add(e.code);
+    // OS key-repeat must NOT re-fire edge-triggered actions (jump, lane hops):
+    // held keys still register in state.keys above for continuous reads
+    // (duck via actionDown), but routing only runs on the genuine first press.
+    // This matches the gamepad edge-trigger and enforces one-hop-per-press.
+    if (e.repeat) return;
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
     // Hidden debug overlay — only reachable in DEBUG builds.
     if (e.code === 'Backquote') { if (DEBUG) state.debug = !state.debug; return; }

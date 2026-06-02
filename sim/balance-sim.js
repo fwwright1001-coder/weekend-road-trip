@@ -311,9 +311,11 @@ function economyRun(policy, seed) {
           inFlight.push(spawnX);
           const n = samplePatternBlockers(leg, rng);
           blockers += n;
-          for (let k = 0; k < n; k++) {
-            if (rng() < policy.hitRate(leg)) { blockersHit++; fuel -= HIT_FUEL_PENALTY; }
-          }
+          // The player occupies ONE lane, so a cross-lane pattern presents at most
+          // ONE blocker the player could hit (the others are dodged by lane choice;
+          // a full-width layered wall is cleared by a single jump/duck). So roll
+          // the hit ONCE per pattern, not once per blocker.
+          if (rng() < policy.hitRate(leg)) { blockersHit++; fuel -= HIT_FUEL_PENALTY; }
         }
       }
       spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.045) / d.obstacleDensity);
