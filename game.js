@@ -58,6 +58,14 @@
   const MIN_GAP_TIME = 0.72;       // min seconds between same-lane blockers; the real (speed-aware) gap
                                    // is max(table px, MIN_GAP_TIME * effSpeed). Exceeds the jump arc
                                    // (~0.683s) at every leg's escalated speed — see sim/balance-sim.js.
+  // Lanes: 3 horizontal bands. Lane 1 (center) keeps the legacy GROUND_Y datum so
+  // all pre-lane jump/duck/scenery/ghost math is the backward-compatible default.
+  const LANE_COUNT = 3;
+  const LANE_DY = [44, 0, -44];    // vertical offset from GROUND_Y: 0=near/bottom, 1=center, 2=far/top
+  const LANE_TWEEN_DUR = 0.16;     // seconds for one lane hop
+  const LANE_BUFFER = 0.12;        // queued lane-press window (mirrors the jump buffer)
+  const LANE_COMMIT_FRAC = 0.5;    // past this tween fraction you occupy only the destination lane
+  const laneBaseYFor = (i) => GROUND_Y + LANE_DY[Math.max(0, Math.min(LANE_COUNT - 1, i))];
   const FUEL_MAX = 100;
   const FUEL_DRAIN_PER_SEC = 1.4;
   const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (Bot 4 consumes it)
@@ -399,13 +407,23 @@
     shakeMag: 0,
     // player
     player: {
-      y: GROUND_Y,
-      vy: 0,
+      y: GROUND_Y,             // drawn/collision y = laneBaseY - jumpOff (derived each frame)
+      vy: 0,                   // jump velocity in jumpOff space (positive = rising)
+      jumpOff: 0,              // height above the current lane base (>=0)
       ducking: false,
       jumping: false,
       tilt: 0,
       wheelAngle: 0,
-      bob: 0
+      bob: 0,
+      // lanes (geometry live now; input/tween land in the next commit)
+      lane: 1,                 // 0 = far/top, 1 = center (= legacy GROUND_Y), 2 = near/bottom
+      laneTarget: 1,
+      laneBaseY: GROUND_Y,
+      laneFromBaseY: GROUND_Y,
+      laneTweenT: 0,
+      laneBufferDir: 0,
+      laneBufferT: 0,
+      laneTilt: 0
     },
     // initials entry
     initials: ['A', 'A', 'A'],
@@ -1173,9 +1191,18 @@
     state.pendingScore = 0;
     state.player.y = GROUND_Y;
     state.player.vy = 0;
+    state.player.jumpOff = 0;
     state.player.jumping = false;
     state.player.jumpBufferT = 0;
     state.player.ducking = false;
+    state.player.lane = 1;
+    state.player.laneTarget = 1;
+    state.player.laneBaseY = GROUND_Y;
+    state.player.laneFromBaseY = GROUND_Y;
+    state.player.laneTweenT = 0;
+    state.player.laneBufferDir = 0;
+    state.player.laneBufferT = 0;
+    state.player.laneTilt = 0;
     state._duckHeldPrev = false;
     state._lowFuelWarned = false;
     state._ariaTick = 0;
@@ -1422,7 +1449,7 @@
   // ============================================================
   const JUMP_BUFFER = 0.12; // press jump up to 120ms before landing and it still fires
   function doJump() {
-    state.player.vy = JUMP_V;
+    state.player.vy = -JUMP_V;     // jumpOff space: +vy = rising (JUMP_V is the legacy upward magnitude)
     state.player.jumping = true;
     state.player.jumpBufferT = 0;
     spawnDust(PLAYER_X + 30, ROAD_SURFACE_Y, 8);
@@ -1442,11 +1469,13 @@
     // Frame-rate-independent vertical physics: scale by 60fps-equivalent steps
     // so hang time is identical on 60Hz and 144Hz displays.
     const f = dt * 60;
-    state.player.vy += GRAVITY * f;
-    state.player.y += state.player.vy * f;
-    if (state.player.y >= GROUND_Y) {
+    // Vertical jump physics in jumpOff space (height above the lane base, >=0).
+    // Mirror-image of the legacy y-integrator, so the arc is byte-identical.
+    state.player.vy -= GRAVITY * f;
+    state.player.jumpOff += state.player.vy * f;
+    if (state.player.jumpOff <= 0) {
       const wasJumping = state.player.jumping;
-      state.player.y = GROUND_Y;
+      state.player.jumpOff = 0;
       state.player.vy = 0;
       if (wasJumping) {
         state.player.jumping = false;
@@ -1456,6 +1485,10 @@
       }
     }
     if (state.player.jumpBufferT > 0) state.player.jumpBufferT -= dt;
+    // Lane base is pinned to the current lane here (the tween lands next commit);
+    // the drawn/collision y is the lane datum minus the jump height.
+    state.player.laneBaseY = laneBaseYFor(state.player.lane);
+    state.player.y = state.player.laneBaseY - state.player.jumpOff;
     // gentle body wobble — sells the suspension
     state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
     // wheel rotation
