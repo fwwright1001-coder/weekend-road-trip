@@ -66,6 +66,21 @@ const legEffSpeed = (leg) => MAX_SPEED * DIFFICULTY[leg].speedScale;
 const legMinGapPx = (leg) =>
   Math.max(DIFFICULTY[leg].minBlockingGap, MIN_GAP_TIME * legEffSpeed(leg) * 60);
 
+// Lane geometry mirrored from game.js
+const LANE_COUNT = 3;
+const LANE_DY = [44, 0, -44];          // 0=near/bottom, 1=center, 2=far/top
+const LANE_TWEEN_DUR = 0.16;
+const LANE_COMMIT_FRAC = 0.5;
+const REACTION_R = 0.25;                // human+actuation reaction budget (s)
+const SPAWN_LEAD_PX = (W + 60) - PLAYER_X;  // px a blocker travels from spawn to the player
+// Per-leg pattern weights + maxLaneSpan (mirror game.js)
+const PATTERN = [
+  { maxLaneSpan: 1, w: { single: 0.80, wallGap: 0.15, layered: 0.05, chicane: 0.00 } },
+  { maxLaneSpan: 1, w: { single: 0.55, wallGap: 0.30, layered: 0.10, chicane: 0.05 } },
+  { maxLaneSpan: 2, w: { single: 0.38, wallGap: 0.34, layered: 0.18, chicane: 0.10 } },
+  { maxLaneSpan: 2, w: { single: 0.25, wallGap: 0.34, layered: 0.23, chicane: 0.18 } }
+];
+
 // --- geometry mirrored from game.js --------------------------------------
 function obstacleGeom(type) {
   if (type === 'pothole') return { w: 64, h: 18, y: GROUND_Y + 2 };
@@ -175,11 +190,78 @@ function solvabilityProof(legIdx) {
 }
 
 // ============================================================
+// 2b. LANE SOLVABILITY — optimal controller vs the worst WALL_GAP stream
+// ============================================================
+// The lateral analogue of the single-track proof. Build the densest legal
+// WALL_GAP stream (each pattern blocks 2 lanes, leaving exactly one open; the
+// open lane cycles 0/2/1 to force max lateral travel). An optimal controller
+// pre-positions into the open lane (one 0.16s hop at a time). Assert it never
+// gets caught in a blocked lane. Per-lane vertical solvability (jump/duck) is
+// covered by section [2]; LAYERED walls reduce to that single-lane proof.
+function solvabilityProofLanes(legIdx) {
+  const gap = legMinGapPx(legIdx);
+  const speedPx = legEffSpeed(legIdx) * 60;
+  const opens = [0, 2, 1, 0, 2, 1, 0, 2];      // worst-case alternation (up to 2 hops apart)
+  const patterns = opens.map((open, i) => ({ open, x: PLAYER_X + 700 + i * gap, done: false }));
+  let lane = 1, laneTarget = 1, tweenT = 0, collisions = 0;
+
+  for (let step = 0; step < 12000; step++) {
+    for (const p of patterns) p.x -= speedPx * DT;
+    if (tweenT > 0) { tweenT = Math.max(0, tweenT - DT); if (tweenT === 0) lane = laneTarget; }
+
+    // controller: pre-position toward the open lane of the nearest pattern ahead
+    const next = patterns.find((p) => p.x + 78 > PLAYER_X - 10);
+    if (next && tweenT === 0 && lane !== next.open) {
+      laneTarget = lane + Math.sign(next.open - lane);
+      tweenT = LANE_TWEEN_DUR;
+    }
+
+    // collision: while a pattern overlaps the player x-band, the occupied lane(s)
+    // must all be the open lane (commit rule mid-hop).
+    for (const p of patterns) {
+      if (p.done) continue;
+      const overlapX = PLAYER_X < p.x + 78 && PLAYER_X + 76 > p.x;
+      if (!overlapX) continue;
+      let occ;
+      if (tweenT > 0) { const prog = 1 - tweenT / LANE_TWEEN_DUR; occ = prog < LANE_COMMIT_FRAC ? [lane, laneTarget] : [laneTarget]; }
+      else occ = [lane];
+      const blocked = [0, 1, 2].filter((l) => l !== p.open);
+      if (occ.some((l) => blocked.includes(l))) { collisions++; p.done = true; }
+    }
+    if (patterns.every((p) => p.x + 78 < PLAYER_X - 10)) break;
+  }
+  return { legIdx, gap, collisions };
+}
+
+// Analytic reachability: lead time for a freshly-spawned pattern to reach the
+// player must exceed the time to cross to the open lane (worst case 2 hops),
+// and a non-layered pattern must never block all 3 lanes (maxLaneSpan <= 2).
+function openLaneReach(legIdx) {
+  const leadT = SPAWN_LEAD_PX / (legEffSpeed(legIdx) * 60);
+  const reachT = REACTION_R + 2 * LANE_TWEEN_DUR;     // 0.25 + 0.32 = 0.57s
+  return { legIdx, leadT, reachT, ok: leadT > reachT, spanOk: PATTERN[legIdx].maxLaneSpan <= 2 };
+}
+
+// ============================================================
 // 3 + 4. ECONOMY — full-trip fuel sim under skilled vs careless policies
 // ============================================================
 // Event-level model of the real spawn loop. A "policy" defines speed, the
 // fraction of blockers hit, and the fraction of fuel cans collected. We run the
 // genuine spawn cadence + min-gap rule so blocker/fuel counts are realistic.
+// Sample how many blockers a blocking-pattern roll produces on a leg (mirrors
+// game.js spawnPattern: single=1, wallGap=2, layered=3, chicane=2; wallGap/chicane
+// downgrade to single where maxLaneSpan < 2).
+function samplePatternBlockers(leg, rng) {
+  const P = PATTERN[leg], w = P.w;
+  let r = rng(), pat;
+  if ((r -= w.single) < 0) pat = 'single';
+  else if ((r -= w.wallGap) < 0) pat = 'wallGap';
+  else if ((r -= w.layered) < 0) pat = 'layered';
+  else pat = 'chicane';
+  if ((pat === 'wallGap' || pat === 'chicane') && P.maxLaneSpan < 2) pat = 'single';
+  return pat === 'single' ? 1 : pat === 'layered' ? 3 : 2;
+}
+
 function economyRun(policy, seed) {
   const rng = makeRng(seed);
   let distance = 0, fuel = FUEL_MAX, t = 0;
@@ -206,28 +288,29 @@ function economyRun(policy, seed) {
     // spawn cadence (mirror updateWorld)
     spawnTimer -= DT;
     if (spawnTimer <= 0) {
+      // New spawn model (mirror game.js): fuel / snack / else a blocking PATTERN
+      // (single=1, wallGap=2, layered=3, chicane=2 blockers). More blockers on the
+      // harder legs => more hit opportunities for careless play.
       const fuelChance = Math.min(0.4, 0.10 * d.fuelSpawnRate);
       const snackChance = 0.18;
-      const obstMass = Math.max(0, 1 - fuelChance - snackChance);
-      const groundChance = obstMass * (0.50 / 0.72);
-      const signChance = obstMass * (0.22 / 0.72);
       const r = rng();
-      if (r < groundChance + signChance) {
-        // blocking obstacle — apply min-gap skip rule (rightmost in flight)
-        const spawnX = W + 60;
-        const rightmost = inFlight.length ? Math.max(...inFlight) : -Infinity;
-        if (rightmost === -Infinity || spawnX - rightmost >= d.minBlockingGap) {
-          inFlight.push(spawnX);
-          blockers++;
-          // the player resolves it: skilled clears, careless sometimes hits
-          if (rng() < policy.hitRate(leg)) { blockersHit++; fuel -= HIT_FUEL_PENALTY; }
-        }
-      } else if (r < groundChance + signChance + snackChance) {
-        // snack — irrelevant to fuel
-      } else {
-        // fuel can
+      if (r < fuelChance) {
         fuelCans++;
         if (rng() < policy.fuelGrab(leg)) { fuelCansTaken++; fuel = Math.min(FUEL_MAX, fuel + d.fuelPerCan); }
+      } else if (r < fuelChance + snackChance) {
+        // snack — irrelevant to fuel
+      } else {
+        // blocking pattern — one spawn event (one min-gap check), N blockers
+        const spawnX = W + 60;
+        const rightmost = inFlight.length ? Math.max(...inFlight) : -Infinity;
+        if (rightmost === -Infinity || spawnX - rightmost >= legMinGapPx(leg)) {
+          inFlight.push(spawnX);
+          const n = samplePatternBlockers(leg, rng);
+          blockers += n;
+          for (let k = 0; k < n; k++) {
+            if (rng() < policy.hitRate(leg)) { blockersHit++; fuel -= HIT_FUEL_PENALTY; }
+          }
+        }
       }
       spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.045) / d.obstacleDensity);
     }
@@ -427,11 +510,25 @@ spanReport.forEach((r) => {
 });
 console.log(`    finale is climax (fastest + densest COAST): ${finaleIsClimax ? 'YES' : 'NO'}\n`);
 
+// 2b. lane solvability + reachability
+console.log('[6] LANE SOLVABILITY — optimal controller vs worst WALL_GAP stream + reach budget');
+let lanesSolved = true, reachOk = true;
+['CITY', 'FOREST', 'DESERT', 'COAST'].forEach((name, i) => {
+  const s = solvabilityProofLanes(i);
+  const r = openLaneReach(i);
+  if (s.collisions > 0) lanesSolved = false;
+  if (!r.ok || !r.spanOk) reachOk = false;
+  console.log(`    ${name.padEnd(6)} laneCollisions ${s.collisions}  lead ${r.leadT.toFixed(3)}s vs reach ${r.reachT.toFixed(2)}s  span<=2 ${r.spanOk ? 'Y' : 'N'}  ${s.collisions === 0 && r.ok && r.spanOk ? 'CLEAR' : 'FAIL'}`);
+});
+console.log(`    => ${lanesSolved && reachOk ? 'PROVEN: an open lane is always reachable in time on every leg.' : 'FAIL: a leg has an unreachable/over-wide pattern.'}\n`);
+
 const C = {
   jumpSymmetric: Math.abs(jump.tApex - jump.descent) <= DT + 1e-9,
   solvable: allSolved,
   jumpSpanSafe,
   finaleIsClimax,
+  lanesSolvable: lanesSolved,
+  laneReach: reachOk,
   skilledFinish: skS.finishRate >= 0.99,
   moderateFinish: moS.finishRate >= 0.90,
   carelessDry: caS.dryRate >= 0.85
@@ -442,6 +539,8 @@ console.log(`      jump arc symmetric & flush ........ ${C.jumpSymmetric ? 'PASS
 console.log(`      no unavoidable blockers ........... ${C.solvable ? 'PASS' : 'FAIL'}`);
 console.log(`      jump span < min gap (all legs) .... ${C.jumpSpanSafe ? 'PASS' : 'FAIL'}`);
 console.log(`      finale is the climax .............. ${C.finaleIsClimax ? 'PASS' : 'FAIL'}`);
+console.log(`      lanes solvable (open lane clears).. ${C.lanesSolvable ? 'PASS' : 'FAIL'}`);
+console.log(`      open lane reachable in time ....... ${C.laneReach ? 'PASS' : 'FAIL'}`);
 console.log(`      skilled finishes (>=99%) .......... ${C.skilledFinish ? 'PASS' : 'FAIL'}  (${pctf(skS.finishRate)})`);
 console.log(`      moderate finishes (>=90%) ......... ${C.moderateFinish ? 'PASS' : 'FAIL'}  (${pctf(moS.finishRate)})`);
 console.log(`      careless runs dry (>=85%) ......... ${C.carelessDry ? 'PASS' : 'FAIL'}  (${pctf(caS.dryRate)})`);

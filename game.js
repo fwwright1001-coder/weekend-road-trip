@@ -214,11 +214,17 @@
   //   speedScale      : per-leg pacing multiplier. Effective top speed for a leg
   //                     is MAX_SPEED * speedScale, ramped within the leg, so the
   //                     trip ACCELERATES toward COAST — the finale is the climax.
+  //   patternWeights  : spawn mix across lanes — single (1 lane), wallGap (2 lanes
+  //                     blocked, 1 open), layered (full-width single-verb wall:
+  //                     all-jump or all-duck), chicane (two offset singles, a weave).
+  //   maxLaneSpan     : max lanes a non-layered pattern may block (1 = singles only,
+  //                     2 = wallGap/chicane allowed). The fairness invariant: a
+  //                     non-layered pattern never blocks all 3 lanes (>=1 stays open).
   const DIFFICULTY = [
-    { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00 }, // CITY
-    { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12 }, // FOREST
-    { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28 }, // DESERT
-    { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45 }  // COAST
+    { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, maxLaneSpan: 1, patternWeights: { single: 0.80, wallGap: 0.15, layered: 0.05, chicane: 0.00 } }, // CITY
+    { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, maxLaneSpan: 1, patternWeights: { single: 0.55, wallGap: 0.30, layered: 0.10, chicane: 0.05 } }, // FOREST
+    { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, maxLaneSpan: 2, patternWeights: { single: 0.38, wallGap: 0.34, layered: 0.18, chicane: 0.10 } }, // DESERT
+    { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, maxLaneSpan: 2, patternWeights: { single: 0.25, wallGap: 0.34, layered: 0.23, chicane: 0.18 } }  // COAST
   ];
 
   const SCREEN = {
@@ -1552,6 +1558,16 @@
     const y = state.player.y - h + 10;
     return { x: PLAYER_X, y, w, h };
   }
+  // Lanes the car occupies for collision. Mid-hop it straddles BOTH lanes until
+  // it commits (>= LANE_COMMIT_FRAC of the tween), then only the destination.
+  function occupiedLanes() {
+    const p = state.player;
+    if (p.laneTweenT > 0) {
+      const prog = 1 - p.laneTweenT / LANE_TWEEN_DUR;
+      return prog < LANE_COMMIT_FRAC ? [p.lane, p.laneTarget] : [p.laneTarget];
+    }
+    return [p.lane];
+  }
 
   // ============================================================
   // OBSTACLES & COLLECTIBLES
@@ -1563,91 +1579,119 @@
   //   drawCollectibles() + handle the pickup branch in updateWorld().
   // Obstacle types so far: 'pothole', 'cone', 'sign'
   // Collectible types so far: 'fuel', 'snack', 'pitstop'
+  const randLane = () => Math.floor(Math.random() * LANE_COUNT);
+  const blockerType = () => (Math.random() < 0.30 ? 'sign' : ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)]);
+
   function spawn() {
     const diff = currentDifficulty();
-    // Per-leg fuel boost: expand the fuel slice and shrink the obstacle slices
-    // proportionally, preserving the original pothole:cone:sign composition.
-    // Baseline weights were ground 0.50 / sign 0.22 / snack 0.18 / fuel 0.10.
     const fuelChance = Math.min(0.4, 0.10 * (diff.fuelSpawnRate || 1));
     const snackChance = 0.18;
-    const obstMass = Math.max(0, 1 - fuelChance - snackChance);
-    const groundChance = obstMass * (0.50 / 0.72);  // pothole/cone share of obstacles
-    const signChance = obstMass * (0.22 / 0.72);    // sign share of obstacles
 
     // Guarantee one fuel can early so a run can't die to first-leg spawn
     // clustering before any fuel appears (the high early-variance issue).
     if (!state.guaranteedFuelDone && state.distance > 700) {
       state.guaranteedFuelDone = true;
-      state.collectibles.push(makeCollectible('fuel'));
+      state.collectibles.push(makeCollectible('fuel', 1));
       return;
     }
 
     const r = Math.random();
-    if (r < groundChance) {
-      const t = ['pothole', 'cone', 'pothole'][Math.floor(Math.random() * 3)];
-      tryPlaceObstacle(t, diff.minBlockingGap);
-    } else if (r < groundChance + signChance) {
-      tryPlaceObstacle('sign', diff.minBlockingGap);
-    } else if (r < groundChance + signChance + snackChance) {
-      state.collectibles.push(makeCollectible('snack'));
-    } else {
-      state.collectibles.push(makeCollectible('fuel'));
+    if (r < fuelChance) { state.collectibles.push(makeCollectible('fuel', randLane())); return; }
+    if (r < fuelChance + snackChance) { state.collectibles.push(makeCollectible('snack', randLane())); return; }
+    spawnPattern(diff);
+  }
+
+  // Roll a cross-lane blocker pattern, clamped so a non-layered pattern never
+  // blocks all 3 lanes (the open-lane fairness invariant; layered is the
+  // all-same-verb exception, solvable by jump/duck with no lateral escape).
+  function spawnPattern(diff) {
+    const w = diff.patternWeights || { single: 1, wallGap: 0, layered: 0, chicane: 0 };
+    const maxBlock = diff.maxLaneSpan || 1;
+    let r = Math.random(), pat;
+    if ((r -= w.single) < 0) pat = 'single';
+    else if ((r -= w.wallGap) < 0) pat = 'wallGap';
+    else if ((r -= w.layered) < 0) pat = 'layered';
+    else pat = 'chicane';
+    if ((pat === 'wallGap' || pat === 'chicane') && maxBlock < 2) pat = 'single';
+
+    if (pat === 'single') {
+      placePattern([{ type: blockerType(), lane: randLane() }], diff.minBlockingGap);
+    } else if (pat === 'wallGap') {
+      const open = randLane();
+      const items = [0, 1, 2].filter((l) => l !== open).map((l) => ({ type: blockerType(), lane: l }));
+      placePattern(items, diff.minBlockingGap);
+    } else if (pat === 'layered') {
+      // full-width wall of ONE verb: all-jump (pothole/cone) or all-duck (sign)
+      const t = Math.random() < 0.5 ? 'pothole' : 'sign';
+      placePattern([0, 1, 2].map((l) => ({ type: t, lane: l })), diff.minBlockingGap);
+    } else { // chicane: two offset singles in different lanes — a quick weave
+      const a = randLane();
+      const b = (a + (Math.random() < 0.5 ? 1 : 2)) % LANE_COUNT;
+      const dx = effGapPx(diff.minBlockingGap) * 0.55;
+      placePattern([{ type: blockerType(), lane: a }, { type: blockerType(), lane: b, dx }], diff.minBlockingGap);
     }
   }
 
-  // Rightmost (most-recently-spawned) obstacle x, or -Infinity if none pending.
-  function rightmostObstacleX() {
+  // Speed-aware gap (px): larger of the table floor and a time-based gap at the
+  // leg's effective speed — provably exceeds the jump arc at any leg's speed.
+  function effGapPx(minGap) {
+    return Math.max(minGap || 0, MIN_GAP_TIME * MAX_SPEED * legSpeedScale() * 60);
+  }
+  // Rightmost pending obstacle x IN A GIVEN LANE (per-lane gap), or -Infinity.
+  function rightmostObstacleX(lane) {
     let m = -Infinity;
-    for (const o of state.obstacles) if (o.x > m) m = o.x;
+    for (const o of state.obstacles) if (o.lane === lane && o.x > m) m = o.x;
     return m;
   }
-
-  // Place a blocking obstacle only if it clears `minGap` px from the previous
-  // one. If it would cluster too tightly we skip it — this guarantees a
-  // jump/duck-able gap at any speed (no unavoidable back-to-back blockers) and
-  // naturally thins dense legs instead of queuing an unreachable wall off-screen.
-  function tryPlaceObstacle(type, minGap) {
-    const o = makeObstacle(type);                 // spawns at x = W + 60
-    // Speed-aware gap: at escalated leg speed a fixed px gap can be tighter than
-    // the jump arc. Enforce the larger of the table floor and a time-based gap
-    // (MIN_GAP_TIME at the leg's effective speed), which provably clears the arc.
-    const effSpeed = MAX_SPEED * legSpeedScale();
-    const gap = Math.max(minGap || 0, MIN_GAP_TIME * effSpeed * 60);
-    const prevX = rightmostObstacleX();
-    if (prevX > -Infinity && (o.x - prevX) < gap) return false;
-    state.obstacles.push(o);
+  function laneClear(lane, x, gap) {
+    const px = rightmostObstacleX(lane);
+    return px === -Infinity || (x - px) >= gap;
+  }
+  // Atomically place a pattern's items only if EVERY touched lane clears the gap
+  // (so a pattern never lands half-formed and never clusters within a lane).
+  function placePattern(items, minGap) {
+    const gap = effGapPx(minGap);
+    const baseX = W + 60;
+    for (const it of items) if (!laneClear(it.lane, baseX + (it.dx || 0), gap)) return false;
+    for (const it of items) state.obstacles.push(makeObstacle(it.type, it.lane, it.dx || 0));
     return true;
   }
-  function makeObstacle(type) {
-    const o = { type, x: W + 60, hit: false };
+  function makeObstacle(type, lane = 1, dx = 0) {
+    const base = laneBaseYFor(lane);
+    const o = { type, x: W + 60 + dx, hit: false, lane };
     if (type === 'pothole') {
-      o.w = 64; o.h = 18; o.y = GROUND_Y + 2;
+      o.w = 64; o.h = 18; o.y = base + 2;
     } else if (type === 'cone') {
-      o.w = 24; o.h = 36; o.y = GROUND_Y - o.h + 8;
+      o.w = 24; o.h = 36; o.y = base - o.h + 8;
     } else if (type === 'sign') {
       // Panel sits at standing-driver head height — must duck to pass under.
       // Hitbox = panel only; the visible post below is decorative.
-      o.w = 78; o.h = 30; o.y = GROUND_Y - 60;
+      o.w = 78; o.h = 30; o.y = base - 60;
     }
     return o;
   }
-  function makeCollectible(type) {
+  function makeCollectible(type, lane = 1) {
+    const base = laneBaseYFor(lane);
     return {
       type,
       x: W + 60,
       w: 28,
       h: 28,
-      y: Math.random() < 0.4 ? GROUND_Y - 86 : GROUND_Y - 34,
+      lane,
+      y: Math.random() < 0.35 ? base - 86 : base - 34,
       taken: false,
       bob: Math.random() * Math.PI * 2
     };
   }
   function makePitstop() {
+    // Pit stops always spawn in the center lane — a guaranteed-collectible safety
+    // valve (you don't have to gamble a lane choice to refuel).
     return {
       type: 'pitstop',
       x: W + 100,
       w: 64,
       h: 56,
+      lane: 1,
       y: GROUND_Y - 56,
       taken: false,
       bob: 0
@@ -1741,10 +1785,12 @@
     state.collectibles = state.collectibles.filter((c) => c.x + c.w > -30);
     state.semis = state.semis.filter((s) => s.x > -340);
 
-    // Collisions
+    // Collisions — lane-gated: only obstacles in the player's occupied lane(s) bite.
     const pb = playerBox();
+    const lanes = occupiedLanes();
     for (const o of state.obstacles) {
       if (o.hit) continue;
+      if (!lanes.includes(o.lane)) continue;
       if (rectsOverlap(pb, o)) {
         o.hit = true;
         state.fuel -= HIT_FUEL_PENALTY;
@@ -1765,7 +1811,13 @@
     }
     for (const c of state.collectibles) {
       if (c.taken) continue;
-      if (rectsOverlap(pb, c)) {
+      // Pit stops are a full-width refuel station — collected from any lane by
+      // horizontal overlap (matches the sim's grounded 100%-collection model).
+      // Everything else is lane-gated: be in its lane to grab it (lane-risk).
+      const got = c.type === 'pitstop'
+        ? (pb.x < c.x + c.w && pb.x + pb.w > c.x)
+        : (lanes.includes(c.lane) && rectsOverlap(pb, c));
+      if (got) {
         c.taken = true;
         // Bump combo
         state.combo = Math.min(COMBO_MAX, state.combo + 1);
