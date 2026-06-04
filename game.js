@@ -76,6 +76,18 @@
                                    // retune: faster trips drain less by time, so hits must carry the stakes
                                    // (careless play still reliably runs dry — see sim/balance-sim.js).
   const SNACK_POINTS = 50;
+  // Nitro power-up — concept contributed by Levi Ray (PR #24). A rare blue
+  // lightning bolt that grants a short INVINCIBLE speed-burst on pickup. It is
+  // fairness-neutral by construction: the balance sim proves the base obstacle
+  // stream solvable at MAX_SPEED, and you can't be unfairly blocked while you're
+  // invincible — so nitro never touches that proof. The obstacle SPAWN cadence
+  // stays on base speed (only world motion + distance scale during the burst),
+  // and the spawn chance is carved from the obstacle-pattern share, so nitro only
+  // ever makes a run easier, never denser.
+  const NITRO_DURATION = 3.5;        // seconds of invincible boost
+  const NITRO_SPEED_MULT = 1.4;      // world-scroll + distance multiplier while active
+  const NITRO_POINTS = 250;          // pickup bonus (pre-combo)
+  const NITRO_SPAWN_CHANCE = 0.03;   // rare; taken from the obstacle-pattern probability
   const FUEL_PICKUP_BONUS = 25;
   const FUEL_PICKUP_REFILL = 22;   // default fuel-per-can; per-leg override lives in DIFFICULTY
   const PITSTOP_REFILL = 28;       // fuel added per pit stop. Trimmed 40->28 with the auto-throttle retune
@@ -404,6 +416,7 @@
     biomeAnnounced: -1,
     obstacles: [],
     collectibles: [],
+    nitro: 0,          // seconds remaining on the nitro boost (0 = inactive)
     particles: [],
     spawnTimer: 0,
     // --- Fuel-low contract (physics produces, HUD/audio consume; read-only) ---
@@ -1238,6 +1251,7 @@
     state.biomeAnnounced = -1;
     state.obstacles = [];
     state.collectibles = [];
+    state.nitro = 0;
     state.particles = [];
     state.spawnTimer = 0;
     state.fuelLow = false;
@@ -1646,6 +1660,7 @@
     const r = Math.random();
     if (r < fuelChance) { state.collectibles.push(makeCollectible('fuel', randLane())); return; }
     if (r < fuelChance + snackChance) { state.collectibles.push(makeCollectible('snack', randLane())); return; }
+    if (r < fuelChance + snackChance + NITRO_SPAWN_CHANCE) { state.collectibles.push(makeCollectible('nitro', randLane())); return; }
     spawnPattern(diff);
   }
 
@@ -1792,7 +1807,10 @@
   }
 
   function updateWorld(dt) {
-    const move = state.speed * dt * 60;
+    // Nitro whooshes the world by; the spawn cadence below stays on base speed,
+    // so the obstacle layout the balance sim proves is never made denser.
+    const boost = state.nitro > 0 ? NITRO_SPEED_MULT : 1;
+    const move = state.speed * boost * dt * 60;
 
     state.spawnTimer -= dt;
     if (state.spawnTimer <= 0) {
@@ -1855,6 +1873,15 @@
       }
       if (rectsOverlap(pb, o)) {
         o.hit = true;
+        if (state.nitro > 0) {
+          // Nitro: smash through the blocker — no fuel loss, no combo break.
+          const smashPts = Math.round(25 * comboMult(state.combo));
+          state.score += smashPts;
+          spawnSparks(o.x + o.w / 2, o.y + o.h / 2);
+          spawnPickupBurst(o.x + o.w / 2, o.y + o.h / 2, '#00d4ff');
+          spawnScorePopup(o.x + o.w / 2, o.y - 10, 'SMASH +' + smashPts, '#00d4ff');
+          continue;
+        }
         state.fuel -= HIT_FUEL_PENALTY;
         state.runStats.hits += 1;
         state.flashTimer = 0.3;
@@ -1915,6 +1942,15 @@
           spawnScorePopup(c.x + c.w / 2, c.y, `PIT STOP!  +${pts}`, '#7ee27e');
           audio.playBiome(); // celebratory arpeggio
           unlockAchievement('pitstop');
+        } else if (c.type === 'nitro') {
+          // Nitro pickup (concept by Levi Ray, PR #24): start the invincible burst.
+          state.nitro = NITRO_DURATION;
+          const npts = Math.round(NITRO_POINTS * mult);
+          state.score += npts;
+          screenShake(6, 0.25);
+          spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#00d4ff');
+          spawnScorePopup(c.x + c.w / 2, c.y, `NITRO!  +${npts}`, '#00d4ff');
+          audio.playBiome();
         } else {
           state.runStats.snacks += 1;
           const pts = Math.round(SNACK_POINTS * mult);
@@ -2910,10 +2946,79 @@
       }
     }
   }
+  // Nitro pickup — a glowing blue lightning bolt (concept by Levi Ray, PR #24).
+  function drawNitro(c) {
+    const cx = c.x + c.w / 2;
+    const cy = c.y + Math.sin(c.bob) * 4 + c.h / 2;
+    const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(c.bob * 1.5));
+    ctx.save();
+    ctx.fillStyle = `rgba(0, 212, 255, ${0.30 * pulse})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, c.w * 0.78, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.translate(cx, cy);
+    ctx.scale(c.w / 28, c.h / 28);
+    ctx.beginPath();
+    ctx.moveTo(2, -14); ctx.lineTo(-6, 2); ctx.lineTo(-1, 2);
+    ctx.lineTo(-3, 14); ctx.lineTo(7, -3); ctx.lineTo(1, -3);
+    ctx.lineTo(5, -14); ctx.closePath();
+    ctx.shadowColor = '#00d4ff';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#00d4ff';
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.scale(0.55, 0.55);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Active-nitro screen feedback: a pulsing blue edge glow + a labelled timer
+  // bar (and a few speed streaks when motion is allowed).
+  function drawNitroOverlay() {
+    if (state.nitro <= 0) return;
+    const frac = state.nitro / NITRO_DURATION;   // 1 -> 0
+    const calm = reduceMotionOn();
+    ctx.save();
+    const pulse = calm ? 0.5 : 0.5 + 0.5 * Math.sin(state.runTime * 18);
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = `rgba(0, 212, 255, ${0.30 + 0.25 * pulse})`;
+    ctx.shadowColor = '#00d4ff';
+    ctx.shadowBlur = 22;
+    ctx.strokeRect(4, 4, VIEW_W - 8, VIEW_H - 8);
+    ctx.shadowBlur = 0;
+    if (!calm) {
+      ctx.strokeStyle = 'rgba(0, 212, 255, 0.35)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 5; i++) {
+        const y = (i * 113 + Math.floor(state.runTime * 1400)) % VIEW_H;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(70 + (i % 3) * 40, y); ctx.stroke();
+      }
+    }
+    ctx.fillStyle = '#00d4ff';
+    ctx.font = 'bold 20px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = '#00d4ff';
+    ctx.shadowBlur = 12;
+    ctx.fillText('⚡ NITRO ⚡', VIEW_W / 2, 12);
+    ctx.shadowBlur = 0;
+    const bw = 180, bx = (VIEW_W - bw) / 2, by = 38;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillRect(bx, by, bw, 5);
+    ctx.fillStyle = '#00d4ff';
+    ctx.fillRect(bx, by, bw * frac, 5);
+    ctx.restore();
+  }
+
   function drawCollectibles() {
     for (const c of state.collectibles) {
       if (c.type === 'pitstop') {
         drawPitstop(c);
+        continue;
+      }
+      if (c.type === 'nitro') {
+        drawNitro(c);
         continue;
       }
       const float = Math.sin(c.bob) * 4;
@@ -3326,7 +3431,9 @@
     updateParticles(dt);
     updateScorePopups(dt);
 
-    state.distance += state.speed * dt * 60;
+    const nitroBoost = state.nitro > 0 ? NITRO_SPEED_MULT : 1;   // mirrors the world-motion boost in updateWorld
+    state.distance += state.speed * nitroBoost * dt * 60;
+    if (state.nitro > 0) state.nitro = Math.max(0, state.nitro - dt);
     state.score += state.speed * dt * 3;        // passive distance score (trimmed 8->3: skill, not idling, should dominate)
     state.fuel -= FUEL_DRAIN_PER_SEC * dt;
     // Fuel-low feedback hook (physics produces; HUD/audio consume). We compute the
@@ -3474,6 +3581,7 @@
       drawBiomeBanner();
       drawComboHud();
       drawDamageFlash();
+      drawNitroOverlay();
     }
     drawAudioBanner();
     drawAchievementToast();
