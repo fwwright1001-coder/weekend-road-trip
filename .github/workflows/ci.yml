@@ -27,3 +27,5 @@ jobs:
         run: node sim/balance-sim.js
       - name: Self-test harness
         run: node qa/run-selftests.js
+      - name: DOM-contract smoke (HTML/JS wiring)
+        run: node qa/smoke-dom.js
