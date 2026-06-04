@@ -96,6 +96,7 @@
   const SETTINGS_KEY = 'wrt.settings.v1';
   const ACHIEVEMENTS_KEY = 'wrt.achievements.v1';
   const GHOST_KEY = 'wrt.ghost.v1';
+  const SANDBOX_KEY = 'wrt.sandbox.v1';   // set when the player reaches the coast — unlocks the GTA sandbox entry
   const MUTE_KEY = 'wrt.muted.v1';     // legacy; migrated into SETTINGS_KEY on load
   const MAX_SCORES = 5;
   const GHOST_SAMPLE_STEP = 0.08;
@@ -890,6 +891,7 @@
     if (state.screen === SCREEN.GHOST) renderGhostScreen();
     if (state.screen === SCREEN.SETTINGS) renderSettings();
     if (state.screen === SCREEN.INITIALS) renderInitials();
+    if (state.screen === SCREEN.TITLE) updateSandboxEntry();
     // Quiet the engine drone whenever we leave active play (e.g. pause).
     if (audio.engineOsc && audio.engineGain && audio.ctx) {
       const target = state.screen === SCREEN.PLAYING ? 0.18 : 0;
@@ -915,6 +917,30 @@
     state.prevScreen = state.screen;
     state.screen = SCREEN.HELP;
     applyScreen();
+  }
+
+  // ============================================================
+  // GTA SANDBOX HANDOFF
+  // ============================================================
+  // Reaching the coast unlocks a standalone 3D crime-sandbox that lives in the
+  // sibling gta-sandbox/ folder. We persist the unlock so the entry also appears
+  // on the title menu for returning players, then hand off via a same-origin
+  // navigation — the relative path resolves locally, when served, and on Pages.
+  const SANDBOX_URL = 'gta-sandbox/';
+  function sandboxUnlocked() {
+    try { return localStorage.getItem(SANDBOX_KEY) === '1'; } catch (e) { return false; }
+  }
+  function unlockSandbox() {
+    try { localStorage.setItem(SANDBOX_KEY, '1'); } catch (e) {}
+  }
+  function enterSandbox() {
+    unlockSandbox();
+    window.location.href = SANDBOX_URL;
+  }
+  // Reveal the title-menu entry only once the sandbox has been unlocked.
+  function updateSandboxEntry() {
+    const btn = document.getElementById('title-sandbox-btn');
+    if (btn) btn.classList.toggle('hidden', !sandboxUnlocked());
   }
 
   // ============================================================
@@ -1164,6 +1190,7 @@
         case 'resume': show(SCREEN.PLAYING); break;
         case 'quit': audio.stopEngine(); show(SCREEN.TITLE); break;
         case 'continue': afterRun(); break;
+        case 'enter-sandbox': enterSandbox(); break;
         case 'copy-ghost': copyGhostPayload(); break;
         case 'load-ghost': loadGhostFromPayload(); break;
         case 'clear-ghost': clearGhostReplay(); break;
@@ -3370,6 +3397,7 @@
       audio.playWin();
       unlockAchievement('finish');
       if (state.runStats.hits === 0) unlockAchievement('clean-finish');
+      unlockSandbox();
       show(SCREEN.WIN);
       document.getElementById('win-score').textContent = pad(state.score, 6);
       const rs = state.runStats;
