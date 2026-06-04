@@ -17,6 +17,25 @@ process with deterministic, machine-checked gates.
 
 ---
 
+## Assignment rubric → where it lives
+
+The grad-course brief, mapped to the exact artifact that satisfies each line — checkable in 30 seconds:
+
+| Rubric expectation | Where it lives |
+|---|---|
+| Playable game + title / gameplay / high-score screens, 3-char initials, persistent | `index.html` screens + `game.js` state machine; scores in `localStorage` (`wrt.highscores.v2`) |
+| Game feel & polish | 5-layer parallax, particles, screen shake, **procedural Web Audio** (pitched engine + one-shot SFX, mute), 20 achievements |
+| Difficulty & fairness | **proven** by [`sim/balance-sim.js`](sim/balance-sim.js) (10 acceptance criteria); rationale in [`BALANCE.md`](BALANCE.md) |
+| Git / PR workflow | feature-branch-per-change, conventional commits, reviewed PRs into `main` |
+| Documentation | this README + [`ARCHITECTURE.md`](ARCHITECTURE.md), [`BALANCE.md`](BALANCE.md), [`CHANGELOG.md`](CHANGELOG.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Tests / CI (merge-gated) | [`sim/balance-sim.js`](sim/balance-sim.js) · [`qa/run-selftests.js`](qa/run-selftests.js) · [`qa/smoke-dom.js`](qa/smoke-dom.js) — all green-required in [CI](.github/workflows/ci.yml) |
+| Edge-case handling | tab-blur `dt` clamp, `localStorage` try/catch fallbacks, focus management |
+| Accessibility | OS-seeded reduce-motion, colorblind palette, ARIA live region, keyboard + gamepad + touch parity |
+| AI vs. personal contribution | [`AI-CONTRIBUTIONS.md`](AI-CONTRIBUTIONS.md) — per-system human-design vs AI-code split |
+| Beyond spec | finishing the drive unlocks an in-repo **Three.js sandbox second mode** ([`gta-sandbox/`](gta-sandbox/)) — original systems, still maturing |
+
+---
+
 ## Why this repo is interesting
 
 This is a grad-course game, but the engineering is the point:
