@@ -36,26 +36,36 @@ const WEAPONS = {
     fireCooldown: 0.18, clip: 12, reserveMax: 120, auto: false,
     pellets: 1, spread: 0.004, melee: false,
   },
+  ak47: {
+    id: 'ak47', name: 'AK-47', slot: 3, damage: 32, rangeM: 180,
+    fireCooldown: 0.1, clip: 30, reserveMax: 300, auto: true,
+    pellets: 1, spread: 0.016, melee: false,
+  },
   smg: {
-    id: 'smg', name: 'SMG', slot: 3, damage: 16, rangeM: 90,
+    id: 'smg', name: 'SMG', slot: 4, damage: 16, rangeM: 90,
     fireCooldown: 0.075, clip: 30, reserveMax: 300, auto: true,
     pellets: 1, spread: 0.02, melee: false,
   },
   shotgun: {
-    id: 'shotgun', name: 'Shotgun', slot: 4, damage: 11, rangeM: 30,
+    id: 'shotgun', name: 'Shotgun', slot: 5, damage: 11, rangeM: 30,
     fireCooldown: 0.8, clip: 6, reserveMax: 60, auto: false,
     pellets: 6, spread: 0.09, melee: false,
   },
-  rifle: {
-    id: 'rifle', name: 'Rifle', slot: 5, damage: 38, rangeM: 200,
-    fireCooldown: 0.12, clip: 20, reserveMax: 200, auto: false,
-    pellets: 1, spread: 0.006, melee: false,
+  // thrown frag grenade. explosive:true routes it to the throw/detonate branch (never
+  // hitscan). clip:1 = grenade in hand, reserve = spares; reloads like a gun (R / auto).
+  grenade: {
+    id: 'grenade', name: 'Grenade', slot: 6, damage: 120, rangeM: 0,
+    fireCooldown: 0.9, clip: 1, reserveMax: 9, auto: false,
+    pellets: 1, spread: 0, melee: false,
+    explosive: true, blastRadius: 7.0, fuse: 1.6, throwSpeed: 17, throwUp: 5.5, selfDamage: 0.5,
   },
 };
-// slot index (1..5) -> weapon id, for Digit1..Digit5 selection
-const SLOT_TO_ID = { 1: 'fists', 2: 'pistol', 3: 'smg', 4: 'shotgun', 5: 'rifle' };
+// slot index (1..6) -> weapon id, for Digit1..Digit6 selection
+const SLOT_TO_ID = { 1: 'fists', 2: 'pistol', 3: 'ak47', 4: 'smg', 5: 'shotgun', 6: 'grenade' };
 // stable cycle order for Tab
-const CYCLE_ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
+const CYCLE_ORDER = ['fists', 'pistol', 'ak47', 'smg', 'shotgun', 'grenade'];
+// grenade ballistics (module-scope consts; no per-frame allocation)
+const GREN_GRAV = 18, GREN_GROUND_Y = 0.18, GREN_MAX = 6, GREN_ARM_DELAY = 0.3;
 
 // ------------------------------------------------------------
 // Module-scope scratch (NO per-frame allocation)
@@ -71,6 +81,26 @@ let _tmpA = null;                  // misc scratch
 let _muzzleWorld = null;           // muzzle world position
 let _meleeFwd = null;              // melee forward direction (flat XZ)
 let _crimePos = null;              // reusable crime/pos payload vector
+let _beamDir = null;               // tracer beam direction (normalized)
+let _beamUp = null;                // +Y reference for orienting the beam cylinder
+let _casingWorld = null;           // world pos of the gun's ejection port (fx:casing)
+let _casingDir = null;             // casing toss direction (gun's right, biased up)
+let _ejQuat = null;                // scratch quaternion for the eject node's world rotation
+let _grThrowPos = null;            // grenade spawn (throw origin) — dedicated, never aliases _muzzleWorld
+let _grThrowDir = null;            // grenade throw direction (camera forward)
+let _grTmp = null;                 // per-target hit point during radial detonation
+let _grBlastPos = null;            // detonation centre
+
+// Per-weapon tracer/flash styling: a warm glow + a near-white hot core, sized and
+// tinted per weapon so each gun reads differently down-range.
+const TRACER_STYLE = {
+  pistol:  { glow: 0xffe48a, core: 0xffffff, r: 0.020, life: 0.055 },
+  ak47:    { glow: 0xffae3c, core: 0xfff0c4, r: 0.026, life: 0.05 },
+  smg:     { glow: 0xffe48a, core: 0xffffff, r: 0.017, life: 0.04 },
+  shotgun: { glow: 0xffc94a, core: 0xfff0c0, r: 0.022, life: 0.06 },
+  fists:   null,
+  grenade: null,   // explosive never hitscans, so it draws no tracer
+};
 
 // ------------------------------------------------------------
 // Small aim-assist so center-mass clicks land reliably on low-poly bodies.
@@ -88,6 +118,7 @@ const combat = {
   ctx: null,
   owned: null,          // { weaponId: { clip, reserve } } for owned weapons
   current: 'fists',     // current weapon id
+  _shownWeapon: null,   // weapon id currently shown on the avatar (mesh swap sync)
   cooldown: 0,          // time remaining before next shot
   reloading: false,
   reloadT: 0,           // reload countdown
@@ -117,6 +148,16 @@ const combat = {
     _muzzleWorld = new THREE.Vector3();
     _meleeFwd = new THREE.Vector3();
     _crimePos = new THREE.Vector3();
+    _beamDir = new THREE.Vector3();
+    _beamUp = new THREE.Vector3(0, 1, 0);
+    _casingWorld = new THREE.Vector3();
+    _casingDir = new THREE.Vector3();
+    _ejQuat = new THREE.Quaternion();
+    _grThrowPos = new THREE.Vector3();
+    _grThrowDir = new THREE.Vector3();
+    _grTmp = new THREE.Vector3();
+    _grBlastPos = new THREE.Vector3();
+    this._grenades = this._grenades || [];   // fixed-cap reusable projectile pool
 
     // ----- loadout: start with just fists (host hands out pistol later) -----
     if (!this.owned) {
@@ -125,6 +166,7 @@ const combat = {
       };
     }
     this.current = 'fists';
+    this._shownWeapon = null;   // force a weapon-mesh resync on the first update
     this.cooldown = 0;
     this.reloading = false;
     this.reloadT = 0;
@@ -148,7 +190,8 @@ const combat = {
     // NOT subscribe to 'pickup' here — re-applying effects would double-grant
     // them (and route ammo to the wrong weapon). economy calls our api.* directly.
     // restore on respawn
-    this._unsub.push(ctx.bus.on('playerRespawn', () => this._restoreOnSpawn(ctx)));
+    // respawn restore happens via reset() (GTA.reset calls every system's reset);
+    // no separate 'playerRespawn' subscription, to avoid a double restore.
   },
 
   // ----- FX construction (tracers + muzzle flash), all code-generated -----
@@ -159,32 +202,50 @@ const combat = {
     ctx.scene.add(grp);
     this._fxGroup = grp;
 
-    // tracer pool: thin emissive line segments that flash for a few ms
+    // tracer pool: each tracer is a stretched additive "beam" — a wide warm glow
+    // cylinder + a thin near-white hot core down its axis. Reads as a bright core
+    // with a fading tail from the muzzle to the impact point. (Line linewidth is
+    // unreliable across GPUs, so we use real geometry.)
+    const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);   // unit cylinder, scaled per shot
     const factory = () => {
-      const geo = new THREE.BufferGeometry();
-      // 2 points (start,end); positions rewritten each shot
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-      const mat = new THREE.LineBasicMaterial({
-        color: 0xfff1a8, transparent: true, opacity: 0.9, depthWrite: false,
-      });
-      const line = new THREE.Line(geo, mat);
-      line.frustumCulled = false;
-      line.userData.life = 0;
-      line.visible = false;
-      return line;
+      const t = new THREE.Group();
+      const glowMat = new THREE.MeshBasicMaterial({ color: 0xffe48a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+      const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+      const glow = new THREE.Mesh(beamGeo, glowMat);
+      const core = new THREE.Mesh(beamGeo, coreMat);
+      glow.frustumCulled = false; core.frustumCulled = false;
+      t.add(glow, core);
+      t.frustumCulled = false; t.visible = false;
+      t.userData = { life: 0, maxLife: TRACER_LIFE, glowMat, coreMat, glow, core };
+      return t;
     };
     this._tracerPool = GTA.makePool(factory, grp);
 
-    // muzzle flash: a small emissive sphere we pop at the muzzle for a frame or two
+    // muzzle flash: an additive emissive sphere we pop at the muzzle for a frame
+    // or two, tinted per weapon and scale-pulsed for a livelier pop.
     const flashMat = new THREE.MeshBasicMaterial({
-      color: 0xffd24a, transparent: true, opacity: 0.0, depthWrite: false,
+      color: 0xffd24a, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false,
     });
-    const flash = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), flashMat);
+    const flash = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), flashMat);
     flash.frustumCulled = false;
     flash.visible = false;
     grp.add(flash);
     this._flash = flash;
     this._flashT = 0;
+    this._flashMax = FLASH_LIFE;
+
+    // thrown-grenade projectile prototype (a tiny olive frag-ball + steel cap),
+    // cloned lazily per live grenade; pooled meshes are hidden, never removed.
+    const grenMat = new THREE.MeshStandardMaterial({ color: 0x3f4a2a, roughness: 0.75, metalness: 0.2 });
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x33373d, roughness: 0.4, metalness: 0.5 });
+    this._grenadeProto = () => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), grenMat);
+      m.scale.set(0.9, 1.12, 0.9);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.045, 0.06, 8), capMat); cap.position.y = 0.12;
+      m.add(cap);
+      m.castShadow = true;
+      return m;
+    };
   },
 
   // ============================================================
@@ -199,6 +260,13 @@ const combat = {
     // tick timers regardless of alive state so FX clear out cleanly
     if (this.cooldown > 0) this.cooldown -= dt;
     this._decayFx(dt);
+    // live grenades keep cooking/flying even while reloading or after death
+    this._stepGrenades(dt, ctx);
+
+    // keep the avatar's visible weapon mesh in sync with the equipped weapon —
+    // this is what makes the modeled gun (and the fists = no-gun state) show up,
+    // and updates userData.muzzle so tracers/flash leave the right barrel.
+    if (this._shownWeapon !== this.current) this._syncWeaponMesh();
 
     // reload progress
     if (this.reloading) {
@@ -209,8 +277,8 @@ const combat = {
     // dead players don't act
     if (player.alive === false) return;
 
-    // ---- weapon selection: Digit1..Digit5 (slot) ----
-    for (let n = 1; n <= 5; n++) {
+    // ---- weapon selection: Digit1..Digit6 (slot) ----
+    for (let n = 1; n <= 6; n++) {
       if (input.consume && input.consume('Digit' + n)) {
         this.api.select(n);
       }
@@ -240,7 +308,18 @@ const combat = {
     }
 
     if (wantFire && this.cooldown <= 0 && !this.reloading) {
-      if (w.melee) {
+      if (w.explosive) {
+        // thrown grenade: consume one from the "clip" (in-hand), lob a projectile
+        const slot = this.owned[w.id];
+        if (slot && slot.clip > 0) {
+          this._throwGrenade(ctx, w);
+          this.cooldown = w.fireCooldown;
+        } else if (slot && slot.reserve > 0) {
+          this._beginReload();          // rack the next grenade from spares
+        } else {
+          this.cooldown = 0.3;          // dry: brief lockout, no throw
+        }
+      } else if (w.melee) {
         this._meleeAttack(ctx, w);
         this.cooldown = w.fireCooldown;
       } else {
@@ -270,7 +349,10 @@ const combat = {
     this.cooldown = 0;
     this.reloading = false;
     this.reloadT = 0;
+    this._shownWeapon = null;   // re-sync the in-hand weapon mesh after respawn/re-enter
     this._flashT = 0;
+    // kill any grenade still in flight so it can't cook off on the freshly-spawned player
+    if (this._grenades) for (const r of this._grenades) { r.dead = true; if (r.mesh) r.mesh.visible = false; }
     if (this._flash) { this._flash.visible = false; this._flash.material.opacity = 0; }
     if (this._tracerPool) {
       for (const ln of this._tracerPool.items) { ln.visible = false; ln.userData.life = 0; }
@@ -316,7 +398,11 @@ const combat = {
 
     const pellets = Math.max(1, w.pellets | 0);
     let anyHit = false;
-    let lastEnd = null;
+    const style = TRACER_STYLE[w.id] || TRACER_STYLE.pistol;
+
+    // tracers are DRAWN from the avatar's muzzle node (the ray is still cast from
+    // the camera so aim matches the crosshair), so bullets visibly leave the gun.
+    this._muzzleStart(ctx, _muzzleWorld);
 
     for (let p = 0; p < pellets; p++) {
       _rayDir.copy(_dir);
@@ -324,22 +410,24 @@ const combat = {
       const hit = this._castRay(ctx, _origin, _rayDir, w.rangeM, w.damage);
       // tracer endpoint: impact point if we hit, else max range along the ray
       _tmpA.copy(_origin).addScaledVector(_rayDir, hit.dist);
-      this._spawnTracer(_origin, _tmpA);
+      this._spawnTracer(_muzzleWorld, _tmpA, style);
       if (hit.hit) anyHit = true;
-      lastEnd = _tmpA;
     }
 
     // muzzle flash at the avatar's muzzle node
-    this._spawnFlash(ctx);
+    this._spawnFlash(ctx, style);
+    // eject ONE spent casing per shot from the gun's breech (Lane B's fx.js renders
+    // the spinning shell + ping). Outside the pellet loop so a shotgun ejects one shell.
+    this._emitCasing(ctx, w);
 
     // feedback + crime + recoil
     if (player) {
       _crimePos.copy(player.pos);
-      ctx.bus.emit('crime', { kind: 'gunfire', pos: _crimePos.clone(), severity: 0.6, source: 'player' });
+      ctx.bus.emit('crime', { kind: 'gunfire', pos: _crimePos, severity: 0.6, source: 'player' });
     }
-    ctx.bus.emit('shake', { amount: 1 });
+    ctx.bus.emit('shake', { amount: w.auto ? 0.3 : (w.id === 'shotgun' ? 1.0 : 0.6) });
     if (GTA.host && typeof GTA.host.addRecoil === 'function') {
-      GTA.host.addRecoil(w.id === 'shotgun' ? 0.05 : w.id === 'rifle' ? 0.035 : 0.022);
+      GTA.host.addRecoil(w.id === 'shotgun' ? 0.05 : w.id === 'ak47' ? 0.035 : 0.022);
     }
     ctx.bus.emit('weapon:changed', { slot: w.slot, weapon: this._weaponSnapshot() });
 
@@ -377,7 +465,7 @@ const combat = {
       // recompute the impact point on the chosen target's closest approach
       _hitPoint.copy(origin).addScaledVector(dir, bestT);
       if (typeof best.onHit === 'function') {
-        try { best.onHit(damage, 'player', _hitPoint.clone()); }
+        try { best.onHit(damage, 'player', _hitPoint); }
         catch (err) { /* never let a target's handler brick the frame */ }
       }
       return { hit: true, dist: bestT, entry: best };
@@ -449,11 +537,127 @@ const combat = {
     if (best) {
       _hitPoint.set(best.pos.x, best.pos.y + (best.height || 1.8) * 0.6, best.pos.z);
       if (typeof best.onHit === 'function') {
-        try { best.onHit(w.damage, 'player', _hitPoint.clone()); }
+        try { best.onHit(w.damage, 'player', _hitPoint); }
         catch (err) { /* swallow */ }
       }
       _crimePos.copy(player.pos);
-      ctx.bus.emit('crime', { kind: 'assault', pos: _crimePos.clone(), severity: 0.4, source: 'player' });
+      ctx.bus.emit('crime', { kind: 'assault', pos: _crimePos, severity: 0.4, source: 'player' });
+    }
+  },
+
+  // ============================================================
+  // GRENADE — thrown explosive: lob a projectile, integrate it with gravity in
+  // update(), detonate on fuse/ground-rest/building-hit, emit fx:explosion + apply
+  // radial damage through the SAME entry.onHit gateway _castRay uses (so the owning
+  // system emits entityKilled exactly once). Fully self-contained; never throws.
+  // ============================================================
+  _throwGrenade(ctx, w) {
+    const slot = this.owned[w.id];
+    if (!slot) return;
+    slot.clip = Math.max(0, slot.clip - 1);
+
+    // throw origin = the held grenade's muzzle node (camera+forward fallback)
+    this._muzzleStart(ctx, _grThrowPos);
+    if (GTA.host && typeof GTA.host.cameraDir === 'function') GTA.host.cameraDir(_grThrowDir);
+    else if (ctx.camera) ctx.camera.getWorldDirection(_grThrowDir);
+    else _grThrowDir.set(0, 0, -1);
+    if (_grThrowDir.lengthSq() < 1e-6) _grThrowDir.set(0, 0, -1);
+    _grThrowDir.normalize();
+
+    const rec = this._acquireGrenade(ctx);
+    if (!rec) return;
+    rec.pos.copy(_grThrowPos);
+    rec.vel.set(_grThrowDir.x * w.throwSpeed, _grThrowDir.y * w.throwSpeed + w.throwUp, _grThrowDir.z * w.throwSpeed);
+    rec.fuse = w.fuse; rec.age = 0; rec.dead = false; rec.w = w;
+    if (rec.mesh) { rec.mesh.position.copy(rec.pos); rec.mesh.visible = true; }
+
+    if (ctx.bus) {
+      ctx.bus.emit('shake', { amount: 0.25 });   // light throw kick (no recoil for a lob)
+      if (ctx.player) { _crimePos.copy(ctx.player.pos); ctx.bus.emit('crime', { kind: 'propertyDamage', pos: _crimePos, severity: 0.3, source: 'player' }); }
+      ctx.bus.emit('weapon:changed', { slot: w.slot, weapon: this._weaponSnapshot() });   // keep HUD clip live
+    }
+  },
+
+  // grab a dead record to reuse, grow up to GREN_MAX, else reuse the oldest. Builds the
+  // mesh lazily only when a scene exists; headless (no scene) keeps mesh null and still
+  // simulates + detonates on rec.pos so radial damage is unaffected.
+  _acquireGrenade(ctx) {
+    const arr = this._grenades || (this._grenades = []);
+    let rec = null;
+    for (let i = 0; i < arr.length; i++) { if (arr[i].dead) { rec = arr[i]; break; } }
+    if (!rec) {
+      if (arr.length < GREN_MAX) { rec = { mesh: null, pos: new THREE.Vector3(), vel: new THREE.Vector3(), fuse: 0, age: 0, dead: true, w: null }; arr.push(rec); }
+      else rec = arr[0];
+    }
+    if (!rec.mesh && ctx.scene && typeof this._grenadeProto === 'function') {
+      try { rec.mesh = this._grenadeProto(); rec.mesh.frustumCulled = false; ctx.scene.add(rec.mesh); }
+      catch (e) { rec.mesh = null; }
+    }
+    return rec;
+  },
+
+  _stepGrenades(dt, ctx) {
+    const arr = this._grenades;
+    if (!arr || !arr.length) return;
+    const world = ctx && ctx.world;
+    for (let i = 0; i < arr.length; i++) {
+      const r = arr[i];
+      if (r.dead) continue;
+      r.age += dt;
+      r.vel.y -= GREN_GRAV * dt;
+      r.pos.x += r.vel.x * dt; r.pos.y += r.vel.y * dt; r.pos.z += r.vel.z * dt;
+      r.fuse -= dt;
+      if (r.pos.y <= GREN_GROUND_Y) {   // bounce + damp on the ground; detonate on fuse, not impact
+        r.pos.y = GREN_GROUND_Y; r.vel.y = -r.vel.y * 0.35; r.vel.x *= 0.6; r.vel.z *= 0.6;
+        if (r.vel.lengthSq() < 0.25) r.vel.set(0, 0, 0);
+      }
+      let hitWall = false;
+      if (world && typeof world.isInside === 'function') { try { hitWall = !!world.isInside(r.pos.x, r.pos.z, 0.2); } catch (e) { /* no-op */ } }
+      if (r.mesh) { r.mesh.position.copy(r.pos); r.mesh.rotation.x += dt * 6; r.mesh.rotation.z += dt * 4; }
+      if (r.fuse <= 0 || hitWall) this._detonate(ctx, r);
+    }
+  },
+
+  _detonate(ctx, r) {
+    r.dead = true;
+    if (r.mesh) r.mesh.visible = false;
+    const w = r.w || WEAPONS.grenade;
+    const R = w.blastRadius || 6;
+    _grBlastPos.copy(r.pos);
+    const bus = ctx && ctx.bus;
+    // (a) FX for B + (b) a hefty shake — fresh plain object (fx.js may hold it)
+    if (bus) {
+      bus.emit('fx:explosion', { pos: { x: _grBlastPos.x, y: _grBlastPos.y, z: _grBlastPos.z }, radius: R });
+      bus.emit('shake', { amount: 1.2 });
+      // (c) loud wanted-relevant crime at the blast
+      if (ctx.player) { _crimePos.copy(ctx.player.pos); bus.emit('crime', { kind: 'gunfire', pos: _crimePos, severity: 1.0, source: 'player' }); }
+    }
+    // (d) radial damage vs ctx.targets via the same onHit gateway as bullets (the
+    //     owning system emits entityKilled — do NOT emit it here, or kills double-count)
+    const targets = ctx && ctx.targets;
+    if (Array.isArray(targets)) {
+      for (let i = 0; i < targets.length; i++) {
+        const e = targets[i];
+        if (!e || e.dead || !e.pos) continue;
+        const cy = e.pos.y + (e.height || 1.7) * 0.5;
+        const dx = e.pos.x - _grBlastPos.x, dy = cy - _grBlastPos.y, dz = e.pos.z - _grBlastPos.z;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist > R + (e.radius || 0.5)) continue;
+        const fall = GU.clamp(1 - dist / R, 0, 1);
+        const dmg = w.damage * fall * fall;   // quadratic: punchy core, soft edge
+        if (dmg <= 0) continue;
+        _grTmp.set(e.pos.x, cy, e.pos.z);
+        if (typeof e.onHit === 'function') { try { e.onHit(dmg, 'player', _grTmp); } catch (err) { /* never brick the frame */ } }
+      }
+    }
+    // (e) self-damage (armed-delay so a throw-and-detonate at your feet isn't a free kill)
+    if (ctx && ctx.player && ctx.player.pos && ctx.player.alive !== false && r.age >= GREN_ARM_DELAY) {
+      const pd = Math.hypot(ctx.player.pos.x - _grBlastPos.x, (ctx.player.pos.y + 0.9) - _grBlastPos.y, ctx.player.pos.z - _grBlastPos.z);
+      if (pd < R) {
+        const sf = GU.clamp(1 - pd / R, 0, 1);
+        const self = w.damage * (w.selfDamage || 0) * sf * sf;
+        if (self > 0) this.api.damagePlayer(self, 'explosion', { x: _grBlastPos.x, y: _grBlastPos.y, z: _grBlastPos.z });
+      }
     }
   },
 
@@ -470,6 +674,9 @@ const combat = {
     if (slot.reserve <= 0) return;         // nothing to load
     this.reloading = true;
     this.reloadT = RELOAD_TIME;
+    // tell B's audio a reload started (mag-out/in SFX, length-matched to duration;
+    // for the grenade this maps to a pin/spoon sound). Additive + headless-safe.
+    if (this.ctx) this.ctx.bus.emit('weapon:reload', { id: this.current, slot: w.slot, phase: 'start', duration: RELOAD_TIME, clip: slot.clip, reserve: slot.reserve });
   },
 
   _finishReload() {
@@ -483,7 +690,10 @@ const combat = {
     const take = Math.min(need, slot.reserve);
     slot.clip += take;
     slot.reserve -= take;
-    if (this.ctx) this.ctx.bus.emit('weapon:changed', { slot: w.slot, weapon: this._weaponSnapshot() });
+    if (this.ctx) {
+      this.ctx.bus.emit('weapon:changed', { slot: w.slot, weapon: this._weaponSnapshot() });
+      this.ctx.bus.emit('weapon:reload', { id: w.id, slot: w.slot, phase: 'end', clip: slot.clip, reserve: slot.reserve });
+    }
   },
 
   // ============================================================
@@ -521,20 +731,61 @@ const combat = {
   // ============================================================
   // FX — tracers + muzzle flash (pooled, timer-decayed)
   // ============================================================
-  _spawnTracer(a, b) {
+  // resolve the world-space point a tracer should start from: the avatar's muzzle
+  // node (set per weapon by buildPerson's setWeapon), or a fallback just ahead of
+  // the camera if the rig has no muzzle.
+  _muzzleStart(ctx, out) {
+    const player = ctx.player;
+    const mz = player && player.mesh && player.mesh.userData ? player.mesh.userData.muzzle : null;
+    if (mz && mz.getWorldPosition) { mz.getWorldPosition(out); return out; }
+    if (ctx.camera) { out.copy(ctx.camera.position).addScaledVector(_dir, 0.5); return out; }
+    out.set(0, 1.3, 0); return out;
+  },
+
+  // Eject a spent shell: emit fx:casing {pos, dir, weaponId} from the equipped gun's
+  // ejection port (player.mesh.userData.eject, kept current by setWeapon). pos = port
+  // world position; dir = the gun's RIGHT (eject-local +X in world) biased upward.
+  // Fresh plain objects are sent (NOT scratch) so fx.js can hold them across frames.
+  // No-op for fists; a safe no-op too when nobody subscribes (bus.emit ignores it).
+  _emitCasing(ctx, w) {
+    if (!w || w.id === 'fists' || !ctx.bus) return;
+    const player = ctx.player;
+    const ej = player && player.mesh && player.mesh.userData ? player.mesh.userData.eject : null;
+    if (ej && ej.getWorldPosition) ej.getWorldPosition(_casingWorld);
+    else _casingWorld.copy(_muzzleWorld);                          // fallback: muzzle world pos from _fire
+    if (ej && ej.getWorldQuaternion) _casingDir.set(1, 0, 0).applyQuaternion(ej.getWorldQuaternion(_ejQuat));
+    else _casingDir.crossVectors(_dir, _beamUp);                   // fallback: camera-right vector (forward × up)
+    if (_casingDir.lengthSq() < 1e-6) _casingDir.set(1, 0, 0);
+    _casingDir.y += 0.5; _casingDir.normalize();                  // arc the toss upward a touch
+    ctx.bus.emit('fx:casing', {
+      pos: { x: _casingWorld.x, y: _casingWorld.y, z: _casingWorld.z },
+      dir: { x: _casingDir.x, y: _casingDir.y, z: _casingDir.z },
+      weaponId: w.id,
+    });
+  },
+
+  _spawnTracer(a, b, style) {
     if (!this._tracerPool) return;
     // makePool: we manually grab one item without the begin/end frame cycle so
     // tracers can live across frames; we recycle the oldest by scanning life.
-    const line = this._acquireTracer();
-    if (!line) return;
-    const pos = line.geometry.getAttribute('position');
-    pos.setXYZ(0, a.x, a.y, a.z);
-    pos.setXYZ(1, b.x, b.y, b.z);
-    pos.needsUpdate = true;
-    // line.frustumCulled === false, so no bounding sphere is needed (dead work per shot)
-    line.material.opacity = 0.9;
-    line.visible = true;
-    line.userData.life = TRACER_LIFE;
+    const t = this._acquireTracer();
+    if (!t) return;
+    const ud = t.userData;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const len = Math.hypot(dx, dy, dz) || 0.001;
+    // place the beam at the segment midpoint, oriented from a -> b (cylinder is +Y)
+    t.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+    _beamDir.set(dx / len, dy / len, dz / len);
+    t.quaternion.setFromUnitVectors(_beamUp, _beamDir);
+    const r = (style && style.r) || 0.02;
+    ud.glow.scale.set(r, len, r);
+    ud.core.scale.set(r * 0.38, len, r * 0.38);
+    ud.glowMat.color.setHex((style && style.glow) || 0xffe48a);
+    ud.coreMat.color.setHex((style && style.core) || 0xffffff);
+    ud.glowMat.opacity = 0.5; ud.coreMat.opacity = 0.95;
+    ud.maxLife = (style && style.life) || TRACER_LIFE;
+    ud.life = ud.maxLife;
+    t.visible = true;
   },
 
   // grab a free (expired) tracer from the pool, growing it if all are live
@@ -553,7 +804,7 @@ const combat = {
     return made || this._tracerPool.items[this._tracerPool.items.length - 1];
   },
 
-  _spawnFlash(ctx) {
+  _spawnFlash(ctx, style) {
     const flash = this._flash;
     if (!flash) return;
     const player = ctx.player;
@@ -570,32 +821,49 @@ const combat = {
         player.pos.z + Math.cos(f) * 0.6,
       );
     }
+    flash.material.color.setHex(style && style.core ? style.core : 0xffd24a);
+    // bigger pop for the heavier guns
+    this._flashSize = style === TRACER_STYLE.shotgun ? 1.5 : style === TRACER_STYLE.ak47 ? 1.3 : 1.0;
     flash.visible = true;
-    flash.material.opacity = 0.95;
+    flash.material.opacity = 0.98;
     this._flashT = FLASH_LIFE;
   },
 
+  // Show the modeled weapon that matches the equipped one. buildPerson hangs all
+  // five weapons on the avatar + a setWeapon(id) that toggles visibility and points
+  // userData.muzzle at the active barrel; we just drive it from the equipped id.
+  _syncWeaponMesh() {
+    const mesh = this.ctx && this.ctx.player && this.ctx.player.mesh;
+    const ud = mesh && mesh.userData;
+    if (ud && typeof ud.setWeapon === 'function') {
+      try { ud.setWeapon(this.current); } catch (e) { /* never brick a frame on cosmetics */ }
+    }
+    this._shownWeapon = this.current;   // record even on a no-op rig so we don't retry every frame
+  },
+
   _decayFx(dt) {
-    // tracers
+    // tracers — fade glow + core over each tracer's (per-weapon) life
     if (this._tracerPool) {
       const items = this._tracerPool.items;
       for (let i = 0; i < items.length; i++) {
-        const ln = items[i];
-        if (ln.userData.life > 0) {
-          ln.userData.life -= dt;
-          const k = Math.max(0, ln.userData.life / TRACER_LIFE);
-          ln.material.opacity = 0.9 * k;
-          if (ln.userData.life <= 0) { ln.visible = false; ln.material.opacity = 0; }
+        const t = items[i];
+        const ud = t.userData;
+        if (ud.life > 0) {
+          ud.life -= dt;
+          const k = Math.max(0, ud.life / (ud.maxLife || TRACER_LIFE));
+          ud.glowMat.opacity = 0.5 * k;
+          ud.coreMat.opacity = 0.95 * k;
+          if (ud.life <= 0) { t.visible = false; ud.glowMat.opacity = 0; ud.coreMat.opacity = 0; }
         }
       }
     }
     // muzzle flash
     if (this._flash && this._flashT > 0) {
       this._flashT -= dt;
-      const k = Math.max(0, this._flashT / FLASH_LIFE);
-      this._flash.material.opacity = 0.95 * k;
-      // pulse the scale a touch for a livelier pop
-      const s = 0.8 + k * 0.7;
+      const k = Math.max(0, this._flashT / (this._flashMax || FLASH_LIFE));
+      this._flash.material.opacity = 0.98 * k;
+      // pulse the scale a touch for a livelier pop (sized per weapon)
+      const s = (this._flashSize || 1) * (0.7 + k * 0.8);
       this._flash.scale.set(s, s, s);
       if (this._flashT <= 0) { this._flash.visible = false; this._flash.material.opacity = 0; }
     }
@@ -703,7 +971,7 @@ const combat = {
       return combat._weaponSnapshot();
     },
 
-    // select a weapon by id ('pistol') or slot number (1..5). Returns success.
+    // select a weapon by id ('pistol') or slot number (1..6). Returns success.
     select(idOrSlot) {
       let id = idOrSlot;
       if (typeof idOrSlot === 'number') id = SLOT_TO_ID[idOrSlot];

@@ -72,6 +72,26 @@ if (typeof window !== 'undefined') window.GTA = GTA;
 //   mission:failed   {id, reason}
 //   toast            {html, ms}                        request the HUD show a message
 //   shake            {amount}                          request a camera shake
+//   --- fx:* — optional one-shot visual-FX requests (gta/fx.js, Lane B, subscribes;
+//       combat.js / the bridge emit them where they know the exact point). Dormant
+//       and harmless until a subscriber exists (emit() no-ops with no listeners). ---
+//   fx:muzzle        {pos, dir, weapon?}               muzzle flash + smoke at the barrel
+//   fx:impact        {pos, kind?, normal?, scale?}     bullet/crash hit: spark/debris puff
+//   fx:casing        {pos, dir, weaponId}              spent shell ejects from the breech (spin + ping)
+//   fx:explosion     {pos, radius?}                    vehicle/explosive blast
+//   fx:spawn         {pos, kind?, color?}              generic one-shot particle burst
+//   fx:crash         {pos, severity, speed, normal?, damage}  car-vs-building impact (dust/crumple)
+// --- AI / world systems (round 3) ---
+//   police:backup    {stars, reason, pos?}             a backup wave is incoming (officer down / escalation)
+//   faction:spawn    {faction, pos, count}             a non-police faction (e.g. 'gang') appeared
+//   faction:fight    {a, b, pos}                       two factions/entities engaged each other
+//   traffic:spawned  {vehicle, pos}                    an ambient NPC car entered the world
+//   traffic:despawned{vehicle}                         an ambient NPC car was culled
+//   pickup:respawn   {kind, pos}                       a health/armor pickup re-seeded (bridge timer)
+// --- mode / state / audio events ---
+//   fp:toggle        {firstPerson}                     first/third-person view toggled (V)
+//   audio:station    {dir}                             cycle radio station (+1 next / -1 prev) — gta/audio.js
+//   audio:mute       {muted}                           master mute toggled
 // ============================================================
 function makeBus() {
   const map = new Map();          // type -> Set<fn>
@@ -118,7 +138,17 @@ GTA.bus = makeBus();
 // ============================================================
 GTA.register = function register(system) {
   if (!system || !system.name) throw new Error('GTA.register: system needs a name');
-  if (GTA.systems[system.name]) {
+  const existing = GTA.systems[system.name];
+  if (existing) {
+    // IDEMPOTENT re-register: the exact same object is being registered again
+    // (e.g. a module that self-registers on import AND is install()'d by the
+    // bridge). This is a no-op, not a replacement — return silently without the
+    // warn and without disturbing _order. init() is NOT re-run here; if we're
+    // booted the system was already init'd on its first registration, and its
+    // own _inited/_subscribed guards would no-op a second call anyway.
+    if (existing === system) return system;
+    // A genuinely DIFFERENT object is taking over an existing name — that IS a
+    // replacement and worth flagging.
     console.warn(`[GTA] system "${system.name}" already registered — replacing`);
     GTA._order = GTA._order.filter((n) => n !== system.name);
   }

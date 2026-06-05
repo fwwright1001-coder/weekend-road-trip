@@ -1,4 +1,12 @@
+# npm — `three` is only a devDependency for the headless test harness in gta/
 node_modules/
+**/node_modules/
 package-lock.json
+**/package-lock.json
+
+# scratch / OS
 *.log
-/tmp/
+.DS_Store
+
+# per-lane parallel-build scratch (never merged to main)
+_LANE_BRIEF.md
