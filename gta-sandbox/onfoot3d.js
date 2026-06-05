@@ -1202,6 +1202,11 @@ function ensureInit() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Filmic tone mapping for a cinematic, AAA-style grade — rolls highlights off
+  // smoothly instead of hard-clipping to white, with a touch of exposure to keep
+  // the dusk read bright. (Big perceived-quality lift; tune exposure to taste.)
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -1225,7 +1230,7 @@ function ensureInit() {
   scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffe2b0, 1.9);
   sun.position.set(-40, 60, 30); sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(4096, 4096);   // crisper contact shadows (AAA polish pass)
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 300;
   sun.shadow.camera.left = -105; sun.shadow.camera.right = 105;
   sun.shadow.camera.top = 105; sun.shadow.camera.bottom = -105;   // covers the wider 7x7 town
@@ -1768,7 +1773,7 @@ function enterBuild() {
     player.ammo = AMMO_MAX; player.reloadT = 0; player.fireT = 0;
     yaw = Math.PI; pitch = -0.1; recoil = 0; kills = 0;
     keys.clear();
-    showToast('You step out of the convertible. The town is yours.<br><b>Click</b> to look around &middot; <b>WASD</b> walk &middot; <b>Click</b> shoot &middot; <b>E</b> to steal any car');
+    showToast('You step out of the convertible. The town is yours. <b>Click</b> to look around.');
     updateHud();
 
     setLoading('Spinning up the city systems…', 60);
