@@ -22,6 +22,7 @@
 // Y is height, feet rest at Y=0. Camera is a third-person orbit behind the guy.
 // ============================================================
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ---- tunables --------------------------------------------------------------
 const WALK = 4.4;            // player walk speed (units/s)
@@ -215,7 +216,7 @@ let mode = 'foot';           // 'foot' | 'drive'
 let playerVehicle = null;    // the car you're currently driving, or null
 
 // tracer / muzzle visuals
-let tracer, tracerT = 0, muzzleFlash, flashT = 0;
+let tracer, tracerT = 0, muzzleFlash, muzzleLight, flashT = 0;
 
 // scratch vectors (avoid per-frame allocation)
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vector3();
@@ -1222,6 +1223,15 @@ function ensureInit() {
   scene.background = new THREE.Color('#f3b066');
   scene.fog = new THREE.Fog('#f3b066', 70, 320);
 
+  // Image-based lighting: a neutral PMREM environment so metals (cars, gun
+  // chrome, hubs) and glass pick up real reflections instead of reading flat.
+  // Fail-safe — if PMREM/addons are unavailable the scene just renders without it.
+  try {
+    const _pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = _pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    _pmrem.dispose();
+  } catch (e) { console.warn('[ONFOOT] env map skipped', e); }
+
   camera = new THREE.PerspectiveCamera(62, 16 / 9, 0.1, 1200);
 
   // sky dome (gradient, ignores fog so the horizon stays clean)
@@ -1392,9 +1402,10 @@ function ensureInit() {
   tg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
   tracer = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
   tracer.frustumCulled = false; scene.add(tracer);
-  muzzleFlash = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  muzzleFlash = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xfff1b0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
   scene.add(muzzleFlash);
+  muzzleLight = new THREE.PointLight(0xffd060, 0, 7, 2); scene.add(muzzleLight);   // brief warm flash illumination per shot
 
   resize();
   initialized = true;
@@ -1645,7 +1656,8 @@ function fire() {
   pa.setXYZ(1, end.x, end.y, end.z);
   pa.needsUpdate = true;
   tracer.material.opacity = 1.0; tracerT = 0.07;
-  muzzleFlash.position.copy(muzzleWorld); muzzleFlash.material.opacity = 1; muzzleFlash.scale.setScalar(1.4); flashT = 0.06;
+  muzzleFlash.position.copy(muzzleWorld); muzzleFlash.material.opacity = 1; muzzleFlash.scale.setScalar(0.9 + Math.random() * 0.5); flashT = 0.06;
+  if (muzzleLight) { muzzleLight.position.copy(muzzleWorld); muzzleLight.intensity = 7; }
 
   // let an optional systems layer (police) claim the shot first if a cop is
   // closer than the pedestrian, so a single bullet hits exactly one target.
@@ -1959,7 +1971,7 @@ function update(dt) {
   // visual timers (tracer / muzzle flash) — fade the tracer out and shrink+fade
   // the flash so each shot reads as a quick bright pop with a fading tail.
   if (tracerT > 0) { tracerT -= dt; tracer.material.opacity = Math.max(0, tracerT / 0.07); if (tracerT <= 0) tracer.material.opacity = 0; }
-  if (flashT > 0) { flashT -= dt; const fk = Math.max(0, flashT / 0.06); muzzleFlash.material.opacity = fk; muzzleFlash.scale.setScalar(0.6 + fk * 0.9); if (flashT <= 0) muzzleFlash.material.opacity = 0; }
+  if (flashT > 0) { flashT -= dt; const fk = Math.max(0, flashT / 0.06); muzzleFlash.material.opacity = fk; muzzleFlash.scale.setScalar(0.5 + fk * 0.6); if (muzzleLight) muzzleLight.intensity = 7 * fk; if (flashT <= 0) { muzzleFlash.material.opacity = 0; if (muzzleLight) muzzleLight.intensity = 0; } }
 
   if (OF.onTick) OF.onTick(dt);   // optional systems layer (gta/onfoot-bridge.js)
 }
