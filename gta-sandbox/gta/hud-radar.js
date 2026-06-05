@@ -44,6 +44,7 @@ const COL_PLAYER = '#ffffff';
 const WEAPON_NAMES = {
   fists: 'FISTS',
   pistol: 'PISTOL',
+  ak47: 'AK-47',
   smg: 'SMG',
   shotgun: 'SHOTGUN',
   rifle: 'RIFLE',
@@ -91,6 +92,18 @@ const sys = {
   _healthWidthShown: -1,
   _armorWidthShown: -1,
   _crosshairHiddenShown: null,
+  _lowHpShown: null,            // dedupe body.gta-lowhp + health-bar .low toggling
+  _ammoLowShown: null,          // dedupe ammo .low toggling
+  _weaponSwapUntil: 0,          // ctx.time.t at which to remove the weapon .swap flash
+  _crosshairAimShown: null,     // dedupe crosshair .aim toggling
+  _crosshairEmptyShown: null,   // dedupe crosshair .empty toggling
+
+  // pause / settings overlay (Lane B)
+  _menu: null,
+  _menuOpen: false,
+  _menuStationShown: null,
+  _menuWired: false,
+  _settingsApplied: false,      // re-apply persisted volumes once audio.js/fx.js are loaded
 
   _unsubs: [],
 
@@ -109,6 +122,11 @@ const sys = {
       el.crosshair = d.getElementById('gta-crosshair');
       el.toast = d.getElementById('gta-toast');
       el.radar = d.getElementById('gta-radar');
+
+      // If Lane D has added our dedicated #gta-crosshair, flag the body so CSS
+      // can suppress the legacy on-foot plus-crosshair (no double reticle). When
+      // the element is absent we leave the legacy crosshair alone — no regression.
+      if (el.crosshair && d.body) d.body.classList.add('gta-xh');
 
       // build the 5 star spans exactly once
       if (el.stars && !this._builtStars) {
@@ -146,6 +164,150 @@ const sys = {
       }));
       this._unsubs.push(bus.on('toast', (p) => this._showToast(ctx, p)));
     }
+
+    // pause / settings overlay
+    try { this._buildMenu(); } catch (e) { /* never block HUD init */ }
+  },
+
+  // ========================================================
+  // PAUSE / SETTINGS MENU (Lane B) — a self-contained DOM overlay built here so
+  // index.html (Lane D) needs no changes. Opens on Esc; sets window.ONFOOT.paused
+  // (onfoot3d gates clicks on it); mixes music (audio.js) + sfx (fx.js), screen
+  // shake, FP, and restart. Settings persist in localStorage.
+  // ========================================================
+  _settingsKey: 'wrt.gta.settings',
+  _loadSettings() {
+    try { return Object.assign({ music: 45, sfx: 80, shakeOn: true, shake: 100, fp: false }, JSON.parse(localStorage.getItem(this._settingsKey) || '{}')); }
+    catch (e) { return { music: 45, sfx: 80, shakeOn: true, shake: 100, fp: false }; }
+  },
+  _saveSettings(s) { try { localStorage.setItem(this._settingsKey, JSON.stringify(s)); } catch (e) {} },
+  _applySettings(s) {
+    try {
+      const A = (typeof window !== 'undefined') && window.ONFOOT_AUDIO;
+      const F = (typeof window !== 'undefined') && window.ONFOOT_FX;
+      if (A && A.setMusicVolume) A.setMusicVolume(s.music / 100);
+      if (F && F.setVolume) F.setVolume(s.sfx / 100);
+      if (F && F.setShakeEnabled) F.setShakeEnabled(!!s.shakeOn);
+      if (F && F.setShakeScale) F.setShakeScale(s.shake / 100);
+    } catch (e) { /* systems may not be loaded yet; re-applied on open */ }
+  },
+  _buildMenu() {
+    if (this._menu || typeof document === 'undefined') return;
+    const frame = document.getElementById('frame') || document.body;
+    if (!frame) return;
+    const s = this._loadSettings();
+    const m = document.createElement('div');
+    m.id = 'gta-menu';
+    m.className = 'hidden';
+    m.innerHTML =
+      '<div class="gta-menu-panel" role="dialog" aria-label="Settings menu">' +
+      '<h2>SETTINGS</h2>' +
+      '<div class="gta-menu-row"><span>📻 Radio</span><button class="gta-menu-radio" data-act="radio"><b id="gta-menu-station">—</b> ▸</button></div>' +
+      '<div class="gta-menu-row"><label for="gta-m-music">Music</label><input id="gta-m-music" type="range" min="0" max="100"></div>' +
+      '<div class="gta-menu-row"><label for="gta-m-sfx">SFX</label><input id="gta-m-sfx" type="range" min="0" max="100"></div>' +
+      '<div class="gta-menu-row"><label for="gta-m-shakeon">Screen shake</label><input id="gta-m-shakeon" type="checkbox"></div>' +
+      '<div class="gta-menu-row"><label for="gta-m-shake">Shake intensity</label><input id="gta-m-shake" type="range" min="0" max="100"></div>' +
+      '<div class="gta-menu-row"><label for="gta-m-fp">First-person (V)</label><input id="gta-m-fp" type="checkbox"></div>' +
+      '<div class="gta-menu-actions"><button class="gta-menu-btn primary" data-act="resume">RESUME</button>' +
+      '<button class="gta-menu-btn" data-act="restart">RESTART</button></div>' +
+      '<p class="gta-menu-hint"><b>Esc</b> opens this &middot; <b>RESUME</b> to play &middot; <b>[ ]</b> cycle radio</p>' +
+      '</div>';
+    frame.appendChild(m);
+    this._menu = m;
+
+    const $ = (id) => m.querySelector(id);
+    const music = $('#gta-m-music'), sfx = $('#gta-m-sfx'), shakeOn = $('#gta-m-shakeon'), shake = $('#gta-m-shake'), fp = $('#gta-m-fp');
+    music.value = s.music; sfx.value = s.sfx; shakeOn.checked = !!s.shakeOn; shake.value = s.shake; fp.checked = !!s.fp;
+    this._applySettings(s);
+
+    const persist = () => {
+      const cur = { music: +music.value, sfx: +sfx.value, shakeOn: shakeOn.checked, shake: +shake.value, fp: fp.checked };
+      this._applySettings(cur); this._saveSettings(cur);
+    };
+    music.addEventListener('input', persist);
+    sfx.addEventListener('input', persist);
+    shakeOn.addEventListener('change', persist);
+    shake.addEventListener('input', persist);
+    fp.addEventListener('change', () => {
+      // Lane D owns the firstPerson flag, but a settings checkbox writing the same bool is benign.
+      try { if (window.ONFOOT) window.ONFOOT.firstPerson = fp.checked; } catch (e) {}
+      persist();
+    });
+    // don't let clicks inside the panel bubble to the canvas (belt-and-suspenders; onMouseDown is also OF.paused-gated)
+    m.addEventListener('mousedown', (e) => e.stopPropagation());
+    m.addEventListener('click', (e) => {
+      const act = e.target && e.target.getAttribute && e.target.closest('[data-act]') && e.target.closest('[data-act]').getAttribute('data-act');
+      if (act === 'resume') this._closeMenu();
+      else if (act === 'restart') { try { location.reload(); } catch (e2) {} }
+      else if (act === 'radio') { try { if (window.ONFOOT_AUDIO && window.ONFOOT_AUDIO.cycleStation) window.ONFOOT_AUDIO.cycleStation(); } catch (e2) {} this._syncStation(); }
+    });
+
+    if (!this._menuWired) {
+      this._menuWired = true;
+      // onfoot3d.onKeyDown stopImmediatePropagation()s every key while active, so a
+      // keydown listener here is dead. Instead drive the menu off pointer-lock: pressing
+      // Esc (or losing focus) releases the lock → open the menu; re-locking closes it.
+      document.addEventListener('pointerlockchange', () => {
+        try {
+          const OF = (typeof window !== 'undefined') && window.ONFOOT;
+          if (!OF || !OF.active) return;
+          const locked = !!document.pointerLockElement;
+          if (locked) { this._everLocked = true; if (this._menuOpen) this._closeMenu(); }
+          // Only auto-open the menu when a REAL lock is RELEASED (the Esc-to-release case).
+          // In an embedded / unfocused context pointer lock is never granted, so a
+          // lock-loss event must NOT pop the settings menu mid-action — that brittle
+          // focus coupling was what made the menu "keep reopening" in sandboxes.
+          else if (this._everLocked && !this._menuOpen && OF.internals && OF.internals.mode === 'foot') this._openMenu();
+        } catch (e) { /* optional */ }
+      }, false);
+      // Pausing on a genuinely HIDDEN tab is correct; merely losing window focus while
+      // still visible is not (that's the multi-monitor / click-to-focus false-pause).
+      document.addEventListener('visibilitychange', () => {
+        try {
+          const OF = (typeof window !== 'undefined') && window.ONFOOT;
+          if (OF && OF.active && document.visibilityState === 'hidden'
+              && !this._menuOpen && OF.internals && OF.internals.mode === 'foot') this._openMenu();
+        } catch (e) { /* optional */ }
+      }, false);
+    }
+  },
+  _syncStation() {
+    try {
+      const lbl = this._menu && this._menu.querySelector('#gta-menu-station');
+      const st = window.ONFOOT_AUDIO && window.ONFOOT_AUDIO.station && window.ONFOOT_AUDIO.station();
+      const name = st ? st.name : '—';
+      if (lbl && name !== this._menuStationShown) { lbl.textContent = name; this._menuStationShown = name; }
+    } catch (e) { /* optional */ }
+  },
+  _openMenu() {
+    if (!this._menu || this._menuOpen) return;
+    this._menuOpen = true;
+    try { if (window.ONFOOT) window.ONFOOT.paused = true; } catch (e) {}
+    // stop residual movement + release the mouse so the cursor is usable
+    try { const I = window.ONFOOT && window.ONFOOT.internals; if (I && I.keys) I.keys.clear(); } catch (e) {}
+    try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {}
+    // re-sync controls from the persisted state + the live station (systems are loaded by now)
+    try {
+      const s = this._loadSettings(); const m = this._menu;
+      m.querySelector('#gta-m-music').value = s.music; m.querySelector('#gta-m-sfx').value = s.sfx;
+      m.querySelector('#gta-m-shakeon').checked = !!s.shakeOn; m.querySelector('#gta-m-shake').value = s.shake;
+      m.querySelector('#gta-m-fp').checked = !!(window.ONFOOT && window.ONFOOT.firstPerson);
+      this._applySettings(s);
+    } catch (e) {}
+    this._syncStation();
+    this._menu.classList.remove('hidden');
+    if (typeof document !== 'undefined') document.body.classList.add('gta-menu-open');
+  },
+  _closeMenu() {
+    if (!this._menu || !this._menuOpen) return;
+    this._menuOpen = false;
+    this._menu.classList.add('hidden');
+    if (typeof document !== 'undefined') document.body.classList.remove('gta-menu-open');
+    try { if (window.ONFOOT) window.ONFOOT.paused = false; } catch (e) {}
+    // best-effort re-lock so the player drops straight back into the action — but ONLY
+    // if pointer lock has ever actually worked here. Re-requesting in a context that
+    // refuses it just bounces lock-loss -> reopen-menu -> close -> re-request forever.
+    try { if (this._everLocked) { const I = window.ONFOOT && window.ONFOOT.internals; if (I && I.canvas && I.canvas.requestPointerLock) I.canvas.requestPointerLock(); } } catch (e) {}
   },
 
   // --------------------------------------------------------
@@ -169,6 +331,16 @@ const sys = {
     this._healthWidthShown = -1;
     this._armorWidthShown = -1;
     this._crosshairHiddenShown = null;
+    this._weaponSwapUntil = 0;
+    this._crosshairAimShown = null;
+    this._crosshairEmptyShown = null;
+    // clear low-state classes outright (respawn restores full health/ammo)
+    if (typeof document !== 'undefined') document.body.classList.remove('gta-lowhp');
+    if (el.healthFill && el.healthFill.parentElement) el.healthFill.parentElement.classList.remove('low');
+    if (el.weapon) el.weapon.classList.remove('swap');
+    if (el.ammo) el.ammo.classList.remove('low');
+    this._lowHpShown = null;
+    this._ammoLowShown = null;
   },
 
   // --------------------------------------------------------
@@ -176,6 +348,12 @@ const sys = {
   // --------------------------------------------------------
   update(dt, ctx) {
     if (!ctx) return;
+    // persisted volumes apply once audio.js/fx.js have registered their window.* api
+    // (they load AFTER this HUD inits, so the build-time apply may have no-op'd).
+    if (!this._settingsApplied && typeof window !== 'undefined' && window.ONFOOT_AUDIO && window.ONFOOT_FX) {
+      try { this._applySettings(this._loadSettings()); } catch (e) {}
+      this._settingsApplied = true;
+    }
     // each painter is independently guarded so a problem with one HUD piece
     // never blanks the others or throws into the host loop.
     try { this._paintStars(ctx); } catch (e) { /* swallow */ }
@@ -186,6 +364,7 @@ const sys = {
     try { this._paintCrosshair(ctx); } catch (e) { /* swallow */ }
     try { this._tickToast(ctx); } catch (e) { /* swallow */ }
     try { this._paintRadar(ctx); } catch (e) { /* swallow */ }
+    if (this._menuOpen) { try { this._syncStation(); } catch (e) { /* swallow */ } }
   },
 
   // ========================================================
@@ -280,6 +459,17 @@ const sys = {
         el.healthFill.style.width = pct + '%';
         this._healthWidthShown = pct;
       }
+      // low-health feedback: pulse the bar + a red screen-edge vignette (CSS).
+      // Evaluated every frame (independent threshold), deduped on the boolean.
+      const low = pct <= 25 && player.alive !== false;
+      if (low !== this._lowHpShown) {
+        const bar = el.healthFill.parentElement;
+        if (bar) { if (low) bar.classList.add('low'); else bar.classList.remove('low'); }
+        if (typeof document !== 'undefined') {
+          if (low) document.body.classList.add('gta-lowhp'); else document.body.classList.remove('gta-lowhp');
+        }
+        this._lowHpShown = low;
+      }
     }
     if (el.armorFill) {
       const a = (typeof player.armor === 'number') ? player.armor : 0;
@@ -322,9 +512,16 @@ const sys = {
       melee = MELEE_IDS.has(id);
     }
 
+    const t = (ctx.time && ctx.time.t) || 0;
     if (el.weapon && name !== this._weaponNameShown) {
+      const first = this._weaponNameShown === null;   // don't flash the initial paint
       el.weapon.textContent = name || 'FISTS';
       this._weaponNameShown = name || 'FISTS';
+      if (!first) { el.weapon.classList.add('swap'); this._weaponSwapUntil = t + 0.35; }   // brief pop on swap
+    }
+    if (this._weaponSwapUntil && t >= this._weaponSwapUntil) {
+      if (el.weapon) el.weapon.classList.remove('swap');
+      this._weaponSwapUntil = 0;
     }
 
     if (el.ammo) {
@@ -337,6 +534,12 @@ const sys = {
       if (empty !== this._ammoEmptyShown) {
         if (empty) el.ammo.classList.add('empty'); else el.ammo.classList.remove('empty');
         this._ammoEmptyShown = empty;
+      }
+      // low (but not empty) clip → amber warning to prompt a reload
+      const low = !melee && clip > 0 && clip <= 5;
+      if (low !== this._ammoLowShown) {
+        if (low) el.ammo.classList.add('low'); else el.ammo.classList.remove('low');
+        this._ammoLowShown = low;
       }
     }
   },
@@ -385,12 +588,12 @@ const sys = {
     const input = ctx.input;
     const locked = !!(input && input.pointerLocked);
 
-    let melee = true;
+    let melee = true, clipEmpty = false;
     const combat = this._api(ctx, 'combat');
     if (combat && typeof combat.currentWeapon === 'function') {
       let w = null;
       try { w = combat.currentWeapon(); } catch (e) { w = null; }
-      if (w && typeof w === 'object') melee = !!w.melee;
+      if (w && typeof w === 'object') { melee = !!w.melee; clipEmpty = !melee && w.clip === 0; }
       else {
         const id = (ctx.player && typeof ctx.player.weapon === 'string') ? ctx.player.weapon : 'fists';
         melee = MELEE_IDS.has(id);
@@ -405,6 +608,17 @@ const sys = {
     if (hidden !== this._crosshairHiddenShown) {
       if (hidden) el.crosshair.classList.add('hidden'); else el.crosshair.classList.remove('hidden');
       this._crosshairHiddenShown = hidden;
+    }
+    // crosshair STATE: tighten when aiming down (shared window.ONFOOT.aiming flag),
+    // tint red when the clip is empty. Both deduped; harmless if D hasn't wired aim.
+    const aiming = typeof window !== 'undefined' && !!(window.ONFOOT && window.ONFOOT.aiming);
+    if (aiming !== this._crosshairAimShown) {
+      if (aiming) el.crosshair.classList.add('aim'); else el.crosshair.classList.remove('aim');
+      this._crosshairAimShown = aiming;
+    }
+    if (clipEmpty !== this._crosshairEmptyShown) {
+      if (clipEmpty) el.crosshair.classList.add('empty'); else el.crosshair.classList.remove('empty');
+      this._crosshairEmptyShown = clipEmpty;
     }
   },
 
@@ -509,6 +723,7 @@ const sys = {
       : (worldApi && typeof worldApi.bound === 'function' ? worldApi.bound() : 120);
     const block = (worldApi && typeof worldApi.blockSize === 'number') ? worldApi.blockSize : 40;
     const roadHalf = (worldApi && typeof worldApi.roadHalf === 'number') ? worldApi.roadHalf : 5;
+    const roadOff = (worldApi && typeof worldApi.roadOffset === 'number') ? worldApi.roadOffset : 0;
 
     // ============================================================
     // ROAD GRID — draw the asphalt strips that lie within view.
@@ -517,8 +732,8 @@ const sys = {
     // ============================================================
     const reach = RADAR_WORLD_SPAN * 0.62; // a touch beyond the visible radius
     // road strips: vertical roads (constant x = k*block, run along Z) then horizontal
-    this._drawGridRoads(g, project, px, pz, block, bound, reach, roadHalf, scale, true);
-    this._drawGridRoads(g, project, px, pz, block, bound, reach, roadHalf, scale, false);
+    this._drawGridRoads(g, project, px, pz, block, bound, reach, roadHalf, scale, true, roadOff);
+    this._drawGridRoads(g, project, px, pz, block, bound, reach, roadHalf, scale, false, roadOff);
 
     // ============================================================
     // BUILDING BLOCKS — faint filled rects from world.aabbs.
@@ -669,7 +884,7 @@ const sys = {
   // `vertical=true` => roads at constant x = k*block (run along world Z).
   // We render them as thin rotated quads via project().
   // --------------------------------------------------------
-  _drawGridRoads(g, project, px, pz, block, bound, reach, roadHalf, scale, vertical) {
+  _drawGridRoads(g, project, px, pz, block, bound, reach, roadHalf, scale, vertical, offset = 0) {
     if (block <= 0) return;
     g.fillStyle = 'rgba(58,64,74,0.6)';
     // range of grid lines that could intersect the view window
@@ -679,10 +894,10 @@ const sys = {
     const aMax = bound;
     g.beginPath();
     if (vertical) {
-      const kMin = Math.ceil((px - halfReach) / block);
-      const kMax = Math.floor((px + halfReach) / block);
+      const kMin = Math.ceil((px - halfReach - offset) / block);
+      const kMax = Math.floor((px + halfReach - offset) / block);
       for (let k = kMin; k <= kMax; k++) {
-        const lineX = k * block;
+        const lineX = k * block + offset;
         if (Math.abs(lineX) > bound + 1) continue;
         const x0 = lineX - roadHalf, x1 = lineX + roadHalf;
         // a long strip along Z from aMin..aMax, as a quad of 4 corners
@@ -693,10 +908,10 @@ const sys = {
         g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cxp, cyp); g.lineTo(dx, dy); g.closePath();
       }
     } else {
-      const kMin = Math.ceil((pz - halfReach) / block);
-      const kMax = Math.floor((pz + halfReach) / block);
+      const kMin = Math.ceil((pz - halfReach - offset) / block);
+      const kMax = Math.floor((pz + halfReach - offset) / block);
       for (let k = kMin; k <= kMax; k++) {
-        const lineZ = k * block;
+        const lineZ = k * block + offset;
         if (Math.abs(lineZ) > bound + 1) continue;
         const z0 = lineZ - roadHalf, z1 = lineZ + roadHalf;
         project(aMin, z0, _v3a); const ax = _v3a.x, ay = _v3a.z;

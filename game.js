@@ -939,7 +939,7 @@
   // sibling gta-sandbox/ folder. We persist the unlock so the entry also appears
   // on the title menu for returning players, then hand off via a same-origin
   // navigation — the relative path resolves locally, when served, and on Pages.
-  const SANDBOX_URL = 'gta-sandbox/';
+  const SANDBOX_URL = 'gta-sandbox/#gta';   // land players straight in the on-foot heist (onfoot3d auto-enters on #gta)
   function sandboxUnlocked() {
     try { return localStorage.getItem(SANDBOX_KEY) === '1'; } catch (e) { return false; }
   }
