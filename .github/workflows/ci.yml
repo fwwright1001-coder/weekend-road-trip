@@ -22,10 +22,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
+      - name: Install dependencies
+        run: npm ci
       - name: Balance & physics simulation (10 acceptance criteria)
         run: node sim/balance-sim.js
       - name: Self-test harness
         run: node qa/run-selftests.js
       - name: DOM-contract smoke (HTML/JS wiring)
         run: node qa/smoke-dom.js
+      - name: Road Crew API contract
+        run: node qa/waitlist-contract.js
+      - name: Road Crew client contract
+        run: node qa/launch-contract.js

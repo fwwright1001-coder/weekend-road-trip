@@ -21,7 +21,8 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-const js = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
+const jsFiles = ['game.js', 'launch.js'].filter((file) => fs.existsSync(path.join(root, file)));
+const js = jsFiles.map((file) => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 
 // 1) Every id declared in the markup.
 const htmlIds = new Set();
@@ -45,7 +46,7 @@ for (const id of required) {
 }
 
 const missing = [...refs].filter((id) => !htmlIds.has(id));
-check('every static element reference in game.js resolves to index.html',
+check('every static element reference in JS resolves to index.html',
       missing.length === 0,
       missing.length ? 'MISSING ids: ' + missing.join(', ') : refs.size + ' references resolve');
 
@@ -53,5 +54,5 @@ for (const c of checks) {
   console.log((c.pass ? 'PASS  ' : 'FAIL  ') + c.name + (c.detail ? '  — ' + c.detail : ''));
 }
 console.log('\nDOM-contract smoke: ' + (checks.length - fail) + '/' + checks.length +
-            ' passed, ' + refs.size + ' element references checked.');
+            ' passed, ' + refs.size + ' element references checked across ' + jsFiles.join(', ') + '.');
 process.exit(fail === 0 ? 0 : 1);

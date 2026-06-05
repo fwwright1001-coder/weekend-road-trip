@@ -3,5 +3,9 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+.env
+.env.local
+.env.production
+.vercel/
 *.log
 node_modules/
