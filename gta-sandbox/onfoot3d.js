@@ -288,8 +288,8 @@ function buildPerson(colors, armed) {
   const g = new THREE.Group();
 
   // --- helpers (defensive: nothing here may throw in a way that kills render) ---
-  const mk = (geo, col, rough) => {
-    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: col, roughness: rough == null ? 0.85 : rough }));
+  const mk = (geo, col, rough, metal) => {
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: col, roughness: rough == null ? 0.85 : rough, metalness: metal == null ? 0 : metal }));
     m.castShadow = true; m.receiveShadow = true; return m;
   };
   // Capsule whose TOP (the joint) sits at the mesh's local origin, so a parent
@@ -483,45 +483,52 @@ function buildPerson(colors, armed) {
 
     // PISTOL — chrome/nickel mob 1911: bright slide + barrel, dark-walnut grip, hammer nub
     addWeapon('pistol', (w, mz, ej) => {
-      w.add(mk(new THREE.BoxGeometry(0.07, 0.085, 0.26), CHROME, 0.22));
-      const br = mk(new THREE.CylinderGeometry(0.018, 0.018, 0.08, 8), CHROME, 0.22); br.rotation.x = Math.PI / 2; br.position.set(0, 0.012, 0.17); w.add(br);
-      const grip = mk(new THREE.BoxGeometry(0.06, 0.15, 0.085), WALNUT, 0.5); grip.position.set(0, -0.11, -0.055); grip.rotation.x = 0.22; w.add(grip);
-      const hammer = mk(new THREE.BoxGeometry(0.02, 0.03, 0.03), CHROME, 0.2); hammer.position.set(0, 0.05, -0.115); w.add(hammer);
+      w.add(mk(new THREE.BoxGeometry(0.07, 0.085, 0.26), CHROME, 0.18, 0.92));                                                              // slide — real reflective metal
+      const br = mk(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 16), 0x26282d, 0.22, 0.9); br.rotation.x = Math.PI / 2; br.position.set(0, 0.012, 0.17); w.add(br);   // round barrel (16-seg)
+      const grip = mk(new THREE.BoxGeometry(0.06, 0.15, 0.085), WALNUT, 0.5, 0); grip.position.set(0, -0.11, -0.055); grip.rotation.x = 0.22; w.add(grip);
+      const guard = mk(new THREE.TorusGeometry(0.03, 0.007, 8, 18), 0xb9bdc4, 0.25, 0.9); guard.rotation.y = Math.PI / 2; guard.position.set(0, -0.05, -0.015); w.add(guard);   // trigger guard loop
+      const trig = mk(new THREE.BoxGeometry(0.012, 0.03, 0.01), 0x111114, 0.4, 0.5); trig.position.set(0, -0.045, -0.015); w.add(trig);                                          // trigger
+      const rear = mk(new THREE.BoxGeometry(0.028, 0.016, 0.016), 0x101014, 0.4, 0.6); rear.position.set(0, 0.052, -0.105); w.add(rear);                                         // rear sight
+      const front = mk(new THREE.BoxGeometry(0.012, 0.016, 0.016), 0x101014, 0.4, 0.6); front.position.set(0, 0.052, 0.11); w.add(front);                                        // front sight
+      const hammer = mk(new THREE.BoxGeometry(0.018, 0.03, 0.022), CHROME, 0.18, 0.9); hammer.position.set(0, 0.05, -0.118); w.add(hammer);
+      for (let i = 0; i < 4; i++) { const s = mk(new THREE.BoxGeometry(0.072, 0.05, 0.005), 0x9aa0a8, 0.3, 0.9); s.position.set(0, 0.012, -0.085 - i * 0.013); w.add(s); }       // slide serrations
       mz.position.set(0, 0.012, 0.225); ej.position.set(0.045, 0.035, 0.04);
     });
 
     // AK-47 — long receiver, wood foregrip + stock, curved magazine, front sight
     addWeapon('ak47', (w, mz, ej) => {
-      w.add(mk(new THREE.BoxGeometry(0.06, 0.07, 0.5), METAL, 0.4));
-      const fore = mk(new THREE.BoxGeometry(0.062, 0.072, 0.16), WOOD, 0.7); fore.position.set(0, 0, 0.17); w.add(fore);
-      const mag = mk(new THREE.BoxGeometry(0.05, 0.21, 0.10), 0x2a2a30, 0.5); mag.position.set(0, -0.14, -0.02); mag.rotation.x = -0.45; w.add(mag);
-      const grip = mk(new THREE.BoxGeometry(0.05, 0.13, 0.07), POLY, 0.5); grip.position.set(0, -0.10, -0.16); grip.rotation.x = 0.3; w.add(grip);
-      const stock = mk(new THREE.BoxGeometry(0.05, 0.075, 0.22), WOOD, 0.7); stock.position.set(0, -0.02, -0.34); w.add(stock);
-      const sight = mk(new THREE.BoxGeometry(0.012, 0.045, 0.02), METAL2, 0.4); sight.position.set(0, 0.06, 0.22); w.add(sight);
+      w.add(mk(new THREE.BoxGeometry(0.06, 0.07, 0.5), METAL, 0.38, 0.82));
+      const barrel = mk(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 16), 0x1a1c20, 0.3, 0.85); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.012, 0.33); w.add(barrel);   // protruding barrel
+      const gasblk = mk(new THREE.BoxGeometry(0.03, 0.03, 0.05), METAL2, 0.4, 0.8); gasblk.position.set(0, 0.04, 0.2); w.add(gasblk);                                                       // gas block
+      const fore = mk(new THREE.BoxGeometry(0.062, 0.072, 0.16), WOOD, 0.7, 0); fore.position.set(0, 0, 0.17); w.add(fore);
+      const mag = mk(new THREE.BoxGeometry(0.05, 0.21, 0.10), 0x33342c, 0.45, 0.5); mag.position.set(0, -0.14, -0.02); mag.rotation.x = -0.45; w.add(mag);
+      const grip = mk(new THREE.BoxGeometry(0.05, 0.13, 0.07), POLY, 0.5, 0.1); grip.position.set(0, -0.10, -0.16); grip.rotation.x = 0.3; w.add(grip);
+      const stock = mk(new THREE.BoxGeometry(0.05, 0.075, 0.22), WOOD, 0.7, 0); stock.position.set(0, -0.02, -0.34); w.add(stock);
+      const sight = mk(new THREE.BoxGeometry(0.012, 0.045, 0.02), METAL2, 0.4, 0.8); sight.position.set(0, 0.06, 0.22); w.add(sight);
       mz.position.set(0, 0.0, 0.42); ej.position.set(0.04, 0.035, 0.0);
     });
 
     // SMG — Thompson "Tommy gun": wood receiver/grips, signature round DRUM mag, finned barrel
     addWeapon('smg', (w, mz, ej) => {
-      w.add(mk(new THREE.BoxGeometry(0.07, 0.085, 0.34), WALNUT, 0.5));                                 // wood receiver
-      const drum = mk(new THREE.CylinderGeometry(0.105, 0.105, 0.06, 18), METAL2, 0.4); drum.rotation.z = Math.PI / 2; drum.position.set(0, -0.12, 0.03); w.add(drum);  // round drum, broad face to the SIDE (axis along X)
-      const drumCap = mk(new THREE.CylinderGeometry(0.03, 0.03, 0.07, 10), CHROME, 0.22); drumCap.rotation.z = Math.PI / 2; drumCap.position.set(0, -0.12, 0.03); w.add(drumCap);
-      const foreGrip = mk(new THREE.BoxGeometry(0.05, 0.11, 0.06), WOOD, 0.6); foreGrip.position.set(0, -0.10, 0.16); foreGrip.rotation.x = -0.05; w.add(foreGrip);
-      const rearGrip = mk(new THREE.BoxGeometry(0.05, 0.12, 0.07), WOOD, 0.6); rearGrip.position.set(0, -0.10, -0.12); rearGrip.rotation.x = 0.25; w.add(rearGrip);
-      const stock = mk(new THREE.BoxGeometry(0.05, 0.07, 0.16), WOOD, 0.7); stock.position.set(0, -0.01, -0.28); w.add(stock);
-      const barrel = mk(new THREE.CylinderGeometry(0.02, 0.02, 0.12, 10), METAL2, 0.4); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, 0.21); w.add(barrel);
-      for (const fz of [0.18, 0.23]) { const fin = mk(new THREE.TorusGeometry(0.03, 0.008, 6, 10), METAL2, 0.4); fin.position.set(0, 0.02, fz); w.add(fin); }  // cooling fins wrap the +Z barrel
-      const sight = mk(new THREE.BoxGeometry(0.012, 0.04, 0.02), METAL2, 0.4); sight.position.set(0, 0.07, 0.24); w.add(sight);
+      w.add(mk(new THREE.BoxGeometry(0.07, 0.085, 0.34), WALNUT, 0.5, 0));                                 // wood receiver
+      const drum = mk(new THREE.CylinderGeometry(0.105, 0.105, 0.06, 24), METAL2, 0.4, 0.8); drum.rotation.z = Math.PI / 2; drum.position.set(0, -0.12, 0.03); w.add(drum);  // round drum, broad face to the SIDE (axis along X)
+      const drumCap = mk(new THREE.CylinderGeometry(0.03, 0.03, 0.07, 14), CHROME, 0.2, 0.9); drumCap.rotation.z = Math.PI / 2; drumCap.position.set(0, -0.12, 0.03); w.add(drumCap);
+      const foreGrip = mk(new THREE.BoxGeometry(0.05, 0.11, 0.06), WOOD, 0.6, 0); foreGrip.position.set(0, -0.10, 0.16); foreGrip.rotation.x = -0.05; w.add(foreGrip);
+      const rearGrip = mk(new THREE.BoxGeometry(0.05, 0.12, 0.07), WOOD, 0.6, 0); rearGrip.position.set(0, -0.10, -0.12); rearGrip.rotation.x = 0.25; w.add(rearGrip);
+      const stock = mk(new THREE.BoxGeometry(0.05, 0.07, 0.16), WOOD, 0.7, 0); stock.position.set(0, -0.01, -0.28); w.add(stock);
+      const barrel = mk(new THREE.CylinderGeometry(0.02, 0.02, 0.12, 16), METAL2, 0.4, 0.85); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, 0.21); w.add(barrel);
+      for (const fz of [0.18, 0.23]) { const fin = mk(new THREE.TorusGeometry(0.03, 0.008, 8, 16), METAL2, 0.4, 0.85); fin.position.set(0, 0.02, fz); w.add(fin); }  // cooling fins wrap the +Z barrel
+      const sight = mk(new THREE.BoxGeometry(0.012, 0.04, 0.02), METAL2, 0.4, 0.8); sight.position.set(0, 0.07, 0.24); w.add(sight);
       mz.position.set(0, 0.02, 0.30); ej.position.set(0.045, 0.03, 0.05);
     });
 
     // SHOTGUN — thick barrel + pump under it, receiver, wood grip + stock
     addWeapon('shotgun', (w, mz, ej) => {
-      const barrel = mk(new THREE.CylinderGeometry(0.028, 0.028, 0.5, 10), METAL, 0.35); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.03, 0.16); w.add(barrel);
-      const pump = mk(new THREE.BoxGeometry(0.06, 0.05, 0.16), POLY, 0.6); pump.position.set(0, -0.04, 0.12); w.add(pump);
-      const recv = mk(new THREE.BoxGeometry(0.06, 0.08, 0.18), METAL, 0.4); recv.position.set(0, 0, -0.06); w.add(recv);
-      const grip = mk(new THREE.BoxGeometry(0.05, 0.11, 0.07), WOOD, 0.7); grip.position.set(0, -0.09, -0.12); grip.rotation.x = 0.3; w.add(grip);
-      const stock = mk(new THREE.BoxGeometry(0.05, 0.09, 0.22), WOOD, 0.7); stock.position.set(0, -0.01, -0.30); w.add(stock);
+      const barrel = mk(new THREE.CylinderGeometry(0.028, 0.028, 0.5, 16), METAL, 0.32, 0.85); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.03, 0.16); w.add(barrel);
+      const pump = mk(new THREE.BoxGeometry(0.06, 0.05, 0.16), POLY, 0.6, 0.1); pump.position.set(0, -0.04, 0.12); w.add(pump);
+      const recv = mk(new THREE.BoxGeometry(0.06, 0.08, 0.18), METAL, 0.4, 0.82); recv.position.set(0, 0, -0.06); w.add(recv);
+      const grip = mk(new THREE.BoxGeometry(0.05, 0.11, 0.07), WOOD, 0.7, 0); grip.position.set(0, -0.09, -0.12); grip.rotation.x = 0.3; w.add(grip);
+      const stock = mk(new THREE.BoxGeometry(0.05, 0.09, 0.22), WOOD, 0.7, 0); stock.position.set(0, -0.01, -0.30); w.add(stock);
       mz.position.set(0, 0.03, 0.42); ej.position.set(0.045, 0.0, -0.04);
     });
 
