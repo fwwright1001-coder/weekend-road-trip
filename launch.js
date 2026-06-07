@@ -16,9 +16,19 @@
 
   if (!form || !emailInput || !statusEl) return;
 
-  function isStaticPagesHost() {
-    return /\.github\.io$/i.test(window.location.hostname) ||
-      window.location.protocol === 'file:';
+  function canUseCloudWaitlist() {
+    if (typeof fetch !== 'function') return false;
+    const host = String(window.location.hostname || '');
+    if (!host || window.location.protocol === 'file:') return false;
+    if (/\.github\.io$/i.test(host)) return false;
+    if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(host)) return false;
+    return true;
+  }
+
+  function fallbackMessage() {
+    return /\.github\.io$/i.test(window.location.hostname)
+      ? 'GitHub Pages fallback active; Vercel saves this form to Neon.'
+      : 'Local fallback active; Vercel saves this form to Neon.';
   }
 
   function clean(value, max) {
@@ -64,8 +74,8 @@
   }
 
   async function refreshCloudCount() {
-    if (isStaticPagesHost() || typeof fetch !== 'function') {
-      setStatus('', 'GitHub Pages fallback active; Vercel saves this form to Neon.');
+    if (!canUseCloudWaitlist()) {
+      setStatus('', fallbackMessage());
       return;
     }
     try {
@@ -90,7 +100,7 @@
       return;
     }
 
-    if (isStaticPagesHost() || typeof fetch !== 'function') {
+    if (!canUseCloudWaitlist()) {
       const saved = saveLocal(payload);
       setStatus(saved ? 'ok' : 'bad',
         saved ? 'Saved locally here; deploy on Vercel to sync Neon.' : 'Local save is unavailable in this browser.');

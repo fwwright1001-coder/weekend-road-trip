@@ -535,7 +535,9 @@
       const loc = window.location || location || {};
       const host = String(loc.hostname || '');
       if (!host || loc.protocol === 'file:') return false;
-      return !/\.github\.io$/i.test(host);
+      if (/\.github\.io$/i.test(host)) return false;
+      if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(host)) return false;
+      return true;
     } catch (e) {
       return false;
     }

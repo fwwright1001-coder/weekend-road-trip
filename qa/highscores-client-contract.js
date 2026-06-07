@@ -99,6 +99,18 @@ const check = (name, pass, detail) => {
   {
     const calls = [];
     const h = createHarness({
+      hostname: '127.0.0.1',
+      protocol: 'http:',
+      fetchImpl: async (...args) => { calls.push(args); throw new Error('should not fetch on local static server'); }
+    });
+    check('local static server disables cloud scores', h.canUseCloudScores() === false);
+    await h.submitCloudScore({ initials: 'FW', score: 1000, date: '2026-06-06' });
+    check('local static score save does not call fetch', calls.length === 0, `calls=${calls.length}`);
+  }
+
+  {
+    const calls = [];
+    const h = createHarness({
       hostname: 'weekend-road-trip.vercel.app',
       protocol: 'https:',
       fetchImpl: async (url, opts) => {

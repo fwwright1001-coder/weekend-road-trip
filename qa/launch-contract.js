@@ -112,6 +112,23 @@ const check = (name, pass, detail) => {
   {
     const calls = [];
     const h = createHarness({
+      hostname: '127.0.0.1',
+      protocol: 'http:',
+      fetchImpl: async (...args) => { calls.push(args); throw new Error('should not fetch on local static server'); }
+    });
+    await h.settle();
+    check('local static server shows fallback status',
+      /Local fallback active/.test(h.elements['waitlist-status'].textContent),
+      h.elements['waitlist-status'].textContent);
+    await h.submit('Local Driver', 'LOCAL@example.com');
+    const saved = JSON.parse(h.store.get('wrt.roadCrew.local.v1') || '[]');
+    check('local static server saves fallback signup', saved.length === 1 && saved[0].email === 'local@example.com', JSON.stringify(saved));
+    check('local static server does not call API', calls.length === 0, `calls=${calls.length}`);
+  }
+
+  {
+    const calls = [];
+    const h = createHarness({
       hostname: 'weekend-road-trip.vercel.app',
       protocol: 'https:',
       fetchImpl: async (url, opts) => {

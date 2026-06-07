@@ -561,6 +561,15 @@ body.colorblind {
   .screen {
     padding: 22px 20px;
   }
+  .screen h1 {
+    font-size: clamp(24px, 8vw, 32px);
+    letter-spacing: 3px;
+    line-height: 1.12;
+  }
+  .screen h2 {
+    font-size: clamp(22px, 7vw, 26px);
+    letter-spacing: 2px;
+  }
   .waitlist-copy {
     flex-direction: column;
     align-items: center;
@@ -751,6 +760,67 @@ html, body { overscroll-behavior: none; }
   #rotate-hint .rh-text { font-size: 15px; letter-spacing: 1px; color: var(--text); max-width: 280px; line-height: 1.5; }
 }
 @keyframes rh-rotate { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(90deg); } }
+
+@media (max-width: 700px) and (orientation: portrait) {
+  #rotate-hint {
+    display: flex; position: fixed; inset: 0; z-index: 60;
+    flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: radial-gradient(circle at center, #1a1a2e 0%, #050810 100%);
+    color: var(--gold); text-align: center; padding: 24px;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  }
+  #rotate-hint .rh-icon { font-size: 52px; animation: rh-rotate 2s ease-in-out infinite; }
+  #rotate-hint .rh-text { font-size: 15px; letter-spacing: 1px; color: var(--text); max-width: 280px; line-height: 1.5; }
+}
+
+@media (max-height: 430px) and (orientation: landscape) {
+  .screen {
+    padding: 12px 18px;
+    width: 86%;
+  }
+  #screen-title {
+    max-width: 600px;
+  }
+  .screen h1 {
+    font-size: clamp(25px, 5vw, 34px);
+    letter-spacing: 4px;
+    line-height: 1.05;
+    margin-bottom: 2px;
+  }
+  .screen .tagline {
+    font-size: 9px;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+  }
+  .screen .story {
+    font-size: 12px;
+    line-height: 1.35;
+    margin-bottom: 8px;
+  }
+  button {
+    font-size: 11px;
+    padding: 7px 14px;
+    margin: 3px;
+  }
+  button.cta {
+    font-size: 12px;
+    padding: 8px 24px;
+    margin: 3px 4px;
+  }
+  .menu-actions {
+    margin-top: 2px;
+    gap: 3px;
+  }
+  .ghost-status {
+    min-height: 14px;
+    margin-top: 3px;
+    font-size: 10px;
+  }
+  #screen-title .waitlist-form,
+  #screen-title .credit {
+    display: none;
+  }
+}
 
 /* ============================================================
  * Visual polish — menu entrance + micro-interactions (append-only).
