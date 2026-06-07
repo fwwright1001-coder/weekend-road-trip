@@ -200,6 +200,18 @@
     }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
+  const NASHVILLE_GEO = [
+    { biome: 'DOWNTOWN', distance: 1250, name: 'RYMAN AUDITORIUM', label: 'RYMAN 5TH AVE', lat: 36.1612473, lon: -86.7784951 },
+    { biome: 'DOWNTOWN', distance: 2200, name: 'AT&T BUILDING', label: '333 COMMERCE', lat: 36.1620757, lon: -86.7771139 },
+    { biome: 'DOWNTOWN', distance: 3300, name: 'COUNTRY MUSIC HALL OF FAME', label: 'CMHOF 222 REP JOHN LEWIS', lat: 36.1581728, lon: -86.7760929 },
+    { biome: 'MUSIC ROW', distance: 6250, name: 'MUSIC ROW ROUNDABOUT', label: 'MUSIC SQ E/W', lat: 36.1516, lon: -86.7922 },
+    { biome: 'MUSIC ROW', distance: 7600, name: '16TH AVENUE SOUTH', label: '16TH AVE S', lat: 36.1508, lon: -86.7935 },
+    { biome: 'CUMBERLAND', distance: 11800, name: 'JOHN SEIGENTHALER PEDESTRIAN BRIDGE', label: 'PEDESTRIAN BRIDGE', lat: 36.1620654, lon: -86.7722371 },
+    { biome: 'CUMBERLAND', distance: 13900, name: 'NISSAN STADIUM', label: 'NISSAN EAST BANK', lat: 36.1665236, lon: -86.7713148 },
+    { biome: 'BROADWAY', distance: 16250, name: 'BRIDGESTONE ARENA', label: '5TH & BROAD', lat: 36.1589806, lon: -86.7783819 },
+    { biome: 'BROADWAY', distance: 17650, name: 'LOWER BROADWAY', label: '1ST-5TH BROADWAY', lat: 36.1606, lon: -86.7760 },
+    { biome: 'BROADWAY', distance: 19000, name: 'RIVERFRONT', label: '1ST AVE / RIVER', lat: 36.1620, lon: -86.7730 }
+  ];
 
   // ============================================================
   // DIFFICULTY CURVE  — single, reviewable source of truth for balance
@@ -482,6 +494,8 @@
   const COMBO_BASE_WINDOW = 4.0;  // base seconds before combo resets; shrinks as combo climbs
   const COMBO_CEILING = 25;       // soft cap on combo COUNT (bounds runaway), but the multiplier
                                   // keeps climbing — combo is now the score engine, not a flat x5.
+  const MAX_PARTICLES = 240;      // caps short-lived VFX so long sessions cannot balloon draw work
+  const MAX_SCORE_POPUPS = 32;    // enough for busy combo bursts without unbounded text draws
   // Score multiplier from combo count: 1x, 1.6x, 2.2x ... combo5=3.4x, combo10=6.4x, combo20=12.4x.
   const comboMult = (c) => 1 + Math.max(0, c - 1) * 0.6;
   // Decay window tightens with combo so a long chain demands near-continuous skill.
@@ -506,16 +520,28 @@
       // localStorage unavailable — game still works per session
     }
   }
+  function scoreBoardForQualification() {
+    const source = state.cloudScores && state.cloudScores.length
+      ? state.cloudScores
+      : (state.scores && state.scores.length ? state.scores : loadScores());
+    return source
+      .map(normalizeScoreEntry)
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_SCORES);
+  }
   function qualifies(score) {
-    if (state.scores.length < MAX_SCORES) return true;
-    return score > state.scores[state.scores.length - 1].score;
+    const board = scoreBoardForQualification();
+    const s = Math.floor(Number(score) || 0);
+    if (board.length < MAX_SCORES) return true;
+    return s > board[board.length - 1].score;
   }
   function insertScore(initials, score) {
-    const entry = {
-      initials: initials.join(''),
-      score: Math.floor(score),
+    const entry = normalizeScoreEntry({
+      initials: Array.isArray(initials) ? initials.join('') : initials,
+      score,
       date: new Date().toISOString().slice(0, 10)
-    };
+    });
     state.scores.push(entry);
     state.scores.sort((a, b) => b.score - a.score);
     state.scores = state.scores.slice(0, MAX_SCORES);
@@ -585,6 +611,8 @@
         state.cloudScoreStatus = 'Score saved to Neon.';
       } else if (res.status === 503) {
         state.cloudScoreStatus = 'Score saved locally; add Neon DATABASE_URL for cloud scores.';
+      } else {
+        state.cloudScoreStatus = 'Score saved locally; cloud scores are unavailable.';
       }
     } catch (e) {
       state.cloudScoreStatus = 'Score saved locally; cloud sync was not reachable.';
@@ -637,6 +665,7 @@
       const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
       if (!parsed || typeof parsed !== 'object') return {};
+      // Preserve unlocks from pre-Nashville saves that used old route ids.
       const legacyLegIds = {
         forest: 'music-row',
         desert: 'cumberland',
@@ -1081,6 +1110,14 @@
       tcEl.querySelectorAll('.tc-btn.pressed').forEach((b) => b.classList.remove('pressed'));
     }
   }
+  function releaseHeldInputs() {
+    releaseTouchHolds();
+    state.keys.clear();
+    state.player.ducking = false;
+    state._duckHeldPrev = false;
+    state.pad = {};
+    state.padPrev = {};
+  }
   (function bindTouchControls() {
     const tcEl = document.getElementById('touch-controls');
     if (!tcEl || !tcEl.querySelectorAll) return;
@@ -1090,6 +1127,9 @@
       const code = HOLD[action];
       const down = (e) => {
         if (e && e.preventDefault) e.preventDefault();
+        if (e && e.pointerId != null && btn.setPointerCapture) {
+          try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+        }
         audio.init();                                   // unlock audio on first touch
         btn.classList.add('pressed');
         if (action === 'jump') { if (state.screen === SCREEN.PLAYING) tryJump(); }
@@ -1100,6 +1140,9 @@
       };
       const up = (e) => {
         if (e && e.preventDefault && e.cancelable) e.preventDefault();
+        if (e && e.pointerId != null && btn.releasePointerCapture) {
+          try { btn.releasePointerCapture(e.pointerId); } catch (err) {}
+        }
         btn.classList.remove('pressed');
         if (code) { state.keys.delete(code); touchHeld.delete(code); }
       };
@@ -1112,8 +1155,8 @@
     });
   })();
   // Drop held inputs if the tab is backgrounded mid-press, so nothing sticks.
-  window.addEventListener('blur', releaseTouchHolds);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseTouchHolds(); });
+  window.addEventListener('blur', releaseHeldInputs);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseHeldInputs(); });
 
   function handleKey(code) {
     switch (state.screen) {
@@ -1860,8 +1903,9 @@
     }
   }
   function updateBirds(dt) {
+    const f = dt * 60;
     for (const b of state.birds) {
-      b.x += b.vx;
+      b.x += b.vx * f;
       b.flap += dt * 9;
     }
     state.birds = state.birds.filter((b) => b.x > -40 && b.x < W + 40);
@@ -1920,7 +1964,7 @@
 
     for (const o of state.obstacles) o.x -= move;
     for (const c of state.collectibles) { c.x -= move; c.bob += dt * 4; }
-    for (const s of state.semis) s.x += s.vx;
+    for (const s of state.semis) s.x += s.vx * dt * 60;
 
     state.obstacles = state.obstacles.filter((o) => o.x + o.w > -30);
     state.collectibles = state.collectibles.filter((c) => c.x + c.w > -30);
@@ -2073,6 +2117,9 @@
   // ============================================================
   // SCORE POPUPS + COMBO
   // ============================================================
+  function capTransientList(list, max) {
+    if (list.length > max) list.splice(0, list.length - max);
+  }
   function spawnScorePopup(x, y, text, color) {
     state.scorePopups.push({
       x, y, text, color,
@@ -2080,11 +2127,13 @@
       life: 1.0,
       max: 1.0
     });
+    capTransientList(state.scorePopups, MAX_SCORE_POPUPS);
   }
   function updateScorePopups(dt) {
+    const f = dt * 60;
     for (const p of state.scorePopups) {
-      p.y += p.vy;
-      p.vy *= 0.96;
+      p.y += p.vy * f;
+      p.vy *= Math.pow(0.96, f);
       p.life -= dt;
     }
     state.scorePopups = state.scorePopups.filter((p) => p.life > 0);
@@ -2159,6 +2208,7 @@
         gravity: 0.4
       });
     }
+    capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnPickupBurst(x, y, color) {
     for (let i = 0; i < 12; i++) {
@@ -2186,6 +2236,7 @@
         gravity: 0.1
       });
     }
+    capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnDust(x, y, count) {
     for (let i = 0; i < count; i++) {
@@ -2201,6 +2252,7 @@
         gravity: -0.05 // floats up a touch
       });
     }
+    capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnExhaust(x, y) {
     state.particles.push({
@@ -2213,6 +2265,7 @@
       size: 4 + Math.random() * 3,
       gravity: -0.04
     });
+    capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnTireSmoke(x, y) {
     for (let i = 0; i < 2; i++) {
@@ -2228,12 +2281,14 @@
         gravity: -0.06
       });
     }
+    capTransientList(state.particles, MAX_PARTICLES);
   }
   function updateParticles(dt) {
+    const f = dt * 60;
     for (const p of state.particles) {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += p.gravity;
+      p.x += p.vx * f;
+      p.y += p.vy * f;
+      p.vy += p.gravity * f;
       p.life -= dt;
     }
     state.particles = state.particles.filter((p) => p.life > 0);
@@ -2408,16 +2463,138 @@
     };
     return '#' + f(0) + f(2) + f(4);
   }
+  function safeShade(color, amt) {
+    return /^#[0-9a-f]{6}$/i.test(String(color || '')) ? shade(color, amt) : color;
+  }
   function gameColor(normal, highContrast) {
     return state.settings.colorblind ? highContrast : normal;
+  }
+  function noise01(seed) {
+    const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+  function pathModulo(value, period) {
+    return ((value % period) + period) % period;
+  }
+  function geoAnchorsForBiome(name) {
+    return NASHVILLE_GEO.filter((p) => p.biome === name);
+  }
+  function routeAnchorX(anchor, parallax, lead) {
+    return (lead || PLAYER_X + 310) + (anchor.distance - state.distance) * (parallax || 0.62);
+  }
+  function fmtCoord(v) {
+    return (Math.round(v * 1000) / 1000).toFixed(3);
+  }
+  function buildingGradient(x, top, w, h, base, warmSide) {
+    const g = ctx.createLinearGradient(x, top, x + w, top + h);
+    g.addColorStop(0, safeShade(base, warmSide ? 0.16 : 0.08));
+    g.addColorStop(0.45, base);
+    g.addColorStop(1, safeShade(base, -0.32));
+    return g;
+  }
+  function drawWindowGrid(x, top, w, h, cols, rows, seed, warm) {
+    const cellW = w / cols;
+    const cellH = h / rows;
+    const lit = warm ? '#f8d37c' : '#b9d9ff';
+    const dim = warm ? 'rgba(248, 211, 124, 0.16)' : 'rgba(185, 217, 255, 0.13)';
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const n = noise01(seed + r * 17.3 + c * 5.7);
+        ctx.fillStyle = n > 0.72 ? lit : dim;
+        const padX = cellW * 0.26;
+        const padY = cellH * 0.28;
+        ctx.globalAlpha = n > 0.72 ? 0.88 : 0.5;
+        ctx.fillRect(x + c * cellW + padX, top + r * cellH + padY, Math.max(3, cellW * 0.34), Math.max(3, cellH * 0.34));
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawNeonBox(x, y, w, h, color, label, fontSize) {
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    roundRect(ctx, x, y, w, h, 4);
+    ctx.stroke();
+    ctx.shadowBlur = 5;
+    ctx.fillStyle = color;
+    ctx.font = `bold ${fontSize || 11}px "JetBrains Mono", Consolas, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+    ctx.restore();
+    ctx.textAlign = 'left';
+  }
+  function drawLampGlow(x, y, r, color, alpha) {
+    const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+    g.addColorStop(0, hexToRgba(color, alpha));
+    g.addColorStop(1, hexToRgba(color, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  function drawRoadSign(x, y, w, h, color, label) {
+    ctx.fillStyle = '#4f5660';
+    ctx.fillRect(x + w / 2 - 2, y + h, 4, GROUND_Y - (y + h));
+    ctx.fillStyle = color;
+    roundRect(ctx, x, y, w, h, 3);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, x + 3, y + 3, w - 6, h - 6, 2);
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 9px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+    ctx.textAlign = 'left';
+  }
+  function drawGeoPlate(anchor, x, y, compact) {
+    const w = compact ? 118 : 178;
+    const h = compact ? 24 : 38;
+    ctx.save();
+    ctx.fillStyle = 'rgba(9, 18, 22, 0.86)';
+    roundRect(ctx, x, y, w, h, 4);
+    ctx.fill();
+    ctx.strokeStyle = '#6ee7ff';
+    ctx.lineWidth = 1.2;
+    roundRect(ctx, x + 2, y + 2, w - 4, h - 4, 3);
+    ctx.stroke();
+    ctx.fillStyle = '#d9fbff';
+    ctx.font = `bold ${compact ? 7 : 8}px "JetBrains Mono", Consolas, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(anchor.label, x + w / 2, y + (compact ? 9 : 11));
+    ctx.fillStyle = '#9ddfec';
+    ctx.font = `${compact ? 7 : 8}px "JetBrains Mono", Consolas, monospace`;
+    ctx.fillText(`${fmtCoord(anchor.lat)}  ${fmtCoord(anchor.lon)}`, x + w / 2, y + (compact ? 18 : 27));
+    ctx.restore();
+  }
+  function drawGeoAnchorMarkers(biome) {
+    const anchors = geoAnchorsForBiome(biome.name);
+    for (const a of anchors) {
+      const x = routeAnchorX(a, 0.38, PLAYER_X + 360);
+      if (x < -210 || x > W + 90) continue;
+      drawGeoPlate(a, x, GROUND_Y - 116, true);
+      ctx.fillStyle = '#5f6670';
+      ctx.fillRect(x + 56, GROUND_Y - 92, 4, 92);
+    }
   }
 
   function drawClouds(biome) {
     // Cloud layer — slow parallax (0.05x)
     const off = state.distance * 0.05;
+    ctx.save();
+    ctx.shadowColor = biome.timeOfDay === 'sunset'
+      ? 'rgba(126, 54, 80, 0.22)'
+      : 'rgba(60, 90, 120, 0.16)';
+    ctx.shadowBlur = 12;
     ctx.fillStyle = biome.timeOfDay === 'sunset'
-      ? 'rgba(255, 200, 160, 0.75)'
-      : 'rgba(255, 255, 255, 0.78)';
+      ? 'rgba(255, 204, 174, 0.76)'
+      : 'rgba(255, 255, 255, 0.80)';
     const cloudCount = 6;
     for (let i = 0; i < cloudCount; i++) {
       const baseX = (i * 320 + 100 - off) % (W + 400);
@@ -2425,6 +2602,20 @@
       const y = 50 + ((i * 47) % 80);
       drawCloud(x, y, 60 + (i * 17) % 40);
     }
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = biome.timeOfDay === 'sunset' ? 0.16 : 0.10;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 9; i++) {
+      const x = ((i * 170) - (off * 1.8 % 170)) - 80;
+      const y = 155 + (i % 3) * 18;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.bezierCurveTo(x + 70, y - 10, x + 130, y + 9, x + 210, y - 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
   function drawCloud(x, y, r) {
     ctx.beginPath();
@@ -2436,22 +2627,59 @@
     ctx.fill();
   }
 
-  function drawFarMountains(biome) {
-    // Slow-moving mountain silhouette layer (0.12x parallax)
-    const off = state.distance * 0.12;
-    const baseY = GROUND_Y - 70;
-    ctx.fillStyle = biomeColor(biome, 'mountainColor');
+  function drawRollingHills(off, baseY, amp, color, alpha, period) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    const p = period || 260;
+    const start = -pathModulo(off, p) - p;
     ctx.beginPath();
     ctx.moveTo(0, GROUND_Y);
+    ctx.lineTo(start, baseY);
     for (let i = 0; i < 8; i++) {
-      const x = ((i * 180) - (off % 180)) - 90;
-      ctx.lineTo(x, baseY);
-      ctx.lineTo(x + 90, baseY - 80 - (i % 3) * 12);
-      ctx.lineTo(x + 180, baseY);
+      const x = start + i * p;
+      const n1 = noise01(i + Math.floor(off / p) * 0.37);
+      const n2 = noise01(i * 2.3 + 9);
+      ctx.bezierCurveTo(
+        x + p * 0.22, baseY - amp * (0.45 + n1 * 0.55),
+        x + p * 0.72, baseY - amp * (0.30 + n2 * 0.65),
+        x + p, baseY
+      );
     }
-    ctx.lineTo(W, GROUND_Y);
+    ctx.lineTo(W + p, GROUND_Y);
     ctx.closePath();
     ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFarMountains(biome) {
+    const off = state.distance * 0.12;
+    const hill = biomeColor(biome, 'mountainColor');
+    drawRollingHills(off * 0.55, GROUND_Y - 92, 42, safeShade(hill, 0.12), 0.68, 300);
+    drawRollingHills(off, GROUND_Y - 58, 34, hill, 0.82, 240);
+    if (biome.name === 'DOWNTOWN' || biome.name === 'CUMBERLAND' || biome.name === 'BROADWAY') {
+      drawDistantSkyline(off * 0.5, biome);
+    }
+  }
+
+  function drawDistantSkyline(off, biome) {
+    const baseY = GROUND_Y - 88;
+    const period = 680;
+    const start = -pathModulo(off, period) - period;
+    ctx.save();
+    ctx.globalAlpha = biome.timeOfDay === 'sunset' ? 0.32 : 0.24;
+    for (let chunk = 0; chunk < 4; chunk++) {
+      const origin = start + chunk * period;
+      for (let i = 0; i < 8; i++) {
+        const w0 = 34 + noise01(origin + i) * 36;
+        const h0 = 34 + noise01(origin + i * 4.1) * 76;
+        const x = origin + 20 + i * 78;
+        ctx.fillStyle = biome.timeOfDay === 'sunset' ? '#231b2c' : '#30354b';
+        ctx.fillRect(x, baseY - h0, w0, h0);
+        if (i % 3 === 1) ctx.fillRect(x + w0 * 0.42, baseY - h0 - 22, w0 * 0.16, 22);
+      }
+    }
+    ctx.restore();
   }
 
   // Distance haze: a soft band of horizon light the far layers fade into, for
@@ -2502,19 +2730,21 @@
       drawMusicCityMarquee(origin + 34, baseY);
       drawRymanRoofline(origin + 22, baseY);
       drawCountryHallShape(origin + 590, baseY);
+      drawDowntownStreetLevel(origin + 118, baseY);
+      drawDowntownGeoGrid(origin, baseY);
     }
   }
   function drawMusicCityMarquee(x, baseY) {
     const y = baseY - 156;
     ctx.fillStyle = '#181824';
     ctx.fillRect(x + 12, y, 128, 34);
-    ctx.strokeStyle = '#f5d76e';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + 16, y + 4, 120, 26);
-    ctx.fillStyle = '#f5d76e';
+    drawNeonBox(x + 16, y + 4, 120, 26, '#f5d76e', 'MUSIC CITY', 12);
+    for (let i = 0; i < 9; i++) {
+      drawLampGlow(x + 24 + i * 13, y + 4, 10, '#f5d76e', 0.16);
+    }
+    ctx.fillStyle = 'rgba(245,215,110,0.22)';
+    ctx.fillRect(x + 16, y + 32, 120, 4);
     ctx.font = 'bold 12px JetBrains Mono, Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('MUSIC CITY', x + 76, y + 23);
     ctx.fillStyle = '#292a38';
     ctx.fillRect(x + 30, y + 34, 7, 82);
     ctx.fillRect(x + 116, y + 34, 7, 82);
@@ -2524,38 +2754,45 @@
     const w = 86;
     const h = 214;
     const top = baseY - h;
-    ctx.fillStyle = '#202135';
+    ctx.fillStyle = buildingGradient(x, top, w, h, '#202135', false);
     ctx.fillRect(x, top + 36, w, h - 36);
-    ctx.fillStyle = '#292b45';
+    ctx.fillStyle = buildingGradient(x + 12, top + 16, w - 24, h - 16, '#292b45', true);
     ctx.fillRect(x + 12, top + 16, w - 24, h - 16);
     ctx.fillStyle = '#171827';
     ctx.fillRect(x + 18, top - 34, 10, 54);
     ctx.fillRect(x + w - 28, top - 34, 10, 54);
-    ctx.fillStyle = '#f6df73';
-    for (let row = 0; row < 8; row++) {
-      for (let col = 0; col < 3; col++) {
-        if ((row + col) % 2 === 0) ctx.fillRect(x + 24 + col * 18, top + 54 + row * 19, 7, 8);
-      }
-    }
+    ctx.fillStyle = '#0f101b';
+    ctx.fillRect(x + 36, top + 8, 14, 24);
+    drawWindowGrid(x + 20, top + 50, w - 40, 142, 3, 8, x * 0.13, true);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(x + 17, top + 24, 6, 160);
+    ctx.fillRect(x + w - 23, top + 24, 6, 160);
     ctx.fillStyle = 'rgba(255,232,154,0.32)';
     ctx.fillRect(x + 17, top - 36, 12, 2);
     ctx.fillRect(x + w - 29, top - 36, 12, 2);
+    drawLampGlow(x + 23, top - 35, 24, '#f5d76e', 0.22);
+    drawLampGlow(x + w - 23, top - 35, 24, '#f5d76e', 0.22);
   }
   function drawBroadShoulderTower(x, baseY, w, h, color) {
-    ctx.fillStyle = color;
+    ctx.fillStyle = buildingGradient(x, baseY - h, w, h, color, true);
     ctx.fillRect(x, baseY - h, w, h);
-    ctx.fillStyle = shade(color, 0.14);
+    ctx.fillStyle = safeShade(color, 0.14);
     ctx.fillRect(x + 8, baseY - h + 10, w - 16, 6);
-    ctx.fillStyle = '#f5d76e';
-    for (let row = 0; row < Math.floor(h / 21) - 1; row++) {
-      for (let col = 0; col < Math.floor(w / 22); col++) {
-        if ((row * 3 + col + Math.floor(x)) % 4 === 0) ctx.fillRect(x + 12 + col * 21, baseY - h + 24 + row * 20, 7, 7);
-      }
-    }
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(x + 4, baseY - h + 8, 3, h - 12);
+    ctx.fillRect(x + w - 9, baseY - h + 8, 3, h - 12);
+    drawWindowGrid(x + 10, baseY - h + 24, w - 20, h - 34,
+      Math.max(2, Math.floor(w / 26)), Math.max(3, Math.floor(h / 22)), x * 0.19 + h, true);
   }
   function drawRymanRoofline(x, baseY) {
     ctx.fillStyle = '#4b3027';
     ctx.fillRect(x, baseY - 74, 118, 74);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 9; col++) {
+        if ((row + col) % 2 === 0) ctx.fillRect(x + 8 + col * 12, baseY - 66 + row * 12, 7, 3);
+      }
+    }
     ctx.fillStyle = '#2b1d1b';
     ctx.beginPath();
     ctx.moveTo(x - 8, baseY - 74);
@@ -2579,6 +2816,53 @@
     ctx.fillRect(x + 48, baseY - 82, 72, 4);
     ctx.fillRect(x + 42, baseY - 64, 88, 4);
     ctx.fillRect(x + 36, baseY - 46, 102, 4);
+    ctx.fillStyle = 'rgba(245,215,110,0.32)';
+    for (let i = 0; i < 7; i++) ctx.fillRect(x + 34 + i * 14, baseY - 30, 6, 18);
+  }
+  function drawDowntownStreetLevel(x, baseY) {
+    ctx.fillStyle = '#262634';
+    roundRect(ctx, x, baseY - 50, 190, 50, 4);
+    ctx.fill();
+    ctx.fillStyle = '#171824';
+    for (let i = 0; i < 4; i++) ctx.fillRect(x + 14 + i * 44, baseY - 38, 28, 32);
+    drawNeonBox(x + 16, baseY - 44, 66, 16, '#6ee7ff', '2ND AVE', 8);
+    drawNeonBox(x + 102, baseY - 44, 66, 16, '#ff6b9a', 'LIVE', 8);
+    ctx.fillStyle = '#f5d76e';
+    for (let i = 0; i < 10; i++) ctx.fillRect(x + 8 + i * 18, baseY - 4, 10, 2);
+  }
+  function drawDowntownGeoGrid(origin, baseY) {
+    const signs = [
+      { x: origin + 64, y: baseY - 132, w: 88, text: 'RYMAN / 5TH' },
+      { x: origin + 330, y: baseY - 250, w: 96, text: '333 COMMERCE' },
+      { x: origin + 584, y: baseY - 142, w: 118, text: 'CMHOF / SOBRO' },
+      { x: origin + 742, y: baseY - 92, w: 106, text: 'EAST TO RIVER' }
+    ];
+    for (const s of signs) {
+      ctx.fillStyle = 'rgba(16,28,34,0.82)';
+      roundRect(ctx, s.x, s.y, s.w, 18, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(110,231,255,0.85)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#d9fbff';
+      ctx.font = 'bold 7px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(s.text, s.x + s.w / 2, s.y + 9);
+    }
+    ctx.textAlign = 'left';
+    ctx.strokeStyle = 'rgba(245,215,110,0.20)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(origin + 30, baseY - 12);
+    ctx.lineTo(origin + 850, baseY - 12);
+    ctx.moveTo(origin + 86, baseY - 62);
+    ctx.lineTo(origin + 86, baseY - 4);
+    ctx.moveTo(origin + 388, baseY - 210);
+    ctx.lineTo(origin + 388, baseY - 4);
+    ctx.moveTo(origin + 644, baseY - 104);
+    ctx.lineTo(origin + 644, baseY - 4);
+    ctx.stroke();
   }
   function drawMusicRowMid(off) {
     const baseY = GROUND_Y;
@@ -2592,11 +2876,15 @@
       drawGuitarSign(x + 628, baseY - 96, 0.9);
       drawMusicRowTrees(x + 108, baseY);
       drawMusicRowTrees(x + 332, baseY);
+      drawMusicRowUtility(x + 560, baseY);
+      drawRecordMural(x + 470, baseY);
     }
   }
   function drawStudioBungalow(x, baseY, color, label) {
-    ctx.fillStyle = color;
+    ctx.fillStyle = buildingGradient(x, baseY - 122, 150, 122, color, true);
     ctx.fillRect(x, baseY - 82, 150, 82);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    for (let y = baseY - 74; y < baseY - 8; y += 10) ctx.fillRect(x + 6, y, 138, 1);
     ctx.fillStyle = shade(color, -0.28);
     ctx.beginPath();
     ctx.moveTo(x - 10, baseY - 82);
@@ -2604,11 +2892,21 @@
     ctx.lineTo(x + 160, baseY - 82);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#f5d76e';
+    ctx.fillStyle = '#1b2430';
     ctx.fillRect(x + 20, baseY - 52, 26, 24);
     ctx.fillRect(x + 100, baseY - 52, 26, 24);
+    ctx.fillStyle = '#f5d76e';
+    ctx.fillRect(x + 23, baseY - 49, 8, 18);
+    ctx.fillRect(x + 34, baseY - 49, 8, 18);
+    ctx.fillRect(x + 103, baseY - 49, 8, 18);
+    ctx.fillRect(x + 114, baseY - 49, 8, 18);
     ctx.fillStyle = '#241b19';
     ctx.fillRect(x + 62, baseY - 60, 28, 60);
+    ctx.fillStyle = '#f3c18f';
+    ctx.beginPath();
+    ctx.arc(x + 96, baseY - 64, 3, 0, Math.PI * 2);
+    ctx.fill();
+    drawLampGlow(x + 96, baseY - 64, 22, '#f5d76e', 0.18);
     ctx.fillStyle = '#d7c7a2';
     ctx.font = '10px JetBrains Mono, Consolas, monospace';
     ctx.textAlign = 'center';
@@ -2624,6 +2922,44 @@
     ctx.arc(x + 4, baseY - 68, 22, 0, Math.PI * 2);
     ctx.arc(x + 42, baseY - 66, 24, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath();
+    ctx.arc(x + 10, baseY - 88, 9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  function drawMusicRowUtility(x, baseY) {
+    ctx.strokeStyle = '#2b211c';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x, baseY - 128);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - 28, baseY - 112);
+    ctx.lineTo(x + 42, baseY - 112);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(30,25,24,0.65)';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(x - 170, baseY - 112);
+    ctx.bezierCurveTo(x - 90, baseY - 96, x - 42, baseY - 96, x + 42, baseY - 112);
+    ctx.bezierCurveTo(x + 126, baseY - 128, x + 190, baseY - 126, x + 270, baseY - 112);
+    ctx.stroke();
+  }
+  function drawRecordMural(x, baseY) {
+    ctx.fillStyle = '#1e1e28';
+    roundRect(ctx, x, baseY - 72, 86, 62, 5);
+    ctx.fill();
+    ctx.fillStyle = '#d8c58f';
+    ctx.beginPath();
+    ctx.arc(x + 43, baseY - 41, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1e1e28';
+    ctx.beginPath();
+    ctx.arc(x + 43, baseY - 41, 8, 0, Math.PI * 2);
+    ctx.fill();
+    drawNeonBox(x + 9, baseY - 66, 68, 14, '#f5d76e', 'VINYL', 8);
   }
   function drawGuitarSign(cx, cy, scale) {
     ctx.save();
@@ -2653,13 +2989,20 @@
     river.addColorStop(1, '#244e6f');
     ctx.fillStyle = river;
     ctx.fillRect(0, waterTop, W, 98);
-    ctx.fillStyle = 'rgba(255, 226, 160, 0.34)';
-    for (let i = 0; i < 8; i++) {
-      const x = ((i * 160) - (off * 0.35 % 160)) - 80;
-      ctx.fillRect(x, waterTop + 26 + (i % 4) * 16, 84, 3);
+    ctx.fillStyle = 'rgba(255, 226, 160, 0.22)';
+    for (let i = 0; i < 15; i++) {
+      const x = ((i * 96) - (off * 0.35 % 96)) - 60;
+      const y = waterTop + 20 + (i % 5) * 14;
+      ctx.fillRect(x, y, 48 + (i % 4) * 22, 2);
+    }
+    ctx.fillStyle = 'rgba(20, 35, 48, 0.18)';
+    for (let i = 0; i < 7; i++) {
+      const x = ((i * 180) - (off * 0.22 % 180)) - 90;
+      ctx.fillRect(x, waterTop + 66 + (i % 3) * 8, 120, 5);
     }
     drawPedestrianBridge(-((off % 1040) + 1040) % 1040 - 110, waterTop + 20);
     drawPedestrianBridge(-((off % 1040) + 1040) % 1040 + 930, waterTop + 20);
+    drawCumberlandBankLabels(waterTop);
     const period = 840;
     const start = -((off * 0.6 % period) + period) % period;
     for (let chunk = -1; chunk < 3; chunk++) {
@@ -2667,14 +3010,37 @@
       drawBroadShoulderTower(x + 88, baseY - 76, 82, 96, '#24283d');
       drawBroadShoulderTower(x + 202, baseY - 76, 62, 72, '#2e3145');
       drawStadiumBowl(x + 560, baseY - 72);
+      drawRiverfrontRail(x + 350, baseY - 52);
     }
   }
+  function drawCumberlandBankLabels(waterTop) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(10,20,28,0.55)';
+    roundRect(ctx, 42, waterTop + 8, 126, 18, 4);
+    ctx.fill();
+    roundRect(ctx, W - 188, waterTop + 8, 146, 18, 4);
+    ctx.fill();
+    ctx.fillStyle = '#d9fbff';
+    ctx.font = 'bold 8px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('WEST BANK / DOWNTOWN', 105, waterTop + 17);
+    ctx.fillText('EAST BANK / STADIUM', W - 115, waterTop + 17);
+    ctx.restore();
+  }
   function drawPedestrianBridge(x, y) {
+    ctx.save();
     ctx.strokeStyle = '#c9b47a';
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(x, y + 42);
     ctx.lineTo(x + 960, y + 42);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,238,180,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y + 49);
+    ctx.lineTo(x + 960, y + 49);
     ctx.stroke();
     ctx.lineWidth = 2;
     for (let i = 0; i < 8; i++) {
@@ -2688,7 +3054,18 @@
       ctx.moveTo(ax + 24, y + 42);
       ctx.lineTo(ax + 84, y + 18);
       ctx.stroke();
+      drawLampGlow(ax + 60, y + 43, 16, '#f5d76e', 0.18);
     }
+    ctx.strokeStyle = 'rgba(201,180,122,0.42)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 28; i++) {
+      const ax = x + i * 36;
+      ctx.beginPath();
+      ctx.moveTo(ax, y + 42);
+      ctx.lineTo(ax, y + 50);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
   function drawStadiumBowl(x, baseY) {
     ctx.fillStyle = '#4b4f61';
@@ -2701,6 +3078,23 @@
     ctx.fillStyle = '#d7dce6';
     ctx.fillRect(x + 24, baseY - 54, 152, 5);
     ctx.fillRect(x + 36, baseY - 40, 128, 4);
+    ctx.fillStyle = '#f5d76e';
+    for (let i = 0; i < 6; i++) ctx.fillRect(x + 36 + i * 22, baseY - 48, 7, 4);
+  }
+  function drawRiverfrontRail(x, baseY) {
+    ctx.strokeStyle = '#d4c8a0';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY - 18);
+    ctx.lineTo(x + 170, baseY - 18);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x + i * 24, baseY - 18);
+      ctx.lineTo(x + i * 24, baseY + 6);
+      ctx.stroke();
+    }
   }
   function drawBroadwayMid(off) {
     const baseY = GROUND_Y;
@@ -2708,38 +3102,73 @@
     const start = -((off % period) + period) % period;
     for (let chunk = -1; chunk < 4; chunk++) {
       const x = start + chunk * period;
+      drawBridgestoneArena(x - 118, baseY);
       drawHonkyTonkFront(x + 18, baseY, 126, '#5b2c51', '#ff62d2', 'LIVE');
       drawHonkyTonkFront(x + 152, baseY, 138, '#4a334f', '#6ee7ff', 'MUSIC');
       drawHonkyTonkFront(x + 300, baseY, 116, '#67312c', '#ffd166', 'BBQ');
       drawHonkyTonkFront(x + 424, baseY, 132, '#2b4560', '#8cff86', 'TONK');
       drawVerticalNeon(x + 578, baseY - 154, '#ff495c', 'NASH');
       drawVerticalNeon(x + 660, baseY - 146, '#f5d76e', 'OPEN');
+      drawBroadwayStringLights(x + 18, baseY - 142);
+      drawCrowdSilhouettes(x + 20, baseY);
+      drawLowerBroadwayAvenueMarkers(x, baseY);
+      drawRymanAlleyCue(x + 92, baseY);
+      drawBridgeLandingCue(x + 650, baseY);
     }
+  }
+  function drawBridgestoneArena(x, baseY) {
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = '#2d3038';
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x + 18, baseY - 86);
+    ctx.quadraticCurveTo(x + 92, baseY - 124, x + 168, baseY - 86);
+    ctx.lineTo(x + 190, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#d2d6dc';
+    ctx.fillRect(x + 28, baseY - 93, 134, 5);
+    ctx.fillStyle = '#f5d76e';
+    for (let i = 0; i < 8; i++) ctx.fillRect(x + 38 + i * 15, baseY - 78, 5, 5);
+    drawNeonBox(x + 52, baseY - 58, 86, 18, '#f5d76e', 'ARENA', 9);
+    ctx.restore();
   }
   function drawHonkyTonkFront(x, baseY, w, color, neon, label) {
     const h = 128;
-    ctx.fillStyle = color;
+    ctx.fillStyle = buildingGradient(x, baseY - h, w, h, color, true);
     ctx.fillRect(x, baseY - h, w, h);
-    ctx.fillStyle = shade(color, -0.24);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < Math.max(4, Math.floor(w / 18)); col++) {
+        if ((row + col) % 2 === 0) ctx.fillRect(x + 5 + col * 18, baseY - h + 18 + row * 12, 11, 2);
+      }
+    }
+    ctx.fillStyle = safeShade(color, -0.24);
     ctx.fillRect(x, baseY - h, w, 14);
-    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.fillStyle = 'rgba(0,0,0,0.48)';
     ctx.fillRect(x + 12, baseY - 54, w - 24, 54);
-    ctx.strokeStyle = neon;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x + 12, baseY - h + 22, w - 24, 30);
-    ctx.fillStyle = neon;
-    ctx.font = '12px JetBrains Mono, Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(label, x + w / 2, baseY - h + 43);
-    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(110, 210, 255, 0.25)';
+    ctx.fillRect(x + 18, baseY - 47, w - 36, 26);
+    drawNeonBox(x + 12, baseY - h + 22, w - 24, 30, neon, label, 12);
+    ctx.fillStyle = '#171824';
+    ctx.fillRect(x + 20, baseY - 28, w - 40, 28);
     ctx.fillStyle = '#f5d76e';
     for (let i = 0; i < 4; i++) {
       ctx.fillRect(x + 16 + i * ((w - 32) / 4), baseY - 88, 10, 10);
+      drawLampGlow(x + 21 + i * ((w - 32) / 4), baseY - 83, 18, '#f5d76e', 0.14);
     }
+    ctx.fillStyle = neon;
+    ctx.globalAlpha = 0.22;
+    ctx.fillRect(x + 8, baseY - 7, w - 16, 5);
+    ctx.globalAlpha = 1;
   }
   function drawVerticalNeon(x, y, color, label) {
     ctx.fillStyle = '#181824';
     ctx.fillRect(x, y, 44, 132);
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12;
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.strokeRect(x + 4, y + 4, 36, 124);
@@ -2747,7 +3176,85 @@
     ctx.font = '11px JetBrains Mono, Consolas, monospace';
     ctx.textAlign = 'center';
     for (let i = 0; i < label.length; i++) ctx.fillText(label[i], x + 22, y + 26 + i * 24);
+    ctx.restore();
     ctx.textAlign = 'left';
+  }
+  function drawBroadwayStringLights(x, y) {
+    ctx.strokeStyle = 'rgba(20,20,26,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.bezierCurveTo(x + 180, y + 34, x + 360, y + 30, x + 560, y + 4);
+    ctx.stroke();
+    for (let i = 0; i < 13; i++) {
+      const bx = x + i * 46;
+      const by = y + Math.sin(i / 12 * Math.PI) * 28;
+      ctx.fillStyle = '#f5d76e';
+      ctx.beginPath();
+      ctx.arc(bx, by + 2, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      drawLampGlow(bx, by + 2, 18, '#f5d76e', 0.13);
+    }
+  }
+  function drawCrowdSilhouettes(x, baseY) {
+    ctx.fillStyle = 'rgba(12,12,16,0.62)';
+    for (let i = 0; i < 18; i++) {
+      const px = x + i * 34 + (i % 3) * 4;
+      const h = 16 + (i % 4) * 3;
+      ctx.beginPath();
+      ctx.arc(px, baseY - h - 8, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(px - 3, baseY - h - 4, 6, h);
+    }
+  }
+  function drawLowerBroadwayAvenueMarkers(x, baseY) {
+    const marks = [
+      { dx: -90, label: '5TH AVE' },
+      { dx: 82, label: '4TH' },
+      { dx: 236, label: '3RD' },
+      { dx: 392, label: '2ND' },
+      { dx: 560, label: '1ST AVE' }
+    ];
+    for (const m of marks) {
+      ctx.fillStyle = '#1a1b22';
+      ctx.fillRect(x + m.dx, baseY - 21, 54, 17);
+      ctx.strokeStyle = '#d7c06d';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + m.dx + 2, baseY - 19, 50, 13);
+      ctx.fillStyle = '#f5d76e';
+      ctx.font = 'bold 7px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(m.label, x + m.dx + 27, baseY - 12);
+    }
+    ctx.textAlign = 'left';
+  }
+  function drawRymanAlleyCue(x, baseY) {
+    ctx.fillStyle = '#2b1d1b';
+    ctx.beginPath();
+    ctx.moveTo(x, baseY - 126);
+    ctx.lineTo(x + 44, baseY - 154);
+    ctx.lineTo(x + 88, baseY - 126);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#5a3028';
+    ctx.fillRect(x + 8, baseY - 126, 72, 56);
+    drawNeonBox(x + 8, baseY - 68, 72, 15, '#b98cff', 'RYMAN ALLEY', 7);
+  }
+  function drawBridgeLandingCue(x, baseY) {
+    ctx.strokeStyle = '#c9b47a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY - 64);
+    ctx.lineTo(x + 114, baseY - 64);
+    ctx.moveTo(x + 10, baseY - 64);
+    ctx.lineTo(x + 42, baseY - 92);
+    ctx.lineTo(x + 74, baseY - 64);
+    ctx.moveTo(x + 60, baseY - 64);
+    ctx.lineTo(x + 91, baseY - 90);
+    ctx.lineTo(x + 122, baseY - 64);
+    ctx.stroke();
+    drawNeonBox(x + 8, baseY - 46, 96, 15, '#6ee7ff', 'RIVER WALK', 7);
   }
 
   function drawNearScenery(biome) {
@@ -2772,7 +3279,12 @@
         ctx.fillRect(x - 12, GROUND_Y - 64, 20, 4);
         ctx.fillStyle = '#f5d76e';
         ctx.fillRect(x - 10, GROUND_Y - 60, 6, 4);
+        drawLampGlow(x - 7, GROUND_Y - 58, 34, '#f5d76e', 0.15);
         ctx.fillStyle = '#2a2a2e';
+      }
+      for (let i = 0; i < 3; i++) {
+        const x = ((i * 340) - (off % 340)) - 60;
+        drawRoadSign(x, GROUND_Y - 92, 72, 28, '#176d3c', i % 2 ? 'BROADWAY' : 'DOWNTOWN');
       }
     } else if (biome.name === 'MUSIC ROW') {
       for (let i = 0; i < 8; i++) {
@@ -2785,6 +3297,10 @@
         ctx.fillRect(x + 10, GROUND_Y - 30, 26, 3);
         ctx.fillRect(x + 10, GROUND_Y - 24, 18, 3);
       }
+      for (let i = 0; i < 4; i++) {
+        const x = ((i * 280) - (off % 280)) - 120;
+        drawRoadSign(x, GROUND_Y - 82, 58, 24, '#5b4d3a', i % 2 ? '16TH AVE' : 'STUDIO');
+      }
     } else if (biome.name === 'CUMBERLAND') {
       ctx.fillStyle = '#2e3942';
       for (let i = 0; i < 10; i++) {
@@ -2795,6 +3311,10 @@
         ctx.fillStyle = '#d2c58a';
         ctx.fillRect(x - 4, GROUND_Y - 54, 32, 3);
         ctx.fillStyle = '#2e3942';
+      }
+      for (let i = 0; i < 4; i++) {
+        const x = ((i * 280) - (off % 280)) - 80;
+        drawRoadSign(x, GROUND_Y - 86, 74, 24, '#255a7a', 'RIVERFRONT');
       }
     } else if (biome.name === 'BROADWAY') {
       for (let i = 0; i < 7; i++) {
@@ -2807,10 +3327,84 @@
         ctx.strokeRect(x + 3, GROUND_Y - 55, 46, 16);
         ctx.fillStyle = color;
         ctx.fillRect(x + 10, GROUND_Y - 48, 26, 3);
+        drawLampGlow(x + 26, GROUND_Y - 48, 30, color, 0.14);
+      }
+      ctx.fillStyle = 'rgba(255, 79, 184, 0.20)';
+      for (let i = 0; i < 12; i++) {
+        const x = ((i * 90) - (off % 90)) - 40;
+        ctx.fillRect(x, GROUND_Y - 6, 42, 3);
       }
     }
+    drawGeoAnchorMarkers(biome);
   }
 
+  function drawAsphaltTexture(roadTop, roadBot, biome) {
+    const scroll = state.distance * 0.9;
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    for (let i = 0; i < 85; i++) {
+      const seed = i * 31.7;
+      const x = pathModulo(i * 73 - scroll, W + 120) - 60;
+      const y = roadTop + 8 + noise01(seed) * (roadBot - roadTop - 16);
+      const len = 8 + noise01(seed + 8) * 34;
+      ctx.fillStyle = noise01(seed + 2) > 0.48 ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)';
+      ctx.fillRect(x, y, len, 1);
+    }
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      const y = roadTop + 20 + i * ((roadBot - roadTop - 40) / 4);
+      const x = pathModulo(i * 260 - state.distance * 0.55, W + 340) - 170;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.bezierCurveTo(x + 70, y - 8, x + 130, y + 9, x + 210, y - 2);
+      ctx.stroke();
+    }
+    if (biome.name === 'BROADWAY') drawBroadwayRoadReflections(roadTop, roadBot);
+    ctx.restore();
+  }
+  function drawBroadwayRoadReflections(roadTop, roadBot) {
+    const colors = ['#ff4fb8', '#64d7ff', '#f5d76e', '#7ee27e'];
+    ctx.globalAlpha = 0.20;
+    for (let i = 0; i < 14; i++) {
+      const x = pathModulo(i * 84 - state.distance * 1.15, W + 120) - 60;
+      const y = roadTop + 12 + (i % 5) * ((roadBot - roadTop - 26) / 5);
+      const g = ctx.createLinearGradient(x, y, x + 76, y);
+      g.addColorStop(0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.5, colors[i % colors.length]);
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x, y, 76, 3);
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawStreetLightPools(roadTop, roadBot, biome) {
+    const warm = biome.name === 'BROADWAY' || biome.name === 'DOWNTOWN';
+    const colors = biome.name === 'BROADWAY'
+      ? ['#ff4fb8', '#64d7ff', '#f5d76e', '#7ee27e']
+      : [warm ? '#f5d76e' : '#d9f1ff'];
+    ctx.save();
+    for (let i = 0; i < 7; i++) {
+      const x = pathModulo(i * 170 - state.distance * 0.72, W + 220) - 110;
+      const y = roadTop + 24 + (i % 3) * ((roadBot - roadTop - 48) / 2);
+      const color = colors[i % colors.length];
+      const g = ctx.createRadialGradient(x, y, 4, x, y, 86);
+      g.addColorStop(0, hexToRgba(color, biome.name === 'BROADWAY' ? 0.16 : 0.11));
+      g.addColorStop(1, hexToRgba(color, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x, y + 8, 92, 20, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = '#000';
+    for (let i = 0; i < 5; i++) {
+      const x = pathModulo(i * 230 - state.distance * 0.64, W + 260) - 130;
+      ctx.fillRect(x, roadTop + 10, 70, roadBot - roadTop - 20);
+    }
+    ctx.restore();
+  }
   function drawGround(biome) {
     // Three-lane asphalt: the road now spans all lane contact lines, with dashed
     // dividers between lanes. Lane 1 (center) keeps the legacy datum.
@@ -2822,10 +3416,17 @@
     // Asphalt band
     ctx.fillStyle = biomeColor(biome, 'road');
     ctx.fillRect(0, roadTop, W, roadBot - roadTop);
+    drawAsphaltTexture(roadTop, roadBot, biome);
+    drawStreetLightPools(roadTop, roadBot, biome);
     // Edge highlights
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(0, roadTop, W, 2);
     ctx.fillRect(0, roadBot - 2, W, 2);
+    ctx.fillStyle = 'rgba(245,215,110,0.45)';
+    for (let x = -pathModulo(state.distance, 36); x < W; x += 36) {
+      ctx.fillRect(x, roadTop + 5, 18, 2);
+      ctx.fillRect(x + 10, roadBot - 7, 18, 2);
+    }
     // Dashed lane dividers (between the 3 lanes), scrolling with distance
     ctx.fillStyle = biomeColor(biome, 'dashColor');
     const dashW = 52, gap = 32, cycle = dashW + gap;
@@ -4022,6 +4623,26 @@
       check('high-score list capped at MAX_SCORES (' + MAX_SCORES + ')',
             sorted.length === MAX_SCORES, 'len=' + sorted.length);
       check('high-score top entry is the maximum', sorted[0].score === Math.max.apply(null, raw));
+    }
+
+    // 4b) qualification uses a loaded Neon board when one is present, so a
+    //     blank local profile cannot prompt for initials on a non-cloud score.
+    {
+      const snapScores = state.scores;
+      const snapCloudScores = state.cloudScores;
+      let pass = false, detail = '';
+      try {
+        state.scores = [];
+        state.cloudScores = [1000, 900, 800, 700, 600]
+          .map((score, i) => ({ initials: 'C' + i, score, date: '2026-06-07' }));
+        pass = qualifies(500) === false && qualifies(650) === true;
+        detail = JSON.stringify(scoreBoardForQualification());
+      } catch (e) { detail = String(e); }
+      finally {
+        state.scores = snapScores;
+        state.cloudScores = snapCloudScores;
+      }
+      check('high-score qualification honors loaded cloud board', pass, detail);
     }
 
     // 5) achievements never duplicate — unlock is idempotent (snapshot + restore).

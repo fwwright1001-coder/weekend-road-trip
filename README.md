@@ -13,7 +13,8 @@ machine-checked gates.
 
 > Drive Marty's GT through a Nashville, Tennessee night cruise on one tank of gas:
 > weave three lanes, jump potholes, duck low signs, skim hazards for near-miss
-> combos, and outrun a difficulty curve that peaks under the Broadway neon.
+> combos, and outrun a difficulty curve that peaks under the Lower Broadway
+> neon.
 
 ---
 
@@ -98,6 +99,10 @@ stretch. Your inputs are about positioning.
 - Cross-lane obstacle patterns with a fair line through.
 - Four Nashville legs: downtown skyline, Music Row studios, Cumberland
   riverfront, and Lower Broadway neon.
+- Nashville route detail uses approximate WGS84 anchors and landmark cues for
+  the Ryman, AT&T/333 Commerce, Country Music Hall of Fame, Music Row studios,
+  Seigenthaler bridge, Nissan Stadium, Bridgestone Arena, Riverfront, and Lower
+  Broadway.
 - Skill-dominant scoring with combos, near-miss bonuses, and lane-risk bonuses.
 - Ghost Race records replay telemetry and exports/imports shareable JSON.
 - Procedural art and audio, particles, screen shake, achievements, high scores,

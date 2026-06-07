@@ -140,6 +140,18 @@ const check = (name, pass, detail) => {
   }
 
   {
+    const h = createHarness({
+      hostname: 'weekend-road-trip.vercel.app',
+      protocol: 'https:',
+      fetchImpl: async () => jsonResponse(401, { ok: false, error: 'Unauthorized.' })
+    });
+    await h.submitCloudScore({ initials: 'DB', score: 100 });
+    check('failed score save keeps local fallback status',
+      /saved locally/.test(h.state.cloudScoreStatus) && !/Saving/.test(h.state.cloudScoreStatus),
+      h.state.cloudScoreStatus);
+  }
+
+  {
     const calls = [];
     const h = createHarness({
       hostname: 'weekend-road-trip.vercel.app',

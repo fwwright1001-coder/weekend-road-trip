@@ -12,8 +12,9 @@ and a trimmed GIF (<8MB) for the README.
 
 1. **0–3s — Title.** Land on the title screen, hit START. (Clean, sets the tone.)
 2. **3–10s — Lane weaving (DOWNTOWN).** Weave across all three lanes around a
-   wall-with-one-gap pattern; jump a pothole, duck a full-width sign wall. Show
-   the second decision axis immediately.
+   wall-with-one-gap pattern while the skyline, Ryman/5th Avenue cue, and geo
+   plates pass by; jump a pothole, duck a full-width sign wall. Show the second
+   decision axis immediately.
 3. **10–18s — Combo build (MUSIC ROW/CUMBERLAND).** Skim adjacent-lane hazards for
    `NEAR MISS` popups and grab cans in risky lanes; let the combo climb past x5
    (aim for x10+) so the multiplier ramp is visible.

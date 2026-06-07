@@ -25,7 +25,8 @@ This document is the honest engineering story behind that.
 index.html      markup + DOM HUD/menus (screen-space over the canvas)
 styles.css      HUD, menus, touch controls, responsive + a11y rules
 game.js         the engine: state machine, physics, spawn, collision,
-                rendering (5 parallax layers), audio, persistence, ghost race
+                Nashville route rendering (5 parallax layers), audio,
+                persistence, ghost race
 sim/balance-sim.js   headless Node model of the physics + spawn + economy
 qa/run-selftests.js  headless Node persistence/settings/a11y self-tests
 .github/workflows/ci.yml  runs both checks on every push / PR
@@ -43,7 +44,7 @@ qa/run-selftests.js  headless Node persistence/settings/a11y self-tests
 | Physics | frame-rate-independent jump integrator; lane tween; auto-throttle |
 | Spawn | data-driven, per-lane, pattern-based, with a solvability guarantee |
 | Collision | lane-gated AABB with a mid-hop straddle window |
-| Rendering | 5 parallax layers, 3-lane road, entities, juice (shake/particles/flash) |
+| Rendering | 5 parallax layers, Nashville landmark/route cues, 3-lane road, entities, juice (shake/particles/flash) |
 | Audio | procedural engine drone (pitch tracks speed) + one-shot SFX |
 | Persistence | localStorage: scores, settings, achievements, ghost replays |
 | Ghost race | records per-frame telemetry; export/import JSON for async head-to-head |

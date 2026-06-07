@@ -13,7 +13,8 @@ neon before the tank runs dry.
 
 Technically, the game is built from scratch in vanilla JavaScript and HTML5
 Canvas with no engine and no external sprite assets. It uses a real-time Canvas
-render loop, HTML/CSS HUD overlays, procedural parallax scenery, biome palette
+render loop, HTML/CSS HUD overlays, procedural parallax scenery tied to
+approximate Nashville WGS84 anchors and street/landmark cues, biome palette
 blending, AABB collision, particle systems, screen shake, Web Audio sound
 effects, persistent high scores, gamepad and touch support, and accessibility
 settings for screen shake, reduced motion, and colorblind contrast.

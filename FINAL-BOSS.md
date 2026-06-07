@@ -38,5 +38,5 @@ contract, cloud high-score API/client contracts, and Road Crew client contract.
 ## Safety Note
 
 The former experimental 3D prototype has been removed from the current
-submission branch. The graded game is the 2D road-trip driver with Ghost Race,
-Road Crew signup, and cloud high scores.
+submission branch. The graded game is the 2D Nashville cruise driver with Ghost
+Race, Road Crew signup, and cloud high scores.

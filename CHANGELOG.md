@@ -2,6 +2,21 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-07 - Nashville geo art polish + stability audit
+
+- Added approximate route anchors and on-screen geo plates for Nashville
+  landmarks: Ryman/5th, AT&T/333 Commerce, Country Music Hall of Fame/SoBro,
+  Music Row studios, Seigenthaler bridge, Nissan Stadium, Bridgestone Arena,
+  Lower Broadway, and Riverfront.
+- Upgraded the Downtown, Music Row, Cumberland, and Lower Broadway procedural
+  art with denser landmark silhouettes, street-grid cues, riverbank details,
+  Broadway reflections, and streetlight pools.
+- Hardened runtime behavior with bounded VFX arrays, frame-rate-independent
+  VFX motion, broader input cleanup on blur/visibility changes, touch pointer
+  capture, and a local high-score fallback when cloud save fails.
+- Added a high-score client contract that verifies failed cloud saves do not
+  leave the player stuck on a saving screen.
+
 ## 2026-06-06 - Nashville browser-world art pass
 
 - Rethemed the route from a generic cross-country trip into a Nashville,
