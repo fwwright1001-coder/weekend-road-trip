@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Weekend Road Trip — a 2D side-scrolling browser game. Drive Marty's car coast-to-coast on one tank of gas. ENGR 5513, Lipscomb MSAI." />
+  <meta name="description" content="Weekend Road Trip — a 2D side-scrolling browser game. Drive Marty's car through a Nashville, Tennessee night cruise on one tank of gas. ENGR 5513, Lipscomb MSAI." />
   <title>Weekend Road Trip</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a1a2e'/%3E%3Ctext x='16' y='22' font-size='18' text-anchor='middle' font-family='monospace' font-weight='bold' fill='%23f5d76e'%3E🚗%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="styles.css" />
@@ -22,7 +22,7 @@
           </div>
           <div class="hud-card">
             <div class="hud-label">STAGE</div>
-            <div class="hud-value" id="hud-biome">CITY 1/4</div>
+            <div class="hud-value" id="hud-biome">DOWNTOWN 1/4</div>
           </div>
           <div class="hud-card hud-trip">
             <div class="hud-label">TRIP</div>
@@ -46,12 +46,12 @@
         <!-- Title -->
         <div class="screen" id="screen-title">
           <h1>WEEKEND ROAD TRIP</h1>
-          <p class="tagline">An American Vacation — Coast to Coast</p>
+          <p class="tagline">Nashville, Tennessee - Music City Cruise</p>
           <p class="story">
-            Marty's been heads-down shipping for eleven months. Today his PTO
-            finally cleared. He throws a duffel in the car, points it
-            west, and floors it. Weave the lanes, jump the potholes, duck the low
-            signs, grab roadside snacks. Don't run out of gas before you reach the ocean.
+            Marty has one free night before the class demo. He points the GT
+            through downtown Nashville, Music Row, the Cumberland riverfront,
+            and Lower Broadway. Weave the lanes, jump the potholes, duck the low
+            signs, grab roadside snacks, and reach the neon before the tank runs dry.
           </p>
           <button class="cta" data-action="start">START THE TRIP</button>
           <div class="menu-actions">
@@ -101,9 +101,9 @@
           <div class="confetti" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
           <h2 class="good">YOU MADE IT!</h2>
           <p class="story-short">
-            Marty rolls the car up to the boardwalk. The Atlantic
-            stretches out in front of him. He turns off the engine, takes a
-            breath, and reaches for his sunglasses.
+            Marty rolls the car under the Broadway lights. The skyline glows
+            behind him, the river is still in the mirrors, and the first guitar
+            riff leaks out of a honky-tonk doorway.
           </p>
           <p class="score-line">FINAL SCORE  <span id="win-score">000000</span></p>
           <div id="win-stats" class="run-stats"></div>
@@ -209,8 +209,8 @@
             <tr><td>ENTER</td><td>Confirm on menus</td></tr>
           </table>
           <p class="muted">
-            The throttle is automatic — speed climbs each leg, so the coast is the
-            fastest, hairiest stretch. <strong>Change lanes</strong> to dodge,
+            The throttle is automatic - speed climbs each leg, so Broadway is the
+            fastest, tightest stretch. <strong>Change lanes</strong> to dodge,
             <strong>jump/duck</strong> for full-width hazards. Skim a hazard in the
             next lane for a <strong style="color:#9fd8ff">near-miss</strong> combo,
             grab <strong>jerry cans</strong> for fuel and <strong style="color:#f5d76e">$</strong>
@@ -240,7 +240,7 @@
   <!-- Portrait-orientation nudge (mobile only; pure-CSS show/hide) -->
   <div id="rotate-hint">
     <div class="rh-icon">📱↻</div>
-    <div class="rh-text">Rotate your device to landscape to drive.</div>
+    <div class="rh-text">Rotate to landscape for the Music City cruise.</div>
   </div>
   <script src="game.js"></script>
   <script src="launch.js"></script>

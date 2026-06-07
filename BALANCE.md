@@ -52,21 +52,21 @@ with `BIOMES`). The old per-biome `spawnMul` was removed.
 
 | Leg | obstacleDensity | minBlockingGap | fuelSpawnRate | fuelPerCan |
 |---|---|---|---|---|
-| CITY   | 1.00 | 600 px | 1.0 | 22 |
-| FOREST | 1.15 | 540 px | 1.0 | 22 |
-| DESERT | 1.30 | 500 px | 1.1 | 24 |
-| COAST  | 1.45 | 460 px | 1.6 | 28 |
+| DOWNTOWN | 1.00 | 660 px | 1.00 | 22 |
+| MUSIC ROW | 1.20 | 640 px | 1.00 | 22 |
+| CUMBERLAND | 1.40 | 640 px | 1.05 | 24 |
+| BROADWAY | 1.65 | 620 px | 1.25 | 28 |
 
 - **obstacleDensity** scales spawn cadence (`interval = base / density`, floored at
   `SPAWN_MIN_INTERVAL = 0.32s`). Later legs feel busier.
 - **minBlockingGap** is the headline fix (see §3).
-- **fuelSpawnRate / fuelPerCan** make the COAST a payoff, not a wall (see §4).
+- **fuelSpawnRate / fuelPerCan** make BROADWAY a payoff, not a wall (see §4).
 
 ---
 
-## 3. No unavoidable back-to-back blockers (the COAST cliff)
+## 3. No unavoidable back-to-back blockers (the Broadway cliff)
 
-**Root cause of the cliff:** the old COAST `spawnMul = 0.55` produced spawn intervals as
+**Root cause of the cliff:** the old final-leg `spawnMul = 0.55` produced spawn intervals as
 low as 0.32s. At `MAX_SPEED` (570 px/s) that is ~182 px between obstacles — far less
 than a single jump needs — so two blocking obstacles (e.g. STOP-sign behind a pothole)
 could be physically impossible to clear. Forced hits then drained fuel right at the
@@ -88,10 +88,10 @@ alternating pothole↔sign↔cone to force the hardest transitions), drives at `
 and runs an optimal-but-human controller:
 
 ```
-CITY   minGap 600 px (=1.053s @max, vs 0.683s air)  collisions: 0  CLEAR
-FOREST minGap 540 px (=0.947s @max, vs 0.683s air)  collisions: 0  CLEAR
-DESERT minGap 500 px (=0.877s @max, vs 0.683s air)  collisions: 0  CLEAR
-COAST  minGap 460 px (=0.807s @max, vs 0.683s air)  collisions: 0  CLEAR
+DOWNTOWN   minGap 660 px (=1.000s @max, vs 0.683s air)  collisions: 0  CLEAR
+MUSIC ROW  minGap 640 px (=0.866s @max, vs 0.683s air)  collisions: 0  CLEAR
+CUMBERLAND minGap 640 px (=0.758s @max, vs 0.683s air)  collisions: 0  CLEAR
+BROADWAY   minGap 689 px (=0.720s @max, vs 0.683s air)  collisions: 0  CLEAR
 => PROVEN: no unavoidable back-to-back blockers on any leg.
 ```
 
@@ -113,7 +113,7 @@ Two deliberate balance changes restore a real, skill-based fuel pressure:
 | `HIT_FUEL_PENALTY` | 12 | **14** | Hits are now always avoidable (§3), so the penalty is a pure skill signal. |
 | Pit-stop refuel | **FULL** (100) | **+40** (`PITSTOP_REFILL`) | A full reset made running dry unreachable. +40 is still the biggest single fuel pickup + 500 pts — a strong rescue, not an auto-win. |
 
-The COAST fuel bump (`fuelSpawnRate 1.6`, `fuelPerCan 28`) is kept: it rewards players who
+The BROADWAY fuel bump (`fuelSpawnRate 1.25`, `fuelPerCan 28`) is kept: it rewards players who
 *collect*, giving the finale a payoff feel, without rescuing a careless player (who grabs
 few cans).
 
@@ -149,7 +149,7 @@ low fuel-collection. Holding hits at 70% and varying how many cans the player gr
 | Runs dry | 97% | **90%** | 78% | 62% |
 
 Assuming a careless player grabs few cans (≈25%) is realistic, not cherry-picked: a careless
-run dies ~46% of the way in and never reaches the fuel-rich COAST, so it can't self-rescue.
+run dies early and never reaches the fuel-rich BROADWAY leg, so it can't self-rescue.
 So a clean run finishes with margin, a coin-flip player (≈50% hits) dies about half the
 time, and a genuinely careless player reliably runs dry. Pit stops remain a deliberate
 safety net, so an unusually lucky careless run can still scrape through (~10%) — flagged

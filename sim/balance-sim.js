@@ -11,7 +11,7 @@
  *   2. No unavoidable back-to-back blockers — an optimal controller clears the
  *      tightest *legal* blocker sequence at MAX_SPEED with zero collisions.
  *   3. A skilled clean run that grabs most fuel finishes all four legs.
- *   4. A careless run still runs dry before the coast.
+ *   4. A careless run still runs dry before Broadway.
  *
  * Run:  node sim/balance-sim.js
  *
@@ -50,10 +50,10 @@ const PITSTOP_REFILL = 28;           // partial refuel — strong help, not an a
 const PITSTOP_REACH = 890;           // px a pit stop travels from spawn (W+100) to the player (PLAYER_X)
 
 const DIFFICULTY = [
-  { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, end: 5000 },  // CITY
-  { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, end: 10000 }, // FOREST
-  { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, end: 15000 }, // DESERT
-  { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, end: 20000 }  // COAST
+  { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, end: 5000 },  // DOWNTOWN
+  { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, end: 10000 }, // MUSIC ROW
+  { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, end: 15000 }, // CUMBERLAND
+  { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, end: 20000 }  // BROADWAY
 ];
 const legForDistance = (d) => {
   for (let i = 0; i < DIFFICULTY.length; i++) if (d < DIFFICULTY[i].end) return i;
@@ -386,19 +386,19 @@ const weaver = { grab: 0.85, nearMiss: 0.70 };     // aggressive: near-misses + 
 
 // Aggregate a policy over many seeds so a claim never rests on one lucky seed.
 function seedSweep(policy, n) {
-  let finishes = 0, driedBeforeCoast = 0;
+  let finishes = 0, driedBeforeFinale = 0;
   let sumFuelLeft = 0, sumMinFuel = 0;
   for (let s = 1; s <= n; s++) {
     const r = economyRun(policy, s * 7919 + 1); // distinct seeds
     if (r.finished) { finishes++; sumFuelLeft += r.fuelLeft; }
-    else if (r.driedAtPct < 75) driedBeforeCoast++;
+    else if (r.driedAtPct < 75) driedBeforeFinale++;
     sumMinFuel += r.minFuel;
   }
   return {
     n,
     finishRate: finishes / n,
     dryRate: (n - finishes) / n,
-    driedBeforeCoastRate: driedBeforeCoast / n,
+    driedBeforeFinaleRate: driedBeforeFinale / n,
     avgFuelLeft: finishes ? sumFuelLeft / finishes : 0,
     avgMinFuel: sumMinFuel / n
   };
@@ -458,7 +458,7 @@ console.log(`    flush landing : starts & ends at player.y=${GROUND_Y} -> contac
 // 2. solvability
 console.log('[2] SOLVABILITY — optimal controller vs tightest legal blocker wall @ MAX_SPEED');
 let allSolved = true;
-['CITY', 'FOREST', 'DESERT', 'COAST'].forEach((name, i) => {
+['DOWNTOWN', 'MUSIC ROW', 'CUMBERLAND', 'BROADWAY'].forEach((name, i) => {
   const r = solvabilityProof(i);
   if (r.collisions > 0) allSolved = false;
   console.log(`    ${name.padEnd(6)} minGap ${String(r.minGap).padEnd(4)}px  (=${r.minGapTime.toFixed(3)}s @max, vs ${jump.airTime.toFixed(3)}s air)  collisions: ${r.collisions}  ${r.collisions === 0 ? 'CLEAR' : 'FAIL'}`);
@@ -512,7 +512,7 @@ console.log('');
 // The careless-dry result is a TWO-lever property: it needs both frequent hits
 // AND low fuel-collection. Shown explicitly so the criterion isn't read as
 // resting on hit-rate alone. (A careless run dies ~46% in and never reaches the
-// fuel-rich COAST, so assuming it grabs few cans is realistic, not cherry-picked.)
+// fuel-rich BROADWAY, so assuming it grabs few cans is realistic, not cherry-picked.)
 console.log(`    Dry-rate vs careless fuel-grab (hits fixed 70%, ${N} seeds each):`);
 [0.10, 0.25, 0.40, 0.60].forEach((g) => {
   const s = seedSweep(carelessAtGrab(g), N);
@@ -530,26 +530,26 @@ console.log('');
 const spanReport = DIFFICULTY.map((d, i) => {
   const span = jump.airTime * legEffSpeed(i) * 60;
   const gap = legMinGapPx(i);
-  return { leg: ['CITY', 'FOREST', 'DESERT', 'COAST'][i], span, gap, safe: gap > span };
+  return { leg: ['DOWNTOWN', 'MUSIC ROW', 'CUMBERLAND', 'BROADWAY'][i], span, gap, safe: gap > span };
 });
 const jumpSpanSafe = spanReport.every((r) => r.safe);
 
-// finaleIsClimax: COAST must be the fastest AND densest leg — the trip escalates
-// to a peak rather than coasting home.
+// finaleIsClimax: BROADWAY must be the fastest AND densest leg — the trip escalates
+// to a peak rather than easing home.
 const finaleIsClimax =
   legEffSpeed(3) > legEffSpeed(2) && legEffSpeed(2) > legEffSpeed(1) && legEffSpeed(1) > legEffSpeed(0) &&
   DIFFICULTY[3].obstacleDensity >= Math.max(...DIFFICULTY.slice(0, 3).map((d) => d.obstacleDensity));
 
 console.log('[5] FINALE ESCALATION & JUMP-SPAN SAFETY (per leg)');
 spanReport.forEach((r) => {
-  console.log(`    ${r.leg.padEnd(6)} effSpeed ${(legEffSpeed(['CITY','FOREST','DESERT','COAST'].indexOf(r.leg))).toFixed(2)}  jumpSpan ${r.span.toFixed(0)}px  minGap ${r.gap.toFixed(0)}px  ${r.safe ? 'SAFE' : 'UNSAFE'}`);
+  console.log(`    ${r.leg.padEnd(10)} effSpeed ${(legEffSpeed(['DOWNTOWN','MUSIC ROW','CUMBERLAND','BROADWAY'].indexOf(r.leg))).toFixed(2)}  jumpSpan ${r.span.toFixed(0)}px  minGap ${r.gap.toFixed(0)}px  ${r.safe ? 'SAFE' : 'UNSAFE'}`);
 });
-console.log(`    finale is climax (fastest + densest COAST): ${finaleIsClimax ? 'YES' : 'NO'}\n`);
+console.log(`    finale is climax (fastest + densest BROADWAY): ${finaleIsClimax ? 'YES' : 'NO'}\n`);
 
 // 2b. lane solvability + reachability
 console.log('[6] LANE SOLVABILITY — optimal controller vs worst WALL_GAP stream + reach budget');
 let lanesSolved = true, reachOk = true;
-['CITY', 'FOREST', 'DESERT', 'COAST'].forEach((name, i) => {
+['DOWNTOWN', 'MUSIC ROW', 'CUMBERLAND', 'BROADWAY'].forEach((name, i) => {
   const s = solvabilityProofLanes(i);
   const r = openLaneReach(i);
   if (s.collisions > 0) lanesSolved = false;

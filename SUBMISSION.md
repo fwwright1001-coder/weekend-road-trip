@@ -3,13 +3,13 @@
 Screenshot/GIF: use `submission-media/weekend-road-trip-ghost-race.png` or
 `submission-media/weekend-road-trip-ghost-race.gif`.
 
-My game is called **Weekend Road Trip**, a 2D side-scrolling American vacation
-game about Marty finally getting PTO after eleven months of shipping work. He
-throws a bag into his red GT and tries to drive coast-to-coast on one tank of
-gas, passing through city dawn, pine forest morning, desert afternoon, and a
-sunset coast. The core loop is simple to read but hard to master: change lanes,
-jump potholes and cones, duck under low signs, grab snacks and fuel, and reach
-the ocean before the tank runs dry.
+My game is called **Weekend Road Trip**, a 2D side-scrolling Nashville cruise
+game about Marty getting one free night before the class demo. He throws a bag
+into his red GT and tries to drive a Music City loop on one tank of gas, passing
+through downtown Nashville, Music Row, the Cumberland riverfront, and Lower
+Broadway. The core loop is simple to read but hard to master: change lanes, jump
+potholes and cones, duck under low signs, grab snacks and fuel, and reach the
+neon before the tank runs dry.
 
 Technically, the game is built from scratch in vanilla JavaScript and HTML5
 Canvas with no engine and no external sprite assets. It uses a real-time Canvas

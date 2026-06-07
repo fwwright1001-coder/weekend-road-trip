@@ -2,6 +2,18 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-06 - Nashville browser-world art pass
+
+- Rethemed the route from a generic cross-country trip into a Nashville,
+  Tennessee cruise: Downtown, Music Row, Cumberland riverfront, and Lower
+  Broadway.
+- Added code-drawn Nashville scenery: skyline silhouette, twin-spire downtown
+  tower, studio bungalows, guitar signage, Cumberland river/bridge layer, and
+  Broadway neon storefronts.
+- Updated title/win copy, achievement labels/migration, README, submission
+  draft, demo guide, rotate prompt, and balance-sim labels so the browser-game
+  story stays focused on Music City.
+
 ## 2026-06-06 - Final Boss Vercel/Neon hardening
 
 - Removed the retired 3D prototype from the current submission
@@ -24,7 +36,7 @@ All notable changes to the game. Dates are in 2026.
   pattern never blocks all three lanes, and the headless sim *proves* an open
   lane is always reachable in time on every leg.
 - **Climaxing difficulty:** per-leg speed escalation + rising pattern complexity
-  so the coast is the fastest, hardest leg (it used to be the calmest).
+  so Broadway is the fastest, hardest leg.
 - **Skill-dominant scoring:** uncapped combo multiplier, near-miss bonuses for
   skimming adjacent-lane hazards, lane-risk bonuses; passive distance trimmed.
 - **Engineering rigor surfaced:** balance-sim now asserts 10 criteria incl. lane
@@ -110,7 +122,7 @@ and the whole system re-audited end to end.
 - **De-clustering:** enforces a per-leg minimum gap between blocking obstacles,
   so there are never unavoidable back-to-back blockers at top speed.
 - **Data-driven difficulty:** one `DIFFICULTY[]` row per leg controls obstacle
-  density, min blocker gap, and fuel spawn/refill — tightening CITY→COAST.
+  density, min blocker gap, and fuel spawn/refill across the four-leg route.
 - **Balance decision (signed off):** pit stops give a **partial** refuel
   (`PITSTOP_REFILL = 40`) and `HIT_FUEL_PENALTY = 14`, so a careless run can
   still run dry. Full pit-stop refuel is a one-line revert but makes the lose

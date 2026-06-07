@@ -98,7 +98,7 @@ html, body {
 .hud-row.bottom { justify-content: space-between; align-items: flex-end; }
 
 /* Shared card backplate. The opaque panel + drop shadow keep gold text legible
-   over the brightest skies (desert noon, coast sunset). */
+   over the brightest route skies and Broadway neon. */
 .hud-card,
 .hud-speedo,
 .hud-fuel {
@@ -756,6 +756,16 @@ html, body { overscroll-behavior: none; }
     color: var(--gold); text-align: center; padding: 24px;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
   }
+  #rotate-hint::before {
+    content: "MUSIC CITY";
+    width: min(260px, 78vw);
+    padding: 8px 12px;
+    border: 2px solid var(--gold);
+    border-radius: 4px;
+    box-shadow: 0 0 22px rgba(245, 215, 110, 0.24);
+    font: 800 12px 'JetBrains Mono', 'Consolas', monospace;
+    letter-spacing: 3px;
+  }
   #rotate-hint .rh-icon { font-size: 52px; animation: rh-rotate 2s ease-in-out infinite; }
   #rotate-hint .rh-text { font-size: 15px; letter-spacing: 1px; color: var(--text); max-width: 280px; line-height: 1.5; }
 }
@@ -768,6 +778,16 @@ html, body { overscroll-behavior: none; }
     background: radial-gradient(circle at center, #1a1a2e 0%, #050810 100%);
     color: var(--gold); text-align: center; padding: 24px;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  }
+  #rotate-hint::before {
+    content: "MUSIC CITY";
+    width: min(260px, 78vw);
+    padding: 8px 12px;
+    border: 2px solid var(--gold);
+    border-radius: 4px;
+    box-shadow: 0 0 22px rgba(245, 215, 110, 0.24);
+    font: 800 12px 'JetBrains Mono', 'Consolas', monospace;
+    letter-spacing: 3px;
   }
   #rotate-hint .rh-icon { font-size: 52px; animation: rh-rotate 2s ease-in-out infinite; }
   #rotate-hint .rh-text { font-size: 15px; letter-spacing: 1px; color: var(--text); max-width: 280px; line-height: 1.5; }

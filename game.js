@@ -3,9 +3,9 @@
  * ENGR 5513 Applied AI in Engineering · Lipscomb MSAI · Summer 2026
  * Forrest Wright
  *
- * Drive Marty's GT from the city to the coast in one tank
+ * Drive Marty's GT through a Nashville night cruise in one tank
  * of gas. Jump potholes, duck under stop signs, grab fuel & snacks.
- * Don't run out of gas before you reach the ocean.
+ * Don't run out of gas before you reach Lower Broadway.
  *
  * Architecture (single-file, no dependencies, no build step):
  *   - Canvas 2D rendering, requestAnimationFrame loop
@@ -143,60 +143,60 @@
   // for biome-specific scenery.
   const BIOMES = [
     {
-      name: 'CITY',
+      name: 'DOWNTOWN',
       end: 5000,
       timeOfDay: 'dawn',
-      sky: ['#fbb87d', '#fde4b8', '#9bc3e0'],
-      sunColor: '#fff0c0',
-      sunY: 130,
-      mountainColor: '#5a5670',
-      ground: '#3a3a40',
-      grass: '#3a5a3a',
+      sky: ['#f1a56f', '#f8d4a4', '#8fb8d8'],
+      sunColor: '#ffe7b2',
+      sunY: 120,
+      mountainColor: '#4b4a63',
+      ground: '#32333a',
+      grass: '#304a36',
       road: '#222226',
       dashColor: '#ffea88',
       birdColor: '#222222'
     },
     {
-      name: 'FOREST',
+      name: 'MUSIC ROW',
       end: 10000,
       timeOfDay: 'morning',
-      sky: ['#7ec3e8', '#bce0f0', '#e8f4ec'],
+      sky: ['#78b9dd', '#b7d9ec', '#e8f2ef'],
       sunColor: '#fff6d8',
       sunY: 95,
-      mountainColor: '#3a5a3a',
-      ground: '#2d4a2d',
-      grass: '#456f3a',
+      mountainColor: '#3f5f48',
+      ground: '#344536',
+      grass: '#48643d',
       road: '#222226',
       dashColor: '#ffea88',
       birdColor: '#5a3a1f'  // hawks
     },
     {
-      name: 'DESERT',
+      name: 'CUMBERLAND',
       end: 15000,
       timeOfDay: 'afternoon',
-      sky: ['#f5b27a', '#f9d6a0', '#cce0e8'],
-      sunColor: '#ffd680',
-      sunY: 110,
-      mountainColor: '#a67050',
-      ground: '#c69065',
-      grass: '#b88a5a',
-      road: '#3a3338',
+      sky: ['#d99a6a', '#f3c891', '#bcd8e4'],
+      sunColor: '#ffd891',
+      sunY: 116,
+      mountainColor: '#5e6f71',
+      ground: '#5d6f59',
+      grass: '#637a4a',
+      road: '#2b2b31',
       dashColor: '#ffea88',
-      birdColor: '#3a3a3a'  // vultures
+      birdColor: '#3a3a3a'
     },
     {
-      name: 'COAST',
+      name: 'BROADWAY',
       end: 20000,
       timeOfDay: 'sunset',
-      sky: ['#ff7e3a', '#ffb37a', '#ffd9a8'],
-      sunColor: '#ffe0a0',
-      sunY: 200,
-      mountainColor: '#a06a8a',
-      ground: '#e8c890',
-      grass: '#c8a880',
-      road: '#2a2a30',
+      sky: ['#3d2345', '#9c4165', '#f0a45f'],
+      sunColor: '#ffc879',
+      sunY: 190,
+      mountainColor: '#3b2d4c',
+      ground: '#312638',
+      grass: '#3f4f34',
+      road: '#25252c',
       dashColor: '#ffea88',
-      birdColor: '#eeeeee'  // seagulls
+      birdColor: '#d8d8e8'
     }
   ];
   const TRIP_TOTAL = BIOMES[BIOMES.length - 1].end;
@@ -223,12 +223,12 @@
   //   fuelPerCan      : fuel restored per can collected on this leg.
   //   speedScale      : reserved per-leg pacing multiplier (1 = stock).
   //
-  // The COAST row is intentionally the kindest on fuel: the finale should feel
+  // The BROADWAY row is intentionally the kindest on fuel: the finale should feel
   // like a payoff for a clean run, not a wall. De-clustering (minBlockingGap)
   // plus the fuel bump together fix the "runs dry at ~96%" cliff.
   //   speedScale      : per-leg pacing multiplier. Effective top speed for a leg
   //                     is MAX_SPEED * speedScale, ramped within the leg, so the
-  //                     trip ACCELERATES toward COAST — the finale is the climax.
+  //                     trip ACCELERATES toward BROADWAY - the finale is the climax.
   //   patternWeights  : spawn mix across lanes — single (1 lane), wallGap (2 lanes
   //                     blocked, 1 open), layered (full-width single-verb wall:
   //                     all-jump or all-duck), chicane (two offset singles, a weave).
@@ -236,10 +236,10 @@
   //                     2 = wallGap/chicane allowed). The fairness invariant: a
   //                     non-layered pattern never blocks all 3 lanes (>=1 stays open).
   const DIFFICULTY = [
-    { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, maxLaneSpan: 1, patternWeights: { single: 0.80, wallGap: 0.15, layered: 0.05, chicane: 0.00 } }, // CITY
-    { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, maxLaneSpan: 1, patternWeights: { single: 0.55, wallGap: 0.30, layered: 0.10, chicane: 0.05 } }, // FOREST
-    { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, maxLaneSpan: 2, patternWeights: { single: 0.38, wallGap: 0.34, layered: 0.18, chicane: 0.10 } }, // DESERT
-    { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, maxLaneSpan: 2, patternWeights: { single: 0.25, wallGap: 0.34, layered: 0.23, chicane: 0.18 } }  // COAST
+    { obstacleDensity: 1.00, minBlockingGap: 660, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.00, maxLaneSpan: 1, patternWeights: { single: 0.80, wallGap: 0.15, layered: 0.05, chicane: 0.00 } }, // DOWNTOWN
+    { obstacleDensity: 1.20, minBlockingGap: 640, fuelSpawnRate: 1.00, fuelPerCan: 22, speedScale: 1.12, maxLaneSpan: 1, patternWeights: { single: 0.55, wallGap: 0.30, layered: 0.10, chicane: 0.05 } }, // MUSIC ROW
+    { obstacleDensity: 1.40, minBlockingGap: 640, fuelSpawnRate: 1.05, fuelPerCan: 24, speedScale: 1.28, maxLaneSpan: 2, patternWeights: { single: 0.38, wallGap: 0.34, layered: 0.18, chicane: 0.10 } }, // CUMBERLAND
+    { obstacleDensity: 1.65, minBlockingGap: 620, fuelSpawnRate: 1.25, fuelPerCan: 28, speedScale: 1.45, maxLaneSpan: 2, patternWeights: { single: 0.25, wallGap: 0.34, layered: 0.23, chicane: 0.18 } }  // BROADWAY
   ];
 
   const SCREEN = {
@@ -276,7 +276,7 @@
     [SCREEN.PLAYING]: 'Trip started',
     [SCREEN.PAUSED]: 'Paused',
     [SCREEN.GAMEOVER]: 'Out of gas. Game over',
-    [SCREEN.WIN]: 'You reached the coast. You win',
+    [SCREEN.WIN]: 'You reached Lower Broadway. You win',
     [SCREEN.INITIALS]: 'New high score. Enter your initials',
     [SCREEN.SCORES]: 'High scores',
     [SCREEN.ACHIEVEMENTS]: 'Achievements',
@@ -286,7 +286,7 @@
   };
 
   const ACHIEVEMENTS = [
-    { id: 'start', title: 'PTO Approved', desc: 'Start a weekend run.' },
+    { id: 'start', title: 'Demo Night', desc: 'Start the Nashville cruise.' },
     { id: 'first-jump', title: 'Clearance Check', desc: 'Jump over your first hazard.' },
     { id: 'first-hit', title: 'Rental Insurance', desc: 'Survive your first collision.' },
     { id: 'snack', title: 'Roadside Calories', desc: 'Collect a snack pickup.' },
@@ -297,12 +297,12 @@
     { id: 'combo-25', title: 'Untouchable', desc: 'Max out a 25-chain combo.' },
     { id: 'max-speed', title: 'Cruise Control Hero', desc: 'Reach top speed.' },
     { id: 'low-fuel', title: 'Running on Fumes', desc: 'Keep driving below 15 percent fuel.' },
-    { id: 'forest', title: 'Into the Pines', desc: 'Reach the forest biome.' },
-    { id: 'desert', title: 'Desert Heat', desc: 'Reach the desert biome.' },
-    { id: 'coast', title: 'Coastbound', desc: 'Reach the coast biome.' },
+    { id: 'music-row', title: 'Music Row Roll', desc: 'Reach the Music Row leg.' },
+    { id: 'cumberland', title: 'Riverfront View', desc: 'Reach the Cumberland riverfront leg.' },
+    { id: 'broadway', title: 'Broadway Lights', desc: 'Reach the Lower Broadway leg.' },
     { id: 'halfway', title: 'Halfway There', desc: 'Drive past the midpoint.' },
     { id: 'score-3000', title: 'Scoreboard Material', desc: 'Score at least 3,000 points.' },
-    { id: 'finish', title: 'Ocean View', desc: 'Finish the coast-to-coast trip.' },
+    { id: 'finish', title: 'Music City Loop', desc: 'Finish the Nashville cruise.' },
     { id: 'clean-finish', title: 'No-Deductible Drive', desc: 'Finish without hitting an obstacle.' },
     { id: 'ghost-save', title: 'Ghost Writer', desc: 'Save a replay ghost from a run.' },
     { id: 'ghost-race', title: 'Race the Replay', desc: 'Start a run with a ghost loaded.' }
@@ -439,8 +439,8 @@
       tilt: 0,
       wheelAngle: 0,
       bob: 0,
-      // lanes (geometry live now; input/tween land in the next commit)
-      lane: 1,                 // 0 = far/top, 1 = center (= legacy GROUND_Y), 2 = near/bottom
+      // lanes
+      lane: 1,                 // 0 = near/bottom, 1 = center (= legacy GROUND_Y), 2 = far/top
       laneTarget: 1,
       laneBaseY: GROUND_Y,
       laneFromBaseY: GROUND_Y,
@@ -636,7 +636,22 @@
     try {
       const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === 'object' ? parsed : {};
+      if (!parsed || typeof parsed !== 'object') return {};
+      const legacyLegIds = {
+        forest: 'music-row',
+        desert: 'cumberland',
+        coast: 'broadway'
+      };
+      let migrated = false;
+      Object.keys(legacyLegIds).forEach((oldId) => {
+        const newId = legacyLegIds[oldId];
+        if (parsed[oldId] && !parsed[newId]) {
+          parsed[newId] = parsed[oldId];
+          migrated = true;
+        }
+      });
+      if (migrated) localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(parsed));
+      return parsed;
     } catch (e) {
       return {};
     }
@@ -2079,7 +2094,7 @@
     ctx.font = 'bold 16px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    // Dark halo keeps popups legible over bright biome skies (desert/coast).
+    // Dark halo keeps popups legible over bright route skies and neon.
     ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
     ctx.shadowBlur = 4;
     ctx.shadowOffsetY = 1;
@@ -2106,7 +2121,7 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // Dark backplate pill — keeps the toast legible over bright skies
-    // (desert noon, coast sunset), matching the DOM card backplates.
+    // (river glare, Broadway sunset), matching the DOM card backplates.
     const tw = ctx.measureText(label).width;
     const bw = tw + 32, bh = 42;
     ctx.fillStyle = 'rgba(12, 14, 24, 0.72)';
@@ -2453,10 +2468,10 @@
 
   function drawMidFor(name, off) {
     switch (name) {
-      case 'CITY':   drawCitySkyline(off); break;
-      case 'FOREST': drawForestMid(off); break;
-      case 'DESERT': drawDesertMid(off); break;
-      case 'COAST':  drawCoastMid(off); break;
+      case 'DOWNTOWN':   drawDowntownNashville(off); break;
+      case 'MUSIC ROW':  drawMusicRowMid(off); break;
+      case 'CUMBERLAND': drawCumberlandMid(off); break;
+      case 'BROADWAY':   drawBroadwayMid(off); break;
     }
   }
   function drawMidScenery(biome) {
@@ -2472,129 +2487,267 @@
       drawMidFor(biome.name, off);
     }
   }
-  function drawCitySkyline(off) {
+  function drawDowntownNashville(off) {
     const baseY = GROUND_Y;
-    for (let i = 0; i < 12; i++) {
-      const x = ((i * 120) - (off % 120)) - 60;
-      const h = 90 + ((i * 47) % 110);
-      ctx.fillStyle = '#2e2e44';
-      ctx.fillRect(x, baseY - h, 100, h);
-      // antenna
-      if (i % 3 === 1) {
-        ctx.fillStyle = '#1a1a26';
-        ctx.fillRect(x + 48, baseY - h - 12, 4, 12);
+    const period = 920;
+    const start = -((off % period) + period) % period;
+    for (let chunk = -1; chunk < 3; chunk++) {
+      const origin = start + chunk * period;
+      drawBatmanTower(origin + 350, baseY);
+      drawBroadShoulderTower(origin + 92, baseY, 96, 150, '#272940');
+      drawBroadShoulderTower(origin + 210, baseY, 92, 112, '#313047');
+      drawBroadShoulderTower(origin + 520, baseY, 118, 132, '#292b42');
+      drawBroadShoulderTower(origin + 660, baseY, 96, 180, '#24243a');
+      drawBroadShoulderTower(origin + 790, baseY, 105, 120, '#30314a');
+      drawMusicCityMarquee(origin + 34, baseY);
+      drawRymanRoofline(origin + 22, baseY);
+      drawCountryHallShape(origin + 590, baseY);
+    }
+  }
+  function drawMusicCityMarquee(x, baseY) {
+    const y = baseY - 156;
+    ctx.fillStyle = '#181824';
+    ctx.fillRect(x + 12, y, 128, 34);
+    ctx.strokeStyle = '#f5d76e';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 16, y + 4, 120, 26);
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = 'bold 12px JetBrains Mono, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('MUSIC CITY', x + 76, y + 23);
+    ctx.fillStyle = '#292a38';
+    ctx.fillRect(x + 30, y + 34, 7, 82);
+    ctx.fillRect(x + 116, y + 34, 7, 82);
+    ctx.textAlign = 'left';
+  }
+  function drawBatmanTower(x, baseY) {
+    const w = 86;
+    const h = 214;
+    const top = baseY - h;
+    ctx.fillStyle = '#202135';
+    ctx.fillRect(x, top + 36, w, h - 36);
+    ctx.fillStyle = '#292b45';
+    ctx.fillRect(x + 12, top + 16, w - 24, h - 16);
+    ctx.fillStyle = '#171827';
+    ctx.fillRect(x + 18, top - 34, 10, 54);
+    ctx.fillRect(x + w - 28, top - 34, 10, 54);
+    ctx.fillStyle = '#f6df73';
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 3; col++) {
+        if ((row + col) % 2 === 0) ctx.fillRect(x + 24 + col * 18, top + 54 + row * 19, 7, 8);
       }
-      // windows
-      ctx.fillStyle = '#f5d76e';
-      for (let row = 0; row < Math.floor(h / 20) - 1; row++) {
-        for (let col = 0; col < 4; col++) {
-          if (((i + row + col) % 3) !== 0) continue;
-          ctx.fillRect(x + 12 + col * 22, baseY - h + 12 + row * 20, 10, 10);
-        }
+    }
+    ctx.fillStyle = 'rgba(255,232,154,0.32)';
+    ctx.fillRect(x + 17, top - 36, 12, 2);
+    ctx.fillRect(x + w - 29, top - 36, 12, 2);
+  }
+  function drawBroadShoulderTower(x, baseY, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, baseY - h, w, h);
+    ctx.fillStyle = shade(color, 0.14);
+    ctx.fillRect(x + 8, baseY - h + 10, w - 16, 6);
+    ctx.fillStyle = '#f5d76e';
+    for (let row = 0; row < Math.floor(h / 21) - 1; row++) {
+      for (let col = 0; col < Math.floor(w / 22); col++) {
+        if ((row * 3 + col + Math.floor(x)) % 4 === 0) ctx.fillRect(x + 12 + col * 21, baseY - h + 24 + row * 20, 7, 7);
       }
     }
   }
-  function drawForestMid(off) {
+  function drawRymanRoofline(x, baseY) {
+    ctx.fillStyle = '#4b3027';
+    ctx.fillRect(x, baseY - 74, 118, 74);
+    ctx.fillStyle = '#2b1d1b';
+    ctx.beginPath();
+    ctx.moveTo(x - 8, baseY - 74);
+    ctx.lineTo(x + 59, baseY - 112);
+    ctx.lineTo(x + 126, baseY - 74);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#f1d18b';
+    for (let i = 0; i < 5; i++) ctx.fillRect(x + 16 + i * 20, baseY - 52, 8, 18);
+  }
+  function drawCountryHallShape(x, baseY) {
+    ctx.fillStyle = '#232636';
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x + 28, baseY - 90);
+    ctx.lineTo(x + 126, baseY - 120);
+    ctx.lineTo(x + 154, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x + 48, baseY - 82, 72, 4);
+    ctx.fillRect(x + 42, baseY - 64, 88, 4);
+    ctx.fillRect(x + 36, baseY - 46, 102, 4);
+  }
+  function drawMusicRowMid(off) {
     const baseY = GROUND_Y;
-    // Background pine wall
-    for (let i = 0; i < 22; i++) {
-      const x = ((i * 60) - (off % 60)) - 30;
-      const h = 110 + ((i * 37) % 50);
-      // trunk
-      ctx.fillStyle = '#5a3a1f';
-      ctx.fillRect(x + 14, baseY - 28, 6, 28);
-      // pine cone
-      ctx.fillStyle = '#1f3a1f';
-      ctx.beginPath();
-      ctx.moveTo(x - 4, baseY - 28);
-      ctx.lineTo(x + 17, baseY - 28 - h);
-      ctx.lineTo(x + 38, baseY - 28);
-      ctx.closePath();
-      ctx.fill();
-      // secondary tier
-      ctx.beginPath();
-      ctx.moveTo(x, baseY - 28 - h * 0.4);
-      ctx.lineTo(x + 17, baseY - 28 - h * 0.95);
-      ctx.lineTo(x + 34, baseY - 28 - h * 0.4);
-      ctx.closePath();
-      ctx.fill();
+    const period = 760;
+    const start = -((off % period) + period) % period;
+    for (let chunk = -1; chunk < 4; chunk++) {
+      const x = start + chunk * period;
+      drawStudioBungalow(x + 30, baseY, '#6a3f2f', 'STUDIO');
+      drawStudioBungalow(x + 210, baseY, '#505b4a', 'MIX');
+      drawStudioBungalow(x + 400, baseY, '#5b4d3a', 'VINYL');
+      drawGuitarSign(x + 628, baseY - 96, 0.9);
+      drawMusicRowTrees(x + 108, baseY);
+      drawMusicRowTrees(x + 332, baseY);
     }
   }
-  function drawDesertMid(off) {
-    const baseY = GROUND_Y;
-    // distant mesas
-    for (let i = 0; i < 6; i++) {
-      const x = ((i * 220) - (off % 220)) - 110;
-      const w = 160;
-      const h = 80 + (i % 3) * 14;
-      ctx.fillStyle = '#8a5530';
-      ctx.beginPath();
-      ctx.moveTo(x, baseY);
-      ctx.lineTo(x + 16, baseY - h);
-      ctx.lineTo(x + w - 16, baseY - h);
-      ctx.lineTo(x + w, baseY);
-      ctx.closePath();
-      ctx.fill();
-      // top streak
-      ctx.fillStyle = '#a96a3a';
-      ctx.fillRect(x + 16, baseY - h, w - 32, 6);
-    }
-    // saguaros
-    for (let i = 0; i < 14; i++) {
-      const x = ((i * 110) - (off % 110)) - 55;
-      const h = 60 + ((i * 41) % 30);
-      ctx.fillStyle = '#5a8a3a';
-      ctx.fillRect(x + 14, baseY - h, 12, h);
-      ctx.fillRect(x + 6, baseY - h + 14, 8, 22);
-      ctx.fillRect(x + 26, baseY - h + 22, 8, 18);
-    }
+  function drawStudioBungalow(x, baseY, color, label) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, baseY - 82, 150, 82);
+    ctx.fillStyle = shade(color, -0.28);
+    ctx.beginPath();
+    ctx.moveTo(x - 10, baseY - 82);
+    ctx.lineTo(x + 75, baseY - 122);
+    ctx.lineTo(x + 160, baseY - 82);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#f5d76e';
+    ctx.fillRect(x + 20, baseY - 52, 26, 24);
+    ctx.fillRect(x + 100, baseY - 52, 26, 24);
+    ctx.fillStyle = '#241b19';
+    ctx.fillRect(x + 62, baseY - 60, 28, 60);
+    ctx.fillStyle = '#d7c7a2';
+    ctx.font = '10px JetBrains Mono, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + 75, baseY - 88);
+    ctx.textAlign = 'left';
   }
-  function drawCoastMid(off) {
+  function drawMusicRowTrees(x, baseY) {
+    ctx.fillStyle = '#5b3b24';
+    ctx.fillRect(x + 18, baseY - 70, 7, 70);
+    ctx.fillStyle = '#2f5e3b';
+    ctx.beginPath();
+    ctx.arc(x + 22, baseY - 82, 30, 0, Math.PI * 2);
+    ctx.arc(x + 4, baseY - 68, 22, 0, Math.PI * 2);
+    ctx.arc(x + 42, baseY - 66, 24, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  function drawGuitarSign(cx, cy, scale) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.rotate(-0.12);
+    ctx.fillStyle = '#c8733f';
+    ctx.beginPath();
+    ctx.arc(0, 24, 22, 0, Math.PI * 2);
+    ctx.arc(24, 24, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#2a1b18';
+    ctx.beginPath();
+    ctx.arc(12, 24, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d9bd78';
+    ctx.fillRect(34, 18, 78, 10);
+    ctx.fillStyle = '#f5d76e';
+    ctx.fillRect(104, 14, 18, 18);
+    ctx.restore();
+  }
+  function drawCumberlandMid(off) {
     const baseY = GROUND_Y;
-    // ocean strip
-    const oceanG = ctx.createLinearGradient(0, baseY - 60, 0, baseY - 20);
-    oceanG.addColorStop(0, '#3a7eb4');
-    oceanG.addColorStop(1, '#1f4e7a');
-    ctx.fillStyle = oceanG;
-    ctx.fillRect(0, baseY - 60, W, 40);
-    // sun reflection on water
-    ctx.fillStyle = 'rgba(255, 210, 140, 0.55)';
-    ctx.fillRect(W - 240, baseY - 50, 80, 6);
-    ctx.fillRect(W - 220, baseY - 40, 60, 4);
-    // palms
+    const waterTop = baseY - 116;
+    const river = ctx.createLinearGradient(0, waterTop, 0, baseY - 18);
+    river.addColorStop(0, '#4e86a8');
+    river.addColorStop(1, '#244e6f');
+    ctx.fillStyle = river;
+    ctx.fillRect(0, waterTop, W, 98);
+    ctx.fillStyle = 'rgba(255, 226, 160, 0.34)';
     for (let i = 0; i < 8; i++) {
-      const x = ((i * 160) - (off % 160)) - 80;
-      const h = 100 + (i % 3) * 18;
-      // trunk
-      ctx.fillStyle = '#6a4a2a';
-      ctx.beginPath();
-      ctx.moveTo(x + 22, baseY);
-      ctx.quadraticCurveTo(x + 30, baseY - h * 0.5, x + 24, baseY - h);
-      ctx.lineTo(x + 28, baseY - h);
-      ctx.quadraticCurveTo(x + 36, baseY - h * 0.5, x + 28, baseY);
-      ctx.closePath();
-      ctx.fill();
-      // fronds
-      ctx.fillStyle = '#2d7a3a';
-      drawPalmFronds(x + 26, baseY - h);
+      const x = ((i * 160) - (off * 0.35 % 160)) - 80;
+      ctx.fillRect(x, waterTop + 26 + (i % 4) * 16, 84, 3);
+    }
+    drawPedestrianBridge(-((off % 1040) + 1040) % 1040 - 110, waterTop + 20);
+    drawPedestrianBridge(-((off % 1040) + 1040) % 1040 + 930, waterTop + 20);
+    const period = 840;
+    const start = -((off * 0.6 % period) + period) % period;
+    for (let chunk = -1; chunk < 3; chunk++) {
+      const x = start + chunk * period;
+      drawBroadShoulderTower(x + 88, baseY - 76, 82, 96, '#24283d');
+      drawBroadShoulderTower(x + 202, baseY - 76, 62, 72, '#2e3145');
+      drawStadiumBowl(x + 560, baseY - 72);
     }
   }
-  function drawPalmFronds(cx, cy) {
-    for (let i = 0; i < 6; i++) {
-      const ang = (i / 6) * Math.PI * 2 + 0.2;
-      const len = 32;
+  function drawPedestrianBridge(x, y) {
+    ctx.strokeStyle = '#c9b47a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y + 42);
+    ctx.lineTo(x + 960, y + 42);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 8; i++) {
+      const ax = x + i * 120;
       ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.quadraticCurveTo(
-        cx + Math.cos(ang) * len * 0.5,
-        cy + Math.sin(ang) * len * 0.5 - 6,
-        cx + Math.cos(ang) * len,
-        cy + Math.sin(ang) * len
-      );
-      ctx.lineWidth = 7;
-      ctx.strokeStyle = '#2d7a3a';
+      ctx.moveTo(ax, y + 42);
+      ctx.lineTo(ax + 60, y);
+      ctx.lineTo(ax + 120, y + 42);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ax + 24, y + 42);
+      ctx.lineTo(ax + 84, y + 18);
       ctx.stroke();
     }
+  }
+  function drawStadiumBowl(x, baseY) {
+    ctx.fillStyle = '#4b4f61';
+    ctx.beginPath();
+    ctx.ellipse(x + 90, baseY - 18, 105, 38, 0, Math.PI, 0);
+    ctx.lineTo(x + 196, baseY);
+    ctx.lineTo(x + 4, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#d7dce6';
+    ctx.fillRect(x + 24, baseY - 54, 152, 5);
+    ctx.fillRect(x + 36, baseY - 40, 128, 4);
+  }
+  function drawBroadwayMid(off) {
+    const baseY = GROUND_Y;
+    const period = 720;
+    const start = -((off % period) + period) % period;
+    for (let chunk = -1; chunk < 4; chunk++) {
+      const x = start + chunk * period;
+      drawHonkyTonkFront(x + 18, baseY, 126, '#5b2c51', '#ff62d2', 'LIVE');
+      drawHonkyTonkFront(x + 152, baseY, 138, '#4a334f', '#6ee7ff', 'MUSIC');
+      drawHonkyTonkFront(x + 300, baseY, 116, '#67312c', '#ffd166', 'BBQ');
+      drawHonkyTonkFront(x + 424, baseY, 132, '#2b4560', '#8cff86', 'TONK');
+      drawVerticalNeon(x + 578, baseY - 154, '#ff495c', 'NASH');
+      drawVerticalNeon(x + 660, baseY - 146, '#f5d76e', 'OPEN');
+    }
+  }
+  function drawHonkyTonkFront(x, baseY, w, color, neon, label) {
+    const h = 128;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, baseY - h, w, h);
+    ctx.fillStyle = shade(color, -0.24);
+    ctx.fillRect(x, baseY - h, w, 14);
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.fillRect(x + 12, baseY - 54, w - 24, 54);
+    ctx.strokeStyle = neon;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x + 12, baseY - h + 22, w - 24, 30);
+    ctx.fillStyle = neon;
+    ctx.font = '12px JetBrains Mono, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + w / 2, baseY - h + 43);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#f5d76e';
+    for (let i = 0; i < 4; i++) {
+      ctx.fillRect(x + 16 + i * ((w - 32) / 4), baseY - 88, 10, 10);
+    }
+  }
+  function drawVerticalNeon(x, y, color, label) {
+    ctx.fillStyle = '#181824';
+    ctx.fillRect(x, y, 44, 132);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x + 4, y + 4, 36, 124);
+    ctx.fillStyle = color;
+    ctx.font = '11px JetBrains Mono, Consolas, monospace';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < label.length; i++) ctx.fillText(label[i], x + 22, y + 26 + i * 24);
+    ctx.textAlign = 'left';
   }
 
   function drawNearScenery(biome) {
@@ -2609,8 +2762,8 @@
       ctx.fillRect(x + 6, tuftY - 1, 3, 5);
       ctx.fillRect(x + 12, tuftY, 3, 4);
     }
-    // Biome-specific roadside detail
-    if (biome.name === 'CITY') {
+    // Route-specific roadside detail
+    if (biome.name === 'DOWNTOWN') {
       ctx.fillStyle = '#2a2a2e';
       for (let i = 0; i < 6; i++) {
         const x = ((i * 240) - (off % 240)) - 120;
@@ -2621,16 +2774,39 @@
         ctx.fillRect(x - 10, GROUND_Y - 60, 6, 4);
         ctx.fillStyle = '#2a2a2e';
       }
-    } else if (biome.name === 'DESERT') {
-      // small bushes
-      ctx.fillStyle = '#7a8a3a';
-      for (let i = 0; i < 12; i++) {
-        const x = ((i * 110) - (off % 110)) - 55;
-        ctx.beginPath();
-        ctx.arc(x, GROUND_Y + 2, 6, 0, Math.PI * 2);
-        ctx.arc(x + 8, GROUND_Y + 2, 5, 0, Math.PI * 2);
-        ctx.arc(x - 8, GROUND_Y + 2, 5, 0, Math.PI * 2);
-        ctx.fill();
+    } else if (biome.name === 'MUSIC ROW') {
+      for (let i = 0; i < 8; i++) {
+        const x = ((i * 150) - (off % 150)) - 75;
+        ctx.fillStyle = '#513423';
+        ctx.fillRect(x, GROUND_Y - 34, 6, 34);
+        ctx.fillStyle = '#f5d76e';
+        ctx.fillRect(x + 6, GROUND_Y - 34, 34, 16);
+        ctx.fillStyle = '#1a1a26';
+        ctx.fillRect(x + 10, GROUND_Y - 30, 26, 3);
+        ctx.fillRect(x + 10, GROUND_Y - 24, 18, 3);
+      }
+    } else if (biome.name === 'CUMBERLAND') {
+      ctx.fillStyle = '#2e3942';
+      for (let i = 0; i < 10; i++) {
+        const x = ((i * 112) - (off % 112)) - 56;
+        ctx.fillRect(x, GROUND_Y - 44, 5, 44);
+        ctx.fillRect(x + 18, GROUND_Y - 44, 5, 44);
+        ctx.fillRect(x - 4, GROUND_Y - 40, 32, 4);
+        ctx.fillStyle = '#d2c58a';
+        ctx.fillRect(x - 4, GROUND_Y - 54, 32, 3);
+        ctx.fillStyle = '#2e3942';
+      }
+    } else if (biome.name === 'BROADWAY') {
+      for (let i = 0; i < 7; i++) {
+        const x = ((i * 170) - (off % 170)) - 85;
+        const color = ['#ff4fb8', '#64d7ff', '#f5d76e', '#7ee27e'][i % 4];
+        ctx.fillStyle = '#181824';
+        ctx.fillRect(x, GROUND_Y - 58, 52, 22);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 3, GROUND_Y - 55, 46, 16);
+        ctx.fillStyle = color;
+        ctx.fillRect(x + 10, GROUND_Y - 48, 26, 3);
       }
     }
   }
@@ -3387,7 +3563,7 @@
     }
   }
 
-  // Checkered race gate that scrolls in during the final stretch of the coast.
+  // Checkered race gate that scrolls in during the final stretch of Broadway.
   function drawFinishLine() {
     const ahead = TRIP_TOTAL - state.distance;
     if (ahead > W - PLAYER_X + 60 || ahead < -140) return;
@@ -3482,7 +3658,7 @@
     state.player.ducking = duckHeld;
     // Auto-throttle: manual accel/brake retired (A/D now drive lane changes).
     // Speed eases toward the per-leg effective cap (MAX_SPEED * ramped speedScale),
-    // so the car always presses forward and the trip accelerates toward COAST.
+    // so the car always presses forward and the trip accelerates toward Broadway.
     const cap = MAX_SPEED * legSpeedScale();
     state.speed += (cap - state.speed) * Math.min(1, 0.05 * (dt * 60));
 
@@ -3522,9 +3698,9 @@
       state._lastBiomeIdx = state.biomeIdx;
       audio.playBiome();                 // leg transition sound
       announce('Entering ' + b.name);
-      if (b.name === 'FOREST') unlockAchievement('forest');
-      if (b.name === 'DESERT') unlockAchievement('desert');
-      if (b.name === 'COAST') unlockAchievement('coast');
+      if (b.name === 'MUSIC ROW') unlockAchievement('music-row');
+      if (b.name === 'CUMBERLAND') unlockAchievement('cumberland');
+      if (b.name === 'BROADWAY') unlockAchievement('broadway');
     }
     checkProgressAchievements();
 

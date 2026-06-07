@@ -87,7 +87,7 @@ criteria; it exits non-zero if any fails:
 [2]  no unavoidable blockers ........... PASS
 [5]  jump span < min gap (all legs) .... PASS   ← caught a real bug (see below)
      finale is the climax .............. PASS
-[6]  lanes solvable (open lane clears).. PASS   COAST lead 0.888s > 0.57s reach
+[6]  lanes solvable (open lane clears).. PASS   BROADWAY lead 0.888s > 0.57s reach
      open lane reachable in time ....... PASS
 [7]  skill dominates distance (>=2.5x).. PASS   weaver 7.82x a grinder
      skilled / moderate finish ......... 100% / 99.8%

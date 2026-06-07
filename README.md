@@ -11,9 +11,9 @@ machine-checked gates.
 
 ![Weekend Road Trip - three-lane gameplay](submission-media/hero-lanes.png)
 
-> Drive Marty's GT coast-to-coast on one tank of gas: weave three lanes, jump
-> potholes, duck low signs, skim hazards for near-miss combos, and outrun a
-> difficulty curve that peaks at the coast. Reach the ocean before the tank dries.
+> Drive Marty's GT through a Nashville, Tennessee night cruise on one tank of gas:
+> weave three lanes, jump potholes, duck low signs, skim hazards for near-miss
+> combos, and outrun a difficulty curve that peaks under the Broadway neon.
 
 ---
 
@@ -87,7 +87,7 @@ submission proof screenshots.
 | `?` | Controls |
 | Gamepad / Touch | A jump, B duck, D-pad/stick or lane buttons |
 
-The throttle is automatic. Speed escalates each leg, so the coast is the fastest
+The throttle is automatic. Speed escalates each leg, so Broadway is the fastest
 stretch. Your inputs are about positioning.
 
 ---
@@ -96,7 +96,8 @@ stretch. Your inputs are about positioning.
 
 - Three lanes with buffered hops; dodge by lane, jump, or duck.
 - Cross-lane obstacle patterns with a fair line through.
-- Four biomes: city dawn, forest, desert, and coast sunset.
+- Four Nashville legs: downtown skyline, Music Row studios, Cumberland
+  riverfront, and Lower Broadway neon.
 - Skill-dominant scoring with combos, near-miss bonuses, and lane-risk bonuses.
 - Ghost Race records replay telemetry and exports/imports shareable JSON.
 - Procedural art and audio, particles, screen shake, achievements, high scores,
