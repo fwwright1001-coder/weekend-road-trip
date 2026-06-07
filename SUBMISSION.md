@@ -30,6 +30,11 @@ because static Pages cannot run serverless functions. The API validates emails,
 upserts duplicates, creates the schema automatically, returns a live signup
 count, avoids storing raw IP addresses, and has its own CI contract test.
 
+For the final game deployment stage, high scores also have a Neon-backed cloud
+path. The game still saves scores locally so it works on GitHub Pages and offline,
+but on Vercel each submitted run posts to `api/highscores.js`, creates/stores rows
+in `game_high_scores`, and displays the cloud leaderboard when Neon is connected.
+
 Play it live on GitHub Pages:
 https://fwwright1001-coder.github.io/weekend-road-trip/
 

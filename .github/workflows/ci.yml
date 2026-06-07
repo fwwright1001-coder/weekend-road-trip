@@ -33,5 +33,9 @@ jobs:
         run: node qa/smoke-dom.js
       - name: Road Crew API contract
         run: node qa/waitlist-contract.js
+      - name: Cloud high-score API contract
+        run: node qa/highscores-contract.js
+      - name: Cloud high-score client contract
+        run: node qa/highscores-client-contract.js
       - name: Road Crew client contract
         run: node qa/launch-contract.js

@@ -16,7 +16,8 @@
  *   - Obstacle/collectible spawner + AABB collision
  *   - Particle pool (smoke, sparks, dust, pickup bursts)
  *   - Screen shake on impact
- *   - High scores, achievements, settings, and ghost replays persisted to localStorage
+ *   - High scores, achievements, settings, and ghost replays persisted locally
+ *     with Vercel/Neon cloud high scores when deployed
  * ============================================================ */
 
 (() => {
@@ -108,7 +109,6 @@
   const SETTINGS_KEY = 'wrt.settings.v1';
   const ACHIEVEMENTS_KEY = 'wrt.achievements.v1';
   const GHOST_KEY = 'wrt.ghost.v1';
-  const SANDBOX_KEY = 'wrt.sandbox.v1';   // set when the player reaches the coast — unlocks the GTA sandbox entry
   const MUTE_KEY = 'wrt.muted.v1';     // legacy; migrated into SETTINGS_KEY on load
   const MAX_SCORES = 5;
   const GHOST_SAMPLE_STEP = 0.08;
@@ -474,7 +474,10 @@
     ghostSampleTimer: 0,
     ghostMessage: '',
     // scores
-    scores: []
+    scores: [],
+    cloudScores: null,
+    cloudScoreStatus: '',
+    cloudScoreWritePending: false
   };
   const COMBO_BASE_WINDOW = 4.0;  // base seconds before combo resets; shrinks as combo climbs
   const COMBO_CEILING = 25;       // soft cap on combo COUNT (bounds runaway), but the multiplier
@@ -508,14 +511,85 @@
     return score > state.scores[state.scores.length - 1].score;
   }
   function insertScore(initials, score) {
-    state.scores.push({
+    const entry = {
       initials: initials.join(''),
       score: Math.floor(score),
       date: new Date().toISOString().slice(0, 10)
-    });
+    };
+    state.scores.push(entry);
     state.scores.sort((a, b) => b.score - a.score);
     state.scores = state.scores.slice(0, MAX_SCORES);
     saveScores(state.scores);
+    submitCloudScore(entry);
+  }
+  function normalizeScoreEntry(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    const initials = String(entry.initials || 'AAA').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3).padEnd(3, 'A');
+    const score = Math.max(0, Math.floor(Number(entry.score) || 0));
+    const date = String(entry.date || entry.created_at || new Date().toISOString()).slice(0, 10);
+    return { initials, score, date };
+  }
+  function canUseCloudScores() {
+    try {
+      if (typeof fetch !== 'function') return false;
+      const loc = window.location || location || {};
+      const host = String(loc.hostname || '');
+      if (!host || loc.protocol === 'file:') return false;
+      return !/\.github\.io$/i.test(host);
+    } catch (e) {
+      return false;
+    }
+  }
+  async function refreshCloudScores() {
+    if (!canUseCloudScores()) return;
+    const writePendingAtStart = !!state.cloudScoreWritePending;
+    if (!writePendingAtStart) state.cloudScoreStatus = 'Checking Neon high scores...';
+    try {
+      const res = await fetch('/api/highscores', { method: 'GET', cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (writePendingAtStart) return;
+      if (!res.ok || !data.ok) {
+        state.cloudScoreStatus = res.status === 503
+          ? 'Cloud high scores need Neon DATABASE_URL in Vercel.'
+          : 'Cloud high scores are unavailable; local scores are shown.';
+        return;
+      }
+      const rows = Array.isArray(data.scores) ? data.scores.map(normalizeScoreEntry).filter(Boolean) : [];
+      state.cloudScores = rows.slice(0, MAX_SCORES);
+      state.cloudScoreStatus = state.cloudScores.length
+        ? 'Showing Neon cloud high scores.'
+        : 'Neon high scores are online; no scores saved yet.';
+    } catch (e) {
+      state.cloudScoreStatus = 'Cloud high scores are unavailable; local scores are shown.';
+    } finally {
+      if (state.screen === SCREEN.SCORES) renderScoresList({ skipCloudRefresh: true });
+    }
+  }
+  async function submitCloudScore(entry) {
+    if (!canUseCloudScores()) return;
+    const payload = normalizeScoreEntry(entry);
+    if (!payload) return;
+    state.cloudScoreWritePending = true;
+    state.cloudScoreStatus = 'Saving score to Neon...';
+    try {
+      const res = await fetch('/api/highscores', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, source: 'weekend-road-trip-game' })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok && Array.isArray(data.scores)) {
+        state.cloudScores = data.scores.map(normalizeScoreEntry).filter(Boolean).slice(0, MAX_SCORES);
+        state.cloudScoreStatus = 'Score saved to Neon.';
+      } else if (res.status === 503) {
+        state.cloudScoreStatus = 'Score saved locally; add Neon DATABASE_URL for cloud scores.';
+      }
+    } catch (e) {
+      state.cloudScoreStatus = 'Score saved locally; cloud sync was not reachable.';
+    } finally {
+      state.cloudScoreWritePending = false;
+      if (state.screen === SCREEN.SCORES) renderScoresList({ skipCloudRefresh: true });
+    }
   }
 
   function prefersReducedMotion() {
@@ -904,7 +978,6 @@
     if (state.screen === SCREEN.GHOST) renderGhostScreen();
     if (state.screen === SCREEN.SETTINGS) renderSettings();
     if (state.screen === SCREEN.INITIALS) renderInitials();
-    if (state.screen === SCREEN.TITLE) updateSandboxEntry();
     // Quiet the engine drone whenever we leave active play (e.g. pause).
     if (audio.engineOsc && audio.engineGain && audio.ctx) {
       const target = state.screen === SCREEN.PLAYING ? 0.18 : 0;
@@ -930,30 +1003,6 @@
     state.prevScreen = state.screen;
     state.screen = SCREEN.HELP;
     applyScreen();
-  }
-
-  // ============================================================
-  // GTA SANDBOX HANDOFF
-  // ============================================================
-  // Reaching the coast unlocks a standalone 3D crime-sandbox that lives in the
-  // sibling gta-sandbox/ folder. We persist the unlock so the entry also appears
-  // on the title menu for returning players, then hand off via a same-origin
-  // navigation — the relative path resolves locally, when served, and on Pages.
-  const SANDBOX_URL = 'gta-sandbox/#gta';   // land players straight in the on-foot heist (onfoot3d auto-enters on #gta)
-  function sandboxUnlocked() {
-    try { return localStorage.getItem(SANDBOX_KEY) === '1'; } catch (e) { return false; }
-  }
-  function unlockSandbox() {
-    try { localStorage.setItem(SANDBOX_KEY, '1'); } catch (e) {}
-  }
-  function enterSandbox() {
-    unlockSandbox();
-    window.location.href = SANDBOX_URL;
-  }
-  // Reveal the title-menu entry only once the sandbox has been unlocked.
-  function updateSandboxEntry() {
-    const btn = document.getElementById('title-sandbox-btn');
-    if (btn) btn.classList.toggle('hidden', !sandboxUnlocked());
   }
 
   // ============================================================
@@ -1203,7 +1252,6 @@
         case 'resume': show(SCREEN.PLAYING); break;
         case 'quit': audio.stopEngine(); show(SCREEN.TITLE); break;
         case 'continue': afterRun(); break;
-        case 'enter-sandbox': enterSandbox(); break;
         case 'copy-ghost': copyGhostPayload(); break;
         case 'load-ghost': loadGhostFromPayload(); break;
         case 'clear-ghost': clearGhostReplay(); break;
@@ -1313,15 +1361,25 @@
     }
   }
 
-  function renderScoresList() {
+  function renderScoresList(options) {
+    const opts = options || {};
     const ol = document.getElementById('scores-list');
+    const status = document.getElementById('scores-cloud-status');
     state.scores = loadScores();
+    if (!opts.skipCloudRefresh && canUseCloudScores()) refreshCloudScores();
+    if (status) {
+      status.textContent = state.cloudScoreStatus ||
+        (canUseCloudScores()
+          ? 'Vercel syncs finished runs to Neon high scores.'
+          : 'Local high scores are shown here; Vercel stores them in Neon.');
+    }
+    const visibleScores = state.cloudScores && state.cloudScores.length ? state.cloudScores : state.scores;
     ol.innerHTML = '';
-    if (state.scores.length === 0) {
+    if (visibleScores.length === 0) {
       ol.innerHTML = '<li class="empty"><span class="empty">NO SCORES YET — HIT THE ROAD.</span></li>';
       return;
     }
-    state.scores.forEach((s, i) => {
+    visibleScores.forEach((s, i) => {
       const li = document.createElement('li');
       li.innerHTML =
         `<span class="rank">${i + 1}.</span>` +
@@ -1581,7 +1639,7 @@
       const sm = prog * prog * (3 - 2 * prog);              // smoothstep
       const toBaseY = laneBaseYFor(p.laneTarget);
       p.laneBaseY = p.laneFromBaseY + (toBaseY - p.laneFromBaseY) * sm;
-      // bank into the hop (sign: hopping up/far = lean one way)
+      // Lean into the hop (sign: hopping up/far = lean one way)
       p.laneTilt = Math.sin(prog * Math.PI) * 0.12 * Math.sign(toBaseY - p.laneFromBaseY);
       if (p.laneTweenT === 0) {
         p.lane = p.laneTarget;
@@ -3504,7 +3562,6 @@
       audio.playWin();
       unlockAchievement('finish');
       if (state.runStats.hits === 0) unlockAchievement('clean-finish');
-      unlockSandbox();
       show(SCREEN.WIN);
       document.getElementById('win-score').textContent = pad(state.score, 6);
       const rs = state.runStats;

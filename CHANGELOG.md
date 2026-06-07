@@ -2,6 +2,18 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-06 - Final Boss Vercel/Neon hardening
+
+- Removed the retired 3D prototype from the current submission
+  branch and replaced the completion flow with score-saving + Ghost Race sharing.
+- Added Neon-backed cloud high scores via `api/highscores.js`, with local score
+  fallback preserved for GitHub Pages and offline play.
+- Added `qa/highscores-contract.js` and `qa/highscores-client-contract.js` so the
+  database-backed score API and browser sync path are tested without live Vercel
+  credentials.
+- Updated final-assignment documentation and proof steps for Vercel production /
+  preview screenshots, Road Crew signup storage, and game high-score storage.
+
 ## 2026-06-02 — Three-lane system + depth retune (beta) & portfolio wrapper
 
 - **Second decision axis: three lanes.** A/D + ←/→ hop between three lanes with

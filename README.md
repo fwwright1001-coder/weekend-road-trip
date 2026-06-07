@@ -23,17 +23,17 @@ The grad-course brief, mapped to the exact artifact that satisfies each line:
 
 | Rubric expectation | Where it lives |
 |---|---|
-| Playable game + title / gameplay / high-score screens, 3-char initials, persistent | `index.html` screens + `game.js` state machine; scores in `localStorage` (`wrt.highscores.v2`) |
+| Playable game + title / gameplay / high-score screens, 3-char initials, persistent | `index.html` screens + `game.js` state machine; scores in `localStorage` (`wrt.highscores.v2`) and Neon on Vercel |
 | Game feel and polish | 5-layer parallax, particles, screen shake, procedural Web Audio, mute, achievements |
 | Difficulty and fairness | Proven by [`sim/balance-sim.js`](sim/balance-sim.js); rationale in [`BALANCE.md`](BALANCE.md) |
 | Git / PR workflow | Feature-branch-per-change, conventional commits, reviewed PRs into `main` |
 | Documentation | this README + [`ARCHITECTURE.md`](ARCHITECTURE.md), [`BALANCE.md`](BALANCE.md), [`CHANGELOG.md`](CHANGELOG.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| Tests / CI | [`sim/balance-sim.js`](sim/balance-sim.js), [`qa/run-selftests.js`](qa/run-selftests.js), [`qa/smoke-dom.js`](qa/smoke-dom.js), [`qa/waitlist-contract.js`](qa/waitlist-contract.js) |
+| Tests / CI | [`sim/balance-sim.js`](sim/balance-sim.js), [`qa/run-selftests.js`](qa/run-selftests.js), [`qa/smoke-dom.js`](qa/smoke-dom.js), [`qa/waitlist-contract.js`](qa/waitlist-contract.js), [`qa/highscores-contract.js`](qa/highscores-contract.js), [`qa/highscores-client-contract.js`](qa/highscores-client-contract.js) |
 | Edge-case handling | tab-blur `dt` clamp, `localStorage` try/catch fallbacks, focus management |
 | Accessibility | OS-seeded reduce-motion, colorblind palette, ARIA live region, keyboard + gamepad + touch parity |
 | AI vs. personal contribution | [`AI-CONTRIBUTIONS.md`](AI-CONTRIBUTIONS.md) |
-| Beyond spec | finishing the drive unlocks an in-repo Three.js sandbox second mode ([`gta-sandbox/`](gta-sandbox/)) |
-| Vercel + Neon deployment/database | Road Crew signup form in `index.html`, Vercel function [`api/waitlist.js`](api/waitlist.js), Neon schema [`database/schema.sql`](database/schema.sql), setup proof in [`VERCEL-NEON.md`](VERCEL-NEON.md) |
+| Beyond spec | Ghost Race shareable replay JSON, deterministic balance proof, accessibility settings, Vercel API layer |
+| Vercel + Neon deployment/database | Road Crew signup form, cloud high scores, Vercel functions [`api/waitlist.js`](api/waitlist.js) + [`api/highscores.js`](api/highscores.js), Neon schema [`database/schema.sql`](database/schema.sql), setup proof in [`VERCEL-NEON.md`](VERCEL-NEON.md) |
 
 ---
 
@@ -63,12 +63,14 @@ python -m http.server 8090
 
 Then open `http://localhost:8090`.
 
-### Vercel + Neon Road Crew
+### Vercel + Neon
 
-The title screen includes a Road Crew signup form for the Vercel/Neon assignment.
+The title screen includes a Road Crew signup form for the Vercel/Neon assignment,
+and completed runs can sync high scores to Neon when deployed on Vercel.
 On GitHub Pages it stores a local fallback because Pages cannot run serverless
 functions. On Vercel, the same form posts to `api/waitlist.js`, which validates
-and upserts email signups into Neon table `email_signups`.
+and upserts email signups into Neon table `email_signups`. High scores post to
+`api/highscores.js` and are stored in `game_high_scores`.
 
 See [`VERCEL-NEON.md`](VERCEL-NEON.md) for deployment steps, env vars, and
 submission proof screenshots.
@@ -118,12 +120,14 @@ node sim/balance-sim.js
 node qa/run-selftests.js
 node qa/smoke-dom.js
 node qa/waitlist-contract.js
+node qa/highscores-contract.js
+node qa/highscores-client-contract.js
 node qa/launch-contract.js
 npm run stress
 ```
 
 These run on every push/PR via [GitHub Actions](.github/workflows/ci.yml).
-`npm run stress` is an on-demand load check for the Vercel/Neon API path.
+`npm run stress` is an on-demand load check for the Road Crew signup API path.
 
 ## Tech
 

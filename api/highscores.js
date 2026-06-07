@@ -2,14 +2,8 @@
 
 const crypto = require('crypto');
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const ALLOWED_INTERESTS = new Set([
-  'road-crew',
-  'ghost-race',
-  'daily-challenge',
-  'nashville-cruise',
-  'class-demo'
-]);
+const MAX_SCORE = 999999999;
+const LIMIT = 5;
 
 let cachedSql = null;
 let schemaReady = false;
@@ -45,21 +39,18 @@ async function ensureSchema(sql) {
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
       await sql`
-        CREATE TABLE IF NOT EXISTS email_signups (
+        CREATE TABLE IF NOT EXISTS game_high_scores (
           id bigserial PRIMARY KEY,
-          email text NOT NULL UNIQUE,
-          name text,
-          interest text NOT NULL DEFAULT 'road-crew',
+          initials text NOT NULL,
+          score integer NOT NULL,
           source text NOT NULL DEFAULT 'weekend-road-trip',
-          score integer,
           user_agent text,
           ip_hash text,
-          created_at timestamptz NOT NULL DEFAULT now(),
-          updated_at timestamptz NOT NULL DEFAULT now()
+          created_at timestamptz NOT NULL DEFAULT now()
         )
       `;
-      await sql`CREATE INDEX IF NOT EXISTS email_signups_created_at_idx ON email_signups (created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS email_signups_interest_idx ON email_signups (interest)`;
+      await sql`CREATE INDEX IF NOT EXISTS game_high_scores_score_idx ON game_high_scores (score DESC, created_at ASC)`;
+      await sql`CREATE INDEX IF NOT EXISTS game_high_scores_created_at_idx ON game_high_scores (created_at DESC)`;
       schemaReady = true;
     })().catch((err) => {
       schemaReadyPromise = null;
@@ -73,21 +64,22 @@ function clean(value, max) {
   return String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
 }
 
-function isValidEmail(email) {
-  return EMAIL_RE.test(email);
+function normalizeInitials(value) {
+  const letters = clean(value, 12).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return (letters || 'AAA').slice(0, 3).padEnd(3, 'A');
 }
 
-function normalizeSignup(body) {
+function normalizeScore(body) {
   const input = body && typeof body === 'object' ? body : {};
-  const email = clean(input.email, 120).toLowerCase();
-  const name = clean(input.name, 80);
-  const source = clean(input.source, 80) || 'weekend-road-trip';
-  const requestedInterest = clean(input.interest, 40);
-  const interest = ALLOWED_INTERESTS.has(requestedInterest) ? requestedInterest : 'road-crew';
   const numericScore = Number(input.score);
-  const score = Number.isFinite(numericScore) ? Math.max(0, Math.round(numericScore)) : null;
-
-  return { email, name, source, interest, score };
+  const score = Number.isFinite(numericScore)
+    ? Math.max(0, Math.min(MAX_SCORE, Math.floor(numericScore)))
+    : null;
+  return {
+    initials: normalizeInitials(input.initials),
+    score,
+    source: clean(input.source, 80) || 'weekend-road-trip'
+  };
 }
 
 function parseBody(req) {
@@ -110,14 +102,14 @@ function clientIp(req) {
 
 function hashIp(ip) {
   if (!ip) return null;
-  const pepper = process.env.IP_HASH_SECRET || 'weekend-road-trip-road-crew';
+  const pepper = process.env.IP_HASH_SECRET || 'weekend-road-trip-highscores';
   return crypto.createHash('sha256').update(`${pepper}:${ip}`).digest('hex').slice(0, 32);
 }
 
 function rateLimitOk(key) {
   const now = Date.now();
   const windowMs = 60 * 1000;
-  const limit = 8;
+  const limit = 20;
   const bucket = rateBuckets.get(key) || { count: 0, resetAt: now + windowMs };
   if (now > bucket.resetAt) {
     bucket.count = 0;
@@ -143,16 +135,27 @@ function send(res, statusCode, body) {
     else res.statusCode = statusCode;
     return typeof res.end === 'function' ? res.end() : res;
   }
-  if (typeof res.status === 'function') {
-    return res.status(statusCode).json(body);
-  }
+  if (typeof res.status === 'function') return res.status(statusCode).json(body);
   res.statusCode = statusCode;
   return res.end(JSON.stringify(body));
 }
 
-async function countSignups(sql) {
-  const rows = await sql`SELECT COUNT(*)::int AS count FROM email_signups`;
-  return Number(rows[0] && rows[0].count) || 0;
+function formatRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    initials: normalizeInitials(row.initials),
+    score: Math.max(0, Math.floor(Number(row.score) || 0)),
+    date: String(row.created_at || row.date || new Date().toISOString()).slice(0, 10)
+  })).slice(0, LIMIT);
+}
+
+async function topScores(sql) {
+  const rows = await sql`
+    SELECT initials, score, created_at
+    FROM game_high_scores
+    ORDER BY score DESC, created_at ASC
+    LIMIT ${LIMIT}
+  `;
+  return formatRows(rows);
 }
 
 async function handler(req, res) {
@@ -163,16 +166,14 @@ async function handler(req, res) {
     return send(res, 405, { ok: false, error: 'Method not allowed.' });
   }
 
-  let signup = null;
+  let payload = null;
   let ipHash = null;
   if (method === 'POST') {
-    signup = normalizeSignup(parseBody(req));
-    if (!isValidEmail(signup.email)) {
-      return send(res, 400, { ok: false, error: 'A valid email address is required.' });
-    }
-    ipHash = hashIp(clientIp(req)) || hashIp(signup.email);
-    if (!rateLimitOk(ipHash || signup.email)) {
-      return send(res, 429, { ok: false, error: 'Too many signup attempts. Try again shortly.' });
+    payload = normalizeScore(parseBody(req));
+    if (payload.score == null) return send(res, 400, { ok: false, error: 'A numeric score is required.' });
+    ipHash = hashIp(clientIp(req)) || hashIp(payload.initials);
+    if (!rateLimitOk(ipHash || payload.initials)) {
+      return send(res, 429, { ok: false, error: 'Too many score submissions. Try again shortly.' });
     }
   }
 
@@ -190,8 +191,7 @@ async function handler(req, res) {
 
   if (method === 'GET') {
     try {
-      const count = await countSignups(sql);
-      return send(res, 200, { ok: true, count });
+      return send(res, 200, { ok: true, scores: await topScores(sql) });
     } catch (e) {
       return send(res, 500, { ok: false, error: 'Database read failed.' });
     }
@@ -200,20 +200,10 @@ async function handler(req, res) {
   const userAgent = clean(header(req, 'user-agent'), 240);
   try {
     await sql`
-      INSERT INTO email_signups (email, name, interest, source, score, user_agent, ip_hash)
-      VALUES (${signup.email}, ${signup.name || null}, ${signup.interest}, ${signup.source},
-              ${signup.score}, ${userAgent || null}, ${ipHash})
-      ON CONFLICT (email) DO UPDATE SET
-        name = COALESCE(NULLIF(EXCLUDED.name, ''), email_signups.name),
-        interest = EXCLUDED.interest,
-        source = EXCLUDED.source,
-        score = COALESCE(EXCLUDED.score, email_signups.score),
-        user_agent = EXCLUDED.user_agent,
-        ip_hash = EXCLUDED.ip_hash,
-        updated_at = now()
+      INSERT INTO game_high_scores (initials, score, source, user_agent, ip_hash)
+      VALUES (${payload.initials}, ${payload.score}, ${payload.source}, ${userAgent || null}, ${ipHash})
     `;
-    const count = await countSignups(sql);
-    return send(res, 200, { ok: true, email: signup.email, count });
+    return send(res, 200, { ok: true, score: payload.score, initials: payload.initials, scores: await topScores(sql) });
   } catch (e) {
     return send(res, 500, { ok: false, error: 'Database write failed.' });
   }
@@ -223,9 +213,10 @@ module.exports = handler;
 module.exports._test = {
   clean,
   clientIp,
+  formatRows,
   hashIp,
-  isValidEmail,
-  normalizeSignup,
+  normalizeInitials,
+  normalizeScore,
   parseBody,
   rateLimitOk,
   setSqlForTest(sql) {

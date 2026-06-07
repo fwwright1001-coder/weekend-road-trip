@@ -1,10 +1,10 @@
 /* ============================================================
- * Road Crew API contract test
- * Exercises the Vercel/Neon signup layer without requiring DATABASE_URL.
+ * Cloud high-score API contract test
+ * Exercises the Vercel/Neon score layer without requiring DATABASE_URL.
  * ============================================================ */
 'use strict';
 
-const handler = require('../api/waitlist.js');
+const handler = require('../api/highscores.js');
 const api = handler._test;
 
 const checks = [];
@@ -38,48 +38,42 @@ async function call(req) {
 
 function makeFakeSql() {
   const calls = [];
-  let count = 0;
+  const rows = [];
   const sql = async (strings, ...values) => {
     const text = Array.from(strings).join('?');
     calls.push({ text, values });
-    if (/INSERT INTO email_signups/.test(text)) count = Math.max(1, count);
-    if (/SELECT COUNT/.test(text)) return [{ count }];
+    if (/INSERT INTO game_high_scores/.test(text)) {
+      rows.push({ initials: values[0], score: values[1], created_at: '2026-06-06T00:00:00.000Z' });
+    }
+    if (/SELECT initials, score, created_at/.test(text)) {
+      return rows.slice().sort((a, b) => b.score - a.score).slice(0, 5);
+    }
     return [];
   };
   return { calls, sql };
 }
 
 (async () => {
-  const normalized = api.normalizeSignup({
-    email: '  FORREST@Example.COM ',
-    name: '  Forrest   Wright  ',
-    interest: 'nashville-cruise',
-    source: ' class demo ',
-    score: '42.4'
-  });
-  check('normalizes email to lowercase', normalized.email === 'forrest@example.com', normalized.email);
-  check('collapses name whitespace', normalized.name === 'Forrest Wright', normalized.name);
-  check('keeps allowed interest', normalized.interest === 'nashville-cruise', normalized.interest);
-  check('rounds numeric score', normalized.score === 42, String(normalized.score));
-
-  const fallback = api.normalizeSignup({ email: 'a@b.com', interest: 'bogus' });
-  check('unknown interest falls back safely', fallback.interest === 'road-crew', fallback.interest);
-  check('valid email accepted', api.isValidEmail('driver@example.com'));
-  check('invalid email rejected', !api.isValidEmail('driver.example.com'));
+  check('normalizes initials', api.normalizeInitials(' f-w ') === 'FWA', api.normalizeInitials(' f-w '));
+  const normalized = api.normalizeScore({ initials: ' fw ', score: '1234.8', source: ' class demo ' });
+  check('normalizes score initials', normalized.initials === 'FWA', normalized.initials);
+  check('floors numeric score', normalized.score === 1234, String(normalized.score));
+  check('keeps source', normalized.source === 'class demo', normalized.source);
+  check('bad score becomes null', api.normalizeScore({ score: 'nope' }).score === null);
 
   const ip = api.clientIp({ headers: { 'x-forwarded-for': '203.0.113.10, 10.0.0.2' } });
   const hash = api.hashIp(ip);
   check('client IP reads first forwarded address', ip === '203.0.113.10', ip);
   check('IP hash does not expose raw IP', typeof hash === 'string' && hash.length === 32 && !hash.includes('203'), hash);
 
-  const parsed = api.parseBody({ body: '{"email":"road@example.com"}' });
-  check('parses JSON string body', parsed.email === 'road@example.com', JSON.stringify(parsed));
+  const parsed = api.parseBody({ body: '{"initials":"FW","score":9001}' });
+  check('parses JSON string body', parsed.score === 9001, JSON.stringify(parsed));
   check('bad JSON body becomes empty object', Object.keys(api.parseBody({ body: '{bad' })).length === 0);
 
   const methodRes = await call({ method: 'PUT' });
   check('unsupported methods return 405', methodRes.statusCode === 405, String(methodRes.statusCode));
 
-  const invalidPostRes = await call({ method: 'POST', body: { email: 'bad-email' } });
+  const invalidPostRes = await call({ method: 'POST', body: { initials: 'FW', score: 'bad' } });
   check('invalid POST returns 400 before database work', invalidPostRes.statusCode === 400, String(invalidPostRes.statusCode));
 
   const fake = makeFakeSql();
@@ -91,18 +85,20 @@ function makeFakeSql() {
       'user-agent': 'contract-test'
     },
     body: {
-      email: ' Road.Driver@Example.com ',
-      name: ' Road   Driver ',
-      interest: 'road-crew',
+      initials: 'FW',
+      score: 9001,
       source: 'contract'
     }
   });
   check('successful POST returns 200', successRes.statusCode === 200, String(successRes.statusCode));
-  check('successful POST normalizes returned email', successRes.body.email === 'road.driver@example.com', JSON.stringify(successRes.body));
-  check('successful POST returns live count', successRes.body.count === 1, JSON.stringify(successRes.body));
-  check('schema bootstrap runs before write', fake.calls.some((c) => /CREATE TABLE IF NOT EXISTS email_signups/.test(c.text)));
-  check('insert uses email_signups table', fake.calls.some((c) => /INSERT INTO email_signups/.test(c.text)));
-  check('insert values include normalized email', fake.calls.some((c) => c.values.includes('road.driver@example.com')));
+  check('successful POST normalizes returned initials', successRes.body.initials === 'FWA', JSON.stringify(successRes.body));
+  check('successful POST returns top scores', Array.isArray(successRes.body.scores) && successRes.body.scores[0].score === 9001, JSON.stringify(successRes.body));
+  check('schema bootstrap runs before write', fake.calls.some((c) => /CREATE TABLE IF NOT EXISTS game_high_scores/.test(c.text)));
+  check('insert uses game_high_scores table', fake.calls.some((c) => /INSERT INTO game_high_scores/.test(c.text)));
+  check('insert values include normalized initials', fake.calls.some((c) => c.values.includes('FWA')));
+
+  const getRes = await call({ method: 'GET' });
+  check('GET returns high-score list', getRes.statusCode === 200 && getRes.body.scores.length === 1, JSON.stringify(getRes.body));
   api.setSqlForTest(null);
 
   const savedEnv = {
@@ -125,7 +121,7 @@ function makeFakeSql() {
   for (const c of checks) {
     console.log((c.pass ? 'PASS  ' : 'FAIL  ') + c.name + (c.detail ? '  - ' + c.detail : ''));
   }
-  console.log('\nRoad Crew API contract: ' + (checks.length - fail) + '/' + checks.length + ' passed.');
+  console.log('\nCloud high-score API contract: ' + (checks.length - fail) + '/' + checks.length + ' passed.');
   process.exit(fail === 0 ? 0 : 1);
 })().catch((err) => {
   console.error(err);

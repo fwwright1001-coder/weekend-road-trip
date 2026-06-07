@@ -2,12 +2,12 @@
   "name": "weekend-road-trip",
   "version": "1.0.0",
   "private": true,
-  "description": "Weekend Road Trip browser game with a Vercel/Neon Road Crew signup layer.",
+  "description": "Weekend Road Trip browser game with Vercel/Neon Road Crew signup and cloud high scores.",
   "engines": {
     "node": "24.x"
   },
   "scripts": {
-    "test": "node sim/balance-sim.js && node qa/run-selftests.js && node qa/smoke-dom.js && node qa/waitlist-contract.js && node qa/launch-contract.js",
+    "test": "node sim/balance-sim.js && node qa/run-selftests.js && node qa/smoke-dom.js && node qa/waitlist-contract.js && node qa/highscores-contract.js && node qa/highscores-client-contract.js && node qa/launch-contract.js",
     "stress": "node qa/waitlist-stress.js"
   },
   "dependencies": {
