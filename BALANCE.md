@@ -78,11 +78,12 @@ finish ("dry at ~96%").
 guarantees a clearable gap and naturally thins dense legs instead of queuing an
 unreachable wall. Collectibles are exempt, so the lane still feels full.
 
-**Why these numbers are safe:** a full jump spans **451 px at MAX_SPEED** (11.0,
-widened from 9.5 in the auto-throttle retune — 660 px/s). Every leg's *effective*
-gap `max(minBlockingGap, MIN_GAP_TIME × effSpeed)` exceeds the per-leg jump span,
-so the player can always complete a jump and be grounded before the next blocker —
-even in the worst jump→duck transition.
+**Why these numbers are safe:** a full jump spans **369 px at MAX_SPEED** (9.0 —
+540 px/s; trimmed from 11.0 in the 2026-06-09 feel rework because the world read
+as jarringly fast). Every leg's *effective* gap `max(minBlockingGap,
+MIN_GAP_TIME × effSpeed)` exceeds the per-leg jump span, so the player can always
+complete a jump and be grounded before the next blocker — even in the worst
+jump→duck transition.
 
 The sim proves this **constructively** with real pixel-collision detection: it builds the
 tightest *legal* blocker wall per leg (blockers exactly `minBlockingGap` apart,
@@ -90,10 +91,10 @@ alternating pothole↔sign↔cone to force the hardest transitions), drives at `
 and runs an optimal-but-human controller:
 
 ```
-DOWNTOWN   minGap 660 px (=1.000s @max, vs 0.683s air)  collisions: 0  CLEAR
-MUSIC ROW  minGap 640 px (=0.866s @max, vs 0.683s air)  collisions: 0  CLEAR
-CUMBERLAND minGap 640 px (=0.758s @max, vs 0.683s air)  collisions: 0  CLEAR
-BROADWAY   minGap 689 px (=0.720s @max, vs 0.683s air)  collisions: 0  CLEAR
+DOWNTOWN   minGap 660 px (=1.222s @max, vs 0.683s air)  collisions: 0  CLEAR
+MUSIC ROW  minGap 640 px (=1.058s @max, vs 0.683s air)  collisions: 0  CLEAR
+CUMBERLAND minGap 640 px (=0.926s @max, vs 0.683s air)  collisions: 0  CLEAR
+BROADWAY   minGap 620 px (=0.792s @max, vs 0.683s air)  collisions: 0  CLEAR
 => PROVEN: no unavoidable back-to-back blockers on any leg.
 ```
 
@@ -101,7 +102,8 @@ BROADWAY   minGap 689 px (=0.720s @max, vs 0.683s air)  collisions: 0  CLEAR
 
 ## 4. Fuel economy — clean run finishes, careless run dries
 
-Fuel drain is time-based (`1.4/s`), so the real killer was *forced* hits from clustering,
+Fuel drain is time-based (`1.15/s` — trimmed from 1.4 with the 2026-06-09 speed cut so the
+~22% longer trip time keeps total time-drain roughly constant), so the real killer was *forced* hits from clustering,
 not raw economy. De-clustering (§3) is the root fix. But fixing the forced hits exposed a
 second problem that an honest simulation surfaced (see §8): **pit stops auto-refuel and
 are collected just by driving**, so once the unfair wall was gone, *nobody* could run dry
@@ -123,32 +125,32 @@ Illustrative single-seed runs (pit stops modelled):
 
 | Run | Outcome | Fuel left | Min fuel | Blockers hit | Cans |
 |---|---|---|---|---|---|
-| **Skilled** (~92% speed, 0 hits, 85% cans) | **FINISH** | 95.1 | 90.6 | 0 / 30 | 4 / 4 |
-| **Moderate** (~80% speed, ~15% hit, 60% cans) | **FINISH** | 95.1 | 70.6 | 3 / 30 | 1 / 4 |
-| **Careless** (~70% hit, 25% cans) | **DRY @ 53%** | 0.0 | −6.9 | 7 / 13 | 1 / 2 |
+| **Skilled** (~92% speed, 0 hits, 85% cans) | **FINISH** | 99.3 | 88.8 | 0 / 34 | 6 / 6 |
+| **Moderate** (~80% speed, ~15% hit, 60% cans) | **FINISH** | 79.3 | 68.8 | 5 / 34 | 4 / 6 |
+| **Careless** (~70% hit, 25% cans) | **DRY @ 50%** | 0.0 | −4.6 | 7 / 14 | 1 / 2 |
 
 Because one seed proves nothing, the sim sweeps **500 seeds** per policy and asserts on
 aggregate rates (not a single lucky run):
 
 | Policy | Finish | Dry | Avg fuel left | Avg min fuel |
 |---|---|---|---|---|
-| Skilled | **100%** | 0% | 97.4 | 91.3 |
-| Moderate | **99.8%** | 0.2% | 89.1 | 63.4 |
-| Careless | 2.4% | **97.6%** | 38.8 | −4.8 |
+| Skilled | **100%** | 0% | 97.6 | 91.6 |
+| Moderate | **100%** | 0% | 88.3 | 62.7 |
+| Careless | 1.2% | **98.8%** | 35.7 | −5.0 |
 
 And the dry-rate scales smoothly with how careless you are — fuel pressure is proportional
 to mistakes, not a cliff (grab fixed at 25%):
 
 | Careless hit-rate | 40% | 50% | 60% | 70% | 80% |
 |---|---|---|---|---|---|
-| Runs dry | 40% | 65% | 88% | **98%** | 99.8% |
+| Runs dry | 49% | 75% | 92% | **98.8%** | 100% |
 
 The careless-dry result is honestly a **two-lever** property — it needs frequent hits *and*
 low fuel-collection. Holding hits at 70% and varying how many cans the player grabs:
 
 | Careless fuel-grab | 10% | 25% | 40% | 60% |
 |---|---|---|---|---|
-| Runs dry | 99% | **96%** | 92% | 87% |
+| Runs dry | 99.6% | **98%** | 94.6% | 89.2% |
 
 Assuming a careless player grabs few cans (≈25%) is realistic, not cherry-picked: a careless
 run dies early and never reaches the fuel-rich BROADWAY leg, so it can't self-rescue.
