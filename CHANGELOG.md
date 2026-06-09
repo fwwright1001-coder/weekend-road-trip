@@ -2,6 +2,27 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-07 - Visual QA road/parallax cleanup
+
+- Unified every asphalt-painted detail behind `ROAD_SCROLL = 1.0`, so road
+  grain, cracks, reflections, light pools, seams, and lane dashes move as one
+  coherent road sheet.
+- Rebuilt background depth as a clean far-to-near parallax ramp with independent
+  cloud, mountain, skyline, mid-scenery, and geo-sign constants.
+- Turned off map-like coordinate placards and non-gameplay wayfinding text by
+  default while preserving landmark shapes and functional gameplay signs.
+- Added a self-test that locks the road/parallax/label constants.
+
+## 2026-06-07 - Seamless chase camera prototype
+
+- Added a `T` camera toggle between the original side view and a behind-the-car
+  chase view.
+- Built the chase view as a renderer-only projection of the same live obstacles,
+  collectibles, pit stops, semis, ghost position, lane state, and collision
+  model so gameplay remains one shared level.
+- Added a self-test that verifies the camera toggle is reversible and does not
+  replace the live physics-owned obstacle/collectible arrays.
+
 ## 2026-06-07 - Nashville geo art polish + stability audit
 
 - Added approximate route anchors and on-screen geo plates for Nashville

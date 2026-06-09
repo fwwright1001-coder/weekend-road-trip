@@ -113,6 +113,8 @@
   const MAX_SCORES = 5;
   const GHOST_SAMPLE_STEP = 0.08;
   const GHOST_DISTANCE_SCALE = 0.28;
+  const CAMERA_SIDE = 'side';
+  const CAMERA_CHASE = 'chase';
 
   // Per-run player-car liveries. startRun() picks one at random so every drive
   // looks a little different; red stays in the pool so "Marty's red GT"
@@ -438,6 +440,7 @@
     fuelLow: false,
     fuelLowJustEntered: false,
     debug: false,            // hidden overlay toggle (only flips when DEBUG === true)
+    cameraMode: CAMERA_SIDE, // renderer only: physics/spawn/collision stay shared
     flashTimer: 0,
     shakeT: 0,
     shakeMag: 0,
@@ -755,6 +758,7 @@
   // single source of truth. The legacy wrt.muted.v1 key is READ once as a
   // migration seed (see loadSettings) and never written by the current code.
   const AUDIO_BASE_GAIN = 0.5;   // master level at volume=1.0, unmuted
+  const ENGINE_PLAY_GAIN = 0.144; // 20% quieter than the old 0.18 default drone
   const audio = {
     ctx: null,
     master: null,
@@ -817,7 +821,7 @@
       this.engineGain = gain;
       this.engineFilt = filt;
       // ramp in
-      gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.4);
+      gain.gain.linearRampToValueAtTime(ENGINE_PLAY_GAIN, ctx.currentTime + 0.4);
     },
     stopEngine() {
       if (!this.engineOsc) return;
@@ -1026,7 +1030,7 @@
     if (state.screen === SCREEN.INITIALS) renderInitials();
     // Quiet the engine drone whenever we leave active play (e.g. pause).
     if (audio.engineOsc && audio.engineGain && audio.ctx) {
-      const target = state.screen === SCREEN.PLAYING ? 0.18 : 0;
+      const target = state.screen === SCREEN.PLAYING ? ENGINE_PLAY_GAIN : 0;
       audio.engineGain.gain.setTargetAtTime(target, audio.ctx.currentTime, 0.05);
     }
     updateGhostTitleStatus();
@@ -1082,6 +1086,10 @@
     // This matches the gamepad edge-trigger and enforces one-hop-per-press.
     if (e.repeat) return;
     if (e.code === 'KeyM') { audio.init(); audio.toggle(); return; }
+    if (e.code === 'KeyT' && (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED)) {
+      toggleCameraMode();
+      return;
+    }
     // Hidden debug overlay — only reachable in DEBUG builds.
     if (e.code === 'Backquote') { if (DEBUG) state.debug = !state.debug; return; }
     // A focused button activates itself on Enter (native click); don't also run
@@ -1203,6 +1211,11 @@
         }
         break;
     }
+  }
+
+  function toggleCameraMode() {
+    state.cameraMode = state.cameraMode === CAMERA_CHASE ? CAMERA_SIDE : CAMERA_CHASE;
+    announce(state.cameraMode === CAMERA_CHASE ? 'Chase camera' : 'Side camera');
   }
 
   function handleInitialsKey(code) {
@@ -2476,6 +2489,28 @@
   function pathModulo(value, period) {
     return ((value % period) + period) % period;
   }
+  const CLOUD_PARALLAX = 0.04;
+  const MOUNTAIN_PARALLAX = 0.08;
+  const SKYLINE_PARALLAX = 0.12;
+  const MID_SCENERY_PARALLAX = 0.18;
+  const GEO_SIGN_PARALLAX = 0.22;
+  const ROAD_SCROLL = 1.0; // every painted asphalt detail moves with obstacles
+  const SHOW_GEO_LABELS = false; // remove map-like place + coordinate placards
+  const SHOW_WAYFINDING = false; // remove non-gameplay text labels from scenery
+  const CHASE_HORIZON_Y = 188;
+  const CHASE_BOTTOM_Y = 532;
+  const CHASE_DRAW_AHEAD = 930;
+  const CHASE_CENTER_X = W / 2;
+
+  function fillQuad(x1, y1, x2, y2, x3, y3, x4, y4) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.lineTo(x3, y3);
+    ctx.lineTo(x4, y4);
+    ctx.closePath();
+    ctx.fill();
+  }
   function geoAnchorsForBiome(name) {
     return NASHVILLE_GEO.filter((p) => p.biome === name);
   }
@@ -2522,7 +2557,7 @@
     ctx.font = `bold ${fontSize || 11}px "JetBrains Mono", Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+    if (SHOW_WAYFINDING && label) ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
     ctx.restore();
     ctx.textAlign = 'left';
   }
@@ -2536,8 +2571,39 @@
     ctx.fill();
   }
   function drawRoadSign(x, y, w, h, color, label) {
-    ctx.fillStyle = '#4f5660';
-    ctx.fillRect(x + w / 2 - 2, y + h, 4, GROUND_Y - (y + h));
+    const postH = GROUND_Y - (y + h);
+    const postXs = w > 68 ? [x + w * 0.26, x + w * 0.74] : [x + w / 2];
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.26)';
+    fillQuad(x + 6, y + h + 4, x + w + 9, y + h + 4, x + w + 22, GROUND_Y + 2, x + 17, GROUND_Y + 2);
+    for (const px of postXs) {
+      const postW = 5;
+      const pg = ctx.createLinearGradient(px - postW / 2, 0, px + postW / 2, 0);
+      pg.addColorStop(0, '#343941');
+      pg.addColorStop(0.5, '#707883');
+      pg.addColorStop(1, '#252a31');
+      ctx.fillStyle = pg;
+      ctx.fillRect(px - postW / 2, y + h - 1, postW, postH + 1);
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.fillRect(px - postW / 2 + 1, y + h + 3, 1, Math.max(8, postH - 8));
+    }
+    if (postXs.length > 1) {
+      ctx.strokeStyle = 'rgba(56,62,70,0.78)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(postXs[0], y + h + 10);
+      ctx.lineTo(postXs[1], GROUND_Y - 12);
+      ctx.moveTo(postXs[1], y + h + 10);
+      ctx.lineTo(postXs[0], GROUND_Y - 12);
+      ctx.stroke();
+    }
+    ctx.fillStyle = safeShade(color, -0.42);
+    roundRect(ctx, x + 5, y + 5, w, h, 3);
+    ctx.fill();
+    ctx.fillStyle = safeShade(color, -0.20);
+    fillQuad(x + w, y + 4, x + w + 7, y + 8, x + w + 7, y + h + 5, x + w, y + h);
+    ctx.fillStyle = safeShade(color, 0.10);
+    fillQuad(x + 4, y, x + w, y, x + w + 7, y + 5, x + 10, y + 5);
     ctx.fillStyle = color;
     roundRect(ctx, x, y, w, h, 3);
     ctx.fill();
@@ -2545,17 +2611,34 @@
     ctx.lineWidth = 1.5;
     roundRect(ctx, x + 3, y + 3, w - 6, h - 6, 2);
     ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 9px "JetBrains Mono", Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
-    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.68)';
+    for (const bx of [x + 8, x + w - 8]) {
+      ctx.beginPath();
+      ctx.arc(bx, y + 7, 1.6, 0, Math.PI * 2);
+      ctx.arc(bx, y + h - 7, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (SHOW_WAYFINDING && label) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 9px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
   }
   function drawGeoPlate(anchor, x, y, compact) {
     const w = compact ? 118 : 178;
     const h = compact ? 24 : 38;
     ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.26)';
+    fillQuad(x + 5, y + h + 5, x + w + 5, y + h + 5, x + w + 19, y + h + 16, x + 18, y + h + 16);
+    ctx.fillStyle = 'rgba(3, 9, 13, 0.92)';
+    roundRect(ctx, x + 4, y + 4, w, h, 4);
+    ctx.fill();
+    ctx.fillStyle = '#143743';
+    fillQuad(x + w, y + 3, x + w + 7, y + 7, x + w + 7, y + h + 5, x + w, y + h);
     ctx.fillStyle = 'rgba(9, 18, 22, 0.86)';
     roundRect(ctx, x, y, w, h, 4);
     ctx.fill();
@@ -2574,19 +2657,34 @@
     ctx.restore();
   }
   function drawGeoAnchorMarkers(biome) {
+    if (!SHOW_GEO_LABELS) return;
     const anchors = geoAnchorsForBiome(biome.name);
     for (const a of anchors) {
-      const x = routeAnchorX(a, 0.38, PLAYER_X + 360);
+      const x = routeAnchorX(a, GEO_SIGN_PARALLAX, PLAYER_X + 360);
       if (x < -210 || x > W + 90) continue;
+      const y = GROUND_Y - 116;
+      ctx.save();
+      ctx.fillStyle = '#3d444d';
+      ctx.fillRect(x + 31, y + 24, 4, 92);
+      ctx.fillRect(x + 84, y + 24, 4, 92);
+      ctx.strokeStyle = 'rgba(30,36,42,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + 33, y + 38);
+      ctx.lineTo(x + 86, y + 86);
+      ctx.moveTo(x + 86, y + 38);
+      ctx.lineTo(x + 33, y + 86);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(0,0,0,0.24)';
+      fillQuad(x + 28, GROUND_Y - 5, x + 92, GROUND_Y - 5, x + 108, GROUND_Y + 3, x + 42, GROUND_Y + 3);
+      ctx.restore();
       drawGeoPlate(a, x, GROUND_Y - 116, true);
-      ctx.fillStyle = '#5f6670';
-      ctx.fillRect(x + 56, GROUND_Y - 92, 4, 92);
     }
   }
 
   function drawClouds(biome) {
     // Cloud layer — slow parallax (0.05x)
-    const off = state.distance * 0.05;
+    const off = state.distance * CLOUD_PARALLAX;
     ctx.save();
     ctx.shadowColor = biome.timeOfDay === 'sunset'
       ? 'rgba(126, 54, 80, 0.22)'
@@ -2653,12 +2751,12 @@
   }
 
   function drawFarMountains(biome) {
-    const off = state.distance * 0.12;
+    const off = state.distance * MOUNTAIN_PARALLAX;
     const hill = biomeColor(biome, 'mountainColor');
     drawRollingHills(off * 0.55, GROUND_Y - 92, 42, safeShade(hill, 0.12), 0.68, 300);
     drawRollingHills(off, GROUND_Y - 58, 34, hill, 0.82, 240);
     if (biome.name === 'DOWNTOWN' || biome.name === 'CUMBERLAND' || biome.name === 'BROADWAY') {
-      drawDistantSkyline(off * 0.5, biome);
+      drawDistantSkyline(state.distance * SKYLINE_PARALLAX, biome);
     }
   }
 
@@ -2703,10 +2801,11 @@
     }
   }
   function drawMidScenery(biome) {
-    // Biome-specific mid layer (0.32x parallax). Through a leg transition, cross-
+    // Biome-specific mid layer. Kept slow enough to read as background instead
+    // of a gameplay obstacle layer. Through a leg transition, cross-
     // fade the current biome out and the next in, so the scenery dissolves
     // smoothly instead of popping at the boundary.
-    const off = state.distance * 0.32;
+    const off = state.distance * MID_SCENERY_PARALLAX;
     const bl = biomeBlend();
     if (bl > 0.001) {
       ctx.save(); ctx.globalAlpha = 1 - bl; drawMidFor(biome.name, off); ctx.restore();
@@ -2831,6 +2930,7 @@
     for (let i = 0; i < 10; i++) ctx.fillRect(x + 8 + i * 18, baseY - 4, 10, 2);
   }
   function drawDowntownGeoGrid(origin, baseY) {
+    if (!SHOW_WAYFINDING) return;
     const signs = [
       { x: origin + 64, y: baseY - 132, w: 88, text: 'RYMAN / 5TH' },
       { x: origin + 330, y: baseY - 250, w: 96, text: '333 COMMERCE' },
@@ -2907,11 +3007,13 @@
     ctx.arc(x + 96, baseY - 64, 3, 0, Math.PI * 2);
     ctx.fill();
     drawLampGlow(x + 96, baseY - 64, 22, '#f5d76e', 0.18);
-    ctx.fillStyle = '#d7c7a2';
-    ctx.font = '10px JetBrains Mono, Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(label, x + 75, baseY - 88);
-    ctx.textAlign = 'left';
+    if (SHOW_WAYFINDING) {
+      ctx.fillStyle = '#d7c7a2';
+      ctx.font = '10px JetBrains Mono, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, x + 75, baseY - 88);
+      ctx.textAlign = 'left';
+    }
   }
   function drawMusicRowTrees(x, baseY) {
     ctx.fillStyle = '#5b3b24';
@@ -3014,6 +3116,7 @@
     }
   }
   function drawCumberlandBankLabels(waterTop) {
+    if (!SHOW_WAYFINDING) return;
     ctx.save();
     ctx.fillStyle = 'rgba(10,20,28,0.55)';
     roundRect(ctx, 42, waterTop + 8, 126, 18, 4);
@@ -3175,7 +3278,9 @@
     ctx.fillStyle = color;
     ctx.font = '11px JetBrains Mono, Consolas, monospace';
     ctx.textAlign = 'center';
-    for (let i = 0; i < label.length; i++) ctx.fillText(label[i], x + 22, y + 26 + i * 24);
+    if (SHOW_WAYFINDING) {
+      for (let i = 0; i < label.length; i++) ctx.fillText(label[i], x + 22, y + 26 + i * 24);
+    }
     ctx.restore();
     ctx.textAlign = 'left';
   }
@@ -3208,6 +3313,7 @@
     }
   }
   function drawLowerBroadwayAvenueMarkers(x, baseY) {
+    if (!SHOW_WAYFINDING) return;
     const marks = [
       { dx: -90, label: '5TH AVE' },
       { dx: 82, label: '4TH' },
@@ -3339,7 +3445,7 @@
   }
 
   function drawAsphaltTexture(roadTop, roadBot, biome) {
-    const scroll = state.distance * 0.9;
+    const scroll = state.distance * ROAD_SCROLL;
     ctx.save();
     ctx.globalAlpha = 0.18;
     for (let i = 0; i < 85; i++) {
@@ -3355,7 +3461,7 @@
     ctx.lineWidth = 2;
     for (let i = 0; i < 5; i++) {
       const y = roadTop + 20 + i * ((roadBot - roadTop - 40) / 4);
-      const x = pathModulo(i * 260 - state.distance * 0.55, W + 340) - 170;
+      const x = pathModulo(i * 260 - state.distance * ROAD_SCROLL, W + 340) - 170;
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.bezierCurveTo(x + 70, y - 8, x + 130, y + 9, x + 210, y - 2);
@@ -3368,7 +3474,7 @@
     const colors = ['#ff4fb8', '#64d7ff', '#f5d76e', '#7ee27e'];
     ctx.globalAlpha = 0.20;
     for (let i = 0; i < 14; i++) {
-      const x = pathModulo(i * 84 - state.distance * 1.15, W + 120) - 60;
+      const x = pathModulo(i * 84 - state.distance * ROAD_SCROLL, W + 120) - 60;
       const y = roadTop + 12 + (i % 5) * ((roadBot - roadTop - 26) / 5);
       const g = ctx.createLinearGradient(x, y, x + 76, y);
       g.addColorStop(0, 'rgba(255,255,255,0)');
@@ -3386,7 +3492,7 @@
       : [warm ? '#f5d76e' : '#d9f1ff'];
     ctx.save();
     for (let i = 0; i < 7; i++) {
-      const x = pathModulo(i * 170 - state.distance * 0.72, W + 220) - 110;
+      const x = pathModulo(i * 170 - state.distance * ROAD_SCROLL, W + 220) - 110;
       const y = roadTop + 24 + (i % 3) * ((roadBot - roadTop - 48) / 2);
       const color = colors[i % colors.length];
       const g = ctx.createRadialGradient(x, y, 4, x, y, 86);
@@ -3400,8 +3506,52 @@
     ctx.globalAlpha = 0.18;
     ctx.fillStyle = '#000';
     for (let i = 0; i < 5; i++) {
-      const x = pathModulo(i * 230 - state.distance * 0.64, W + 260) - 130;
+      const x = pathModulo(i * 230 - state.distance * ROAD_SCROLL, W + 260) - 130;
       ctx.fillRect(x, roadTop + 10, 70, roadBot - roadTop - 20);
+    }
+    ctx.restore();
+  }
+  function roadSkewAt(y, roadTop, roadBot) {
+    const t = Math.max(0, Math.min(1, (y - roadTop) / Math.max(1, roadBot - roadTop)));
+    return 4 + t * 12;
+  }
+  function drawRoadDash(x, y, w, h, roadTop, roadBot) {
+    const skew = roadSkewAt(y, roadTop, roadBot);
+    fillQuad(x, y, x + w, y, x + w + skew, y + h, x + skew, y + h);
+  }
+  function drawRoadGeometry(roadTop, roadBot, biome) {
+    const roadH = roadBot - roadTop;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.24)';
+    ctx.fillRect(0, roadBot - 9, W, 9);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(0, roadTop + 3, W, 3);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(0, roadTop + roadH * 0.34, W, 2);
+    ctx.fillRect(0, roadTop + roadH * 0.67, W, 2);
+
+    ctx.strokeStyle = biome.name === 'BROADWAY'
+      ? 'rgba(255, 210, 245, 0.18)'
+      : 'rgba(0,0,0,0.28)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 12; i++) {
+      const x = pathModulo(i * 112 - state.distance * ROAD_SCROLL, W + 160) - 80;
+      ctx.beginPath();
+      ctx.moveTo(x, roadTop + 4);
+      ctx.lineTo(x + 34, roadBot - 8);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = 'rgba(245,215,110,0.34)';
+    for (let x = -pathModulo(state.distance * ROAD_SCROLL, 52); x < W + 60; x += 52) {
+      drawRoadDash(x, roadTop + 7, 18, 3, roadTop, roadBot);
+      drawRoadDash(x + 12, roadBot - 13, 22, 3, roadTop, roadBot);
+    }
+
+    ctx.fillStyle = 'rgba(0,0,0,0.26)';
+    for (let i = 0; i < 10; i++) {
+      const x = pathModulo(i * 126 - state.distance * ROAD_SCROLL, W + 180) - 90;
+      fillQuad(x, roadTop - 4, x + 54, roadTop - 4, x + 64, roadTop + 3, x + 8, roadTop + 3);
     }
     ctx.restore();
   }
@@ -3418,15 +3568,11 @@
     ctx.fillRect(0, roadTop, W, roadBot - roadTop);
     drawAsphaltTexture(roadTop, roadBot, biome);
     drawStreetLightPools(roadTop, roadBot, biome);
+    drawRoadGeometry(roadTop, roadBot, biome);
     // Edge highlights
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(0, roadTop, W, 2);
     ctx.fillRect(0, roadBot - 2, W, 2);
-    ctx.fillStyle = 'rgba(245,215,110,0.45)';
-    for (let x = -pathModulo(state.distance, 36); x < W; x += 36) {
-      ctx.fillRect(x, roadTop + 5, 18, 2);
-      ctx.fillRect(x + 10, roadBot - 7, 18, 2);
-    }
     // Dashed lane dividers (between the 3 lanes), scrolling with distance
     ctx.fillStyle = biomeColor(biome, 'dashColor');
     const dashW = 52, gap = 32, cycle = dashW + gap;
@@ -3436,7 +3582,7 @@
       (laneBaseYFor(1) + laneBaseYFor(0)) / 2 + CAR_FOOT_OFFSET
     ];
     for (const dy of dividers) {
-      for (let x = -dashOff; x < W; x += cycle) ctx.fillRect(x, dy, dashW, 4);
+      for (let x = -dashOff; x < W; x += cycle) drawRoadDash(x, dy, dashW, 4, roadTop, roadBot);
     }
     // Depth shading: dim the far (top) lane, brighten the near (bottom) lane
     const sh = ctx.createLinearGradient(0, roadTop, 0, roadBot);
@@ -3457,6 +3603,449 @@
   // ============================================================
   // RENDERING — entities
   // ============================================================
+  function chaseClamp01(v) {
+    return Math.max(0, Math.min(1, v));
+  }
+  function chaseMix(a, b, t) {
+    return a + (b - a) * t;
+  }
+  function chaseDepthT(ahead) {
+    const raw = chaseClamp01(1 - ahead / CHASE_DRAW_AHEAD);
+    return Math.pow(raw, 1.55);
+  }
+  function chaseLaneValue() {
+    const p = state.player;
+    if (p.laneTweenT > 0) {
+      const prog = 1 - p.laneTweenT / LANE_TWEEN_DUR;
+      const eased = 0.5 - Math.cos(chaseClamp01(prog) * Math.PI) * 0.5;
+      return p.lane + (p.laneTarget - p.lane) * eased;
+    }
+    return p.lane;
+  }
+  function chaseProject(ahead, lane, height) {
+    if (ahead < -60 || ahead > CHASE_DRAW_AHEAD) return null;
+    const t = chaseDepthT(Math.max(0, ahead));
+    const roadHalf = chaseMix(74, 430, t);
+    const laneSpread = roadHalf * 0.43;
+    const groundY = chaseMix(CHASE_HORIZON_Y, CHASE_BOTTOM_Y, t);
+    const scale = chaseMix(0.18, 2.05, t);
+    return {
+      x: CHASE_CENTER_X + (lane - 1) * laneSpread,
+      y: groundY - (height || 0) * scale * 0.48,
+      groundY,
+      roadHalf,
+      laneSpread,
+      scale,
+      t
+    };
+  }
+  function chaseAheadOf(obj) {
+    return (obj.x || 0) - PLAYER_X;
+  }
+  function drawChaseRoad(biome) {
+    const horizonHalf = 76;
+    const bottomHalf = 442;
+    ctx.save();
+    ctx.fillStyle = biomeColor(biome, 'grass');
+    fillQuad(0, CHASE_HORIZON_Y - 8, W, CHASE_HORIZON_Y - 8, W, H, 0, H);
+
+    const roadG = ctx.createLinearGradient(0, CHASE_HORIZON_Y, 0, H);
+    roadG.addColorStop(0, safeShade(biomeColor(biome, 'road'), 0.22));
+    roadG.addColorStop(0.42, biomeColor(biome, 'road'));
+    roadG.addColorStop(1, safeShade(biomeColor(biome, 'road'), -0.26));
+    ctx.fillStyle = roadG;
+    fillQuad(
+      CHASE_CENTER_X - horizonHalf, CHASE_HORIZON_Y,
+      CHASE_CENTER_X + horizonHalf, CHASE_HORIZON_Y,
+      CHASE_CENTER_X + bottomHalf, H + 34,
+      CHASE_CENTER_X - bottomHalf, H + 34
+    );
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    ctx.lineWidth = 2;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(CHASE_CENTER_X + side * horizonHalf, CHASE_HORIZON_Y);
+      ctx.lineTo(CHASE_CENTER_X + side * bottomHalf, H + 34);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.26)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 15; i++) {
+      const p1 = chaseProject(i * 64, 1, 0);
+      const p2 = chaseProject(i * 64 + 42, 1, 0);
+      if (!p1 || !p2) continue;
+      ctx.beginPath();
+      ctx.moveTo(p1.x - p1.roadHalf * 0.92, p1.groundY);
+      ctx.lineTo(p2.x - p2.roadHalf * 0.88, p2.groundY);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = biomeColor(biome, 'dashColor');
+    const dashCycle = 86;
+    const dashScroll = pathModulo(state.distance, dashCycle);
+    for (const divider of [-0.215, 0.215]) {
+      for (let z = -dashScroll; z < CHASE_DRAW_AHEAD; z += dashCycle) {
+        const near = chaseProject(z, 1, 0);
+        const far = chaseProject(z + 36, 1, 0);
+        if (!near || !far) continue;
+        const nw = chaseMix(5, 15, near.t);
+        const fw = chaseMix(4, 10, far.t);
+        fillQuad(
+          far.x + far.roadHalf * divider - fw, far.groundY,
+          far.x + far.roadHalf * divider + fw, far.groundY,
+          near.x + near.roadHalf * divider + nw, near.groundY,
+          near.x + near.roadHalf * divider - nw, near.groundY
+        );
+      }
+    }
+
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = '#000';
+    for (let z = 70; z < CHASE_DRAW_AHEAD; z += 90) {
+      const near = chaseProject(z, 1, 0);
+      const far = chaseProject(z + 34, 1, 0);
+      if (!near || !far) continue;
+      ctx.beginPath();
+      ctx.moveTo(far.x - far.roadHalf * 0.72, far.groundY);
+      ctx.lineTo(near.x - near.roadHalf * 0.62, near.groundY);
+      ctx.moveTo(far.x + far.roadHalf * 0.18, far.groundY);
+      ctx.lineTo(near.x + near.roadHalf * 0.28, near.groundY);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawChaseSkyline(biome) {
+    const baseY = CHASE_HORIZON_Y + 12;
+    const off = state.distance * CLOUD_PARALLAX;
+    ctx.save();
+    ctx.globalAlpha = biome.timeOfDay === 'sunset' ? 0.42 : 0.32;
+    for (let i = -1; i < 12; i++) {
+      const x = pathModulo(i * 92 - off, W + 184) - 92;
+      const w = 38 + noise01(i * 4.7) * 48;
+      const h = 42 + noise01(i * 8.1) * 88;
+      ctx.fillStyle = biome.timeOfDay === 'sunset' ? '#231827' : '#30364d';
+      ctx.fillRect(x, baseY - h, w, h);
+      if (i % 4 === 1) ctx.fillRect(x + w * 0.42, baseY - h - 20, w * 0.16, 20);
+      ctx.fillStyle = 'rgba(245,215,110,0.22)';
+      for (let r = 0; r < Math.floor(h / 18); r++) {
+        if ((r + i) % 2 === 0) ctx.fillRect(x + 8, baseY - h + 12 + r * 18, Math.max(8, w - 18), 2);
+      }
+    }
+    ctx.restore();
+  }
+  function drawChaseGeoMarkers(biome) {
+    if (!SHOW_GEO_LABELS) return;
+    const anchors = geoAnchorsForBiome(biome.name);
+    for (const a of anchors) {
+      const ahead = a.distance - state.distance;
+      if (ahead < -120 || ahead > CHASE_DRAW_AHEAD) continue;
+      const side = noise01(a.distance) > 0.5 ? 1 : -1;
+      const p = chaseProject(ahead, 1, 0);
+      if (!p) continue;
+      const x = CHASE_CENTER_X + side * p.roadHalf * 0.92;
+      const y = p.groundY - 72 * p.scale;
+      const w = Math.max(46, 86 * p.scale);
+      const h = Math.max(14, 22 * p.scale);
+      ctx.save();
+      ctx.fillStyle = 'rgba(8,18,22,0.86)';
+      roundRect(ctx, x - w / 2, y, w, h, 4);
+      ctx.fill();
+      ctx.strokeStyle = '#6ee7ff';
+      ctx.lineWidth = Math.max(1, 1.4 * p.scale);
+      roundRect(ctx, x - w / 2 + 2, y + 2, w - 4, h - 4, 3);
+      ctx.stroke();
+      ctx.fillStyle = '#d9fbff';
+      ctx.font = `bold ${Math.max(6, Math.min(9, 7 * p.scale))}px "JetBrains Mono", Consolas, monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(a.label, x, y + h / 2);
+      ctx.strokeStyle = 'rgba(70,80,88,0.76)';
+      ctx.beginPath();
+      ctx.moveTo(x, y + h);
+      ctx.lineTo(CHASE_CENTER_X + side * p.roadHalf * 0.72, p.groundY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  function drawChasePothole(p) {
+    ctx.fillStyle = 'rgba(0,0,0,0.44)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.groundY + 2 * p.scale, 26 * p.scale, 8 * p.scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#07070a';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.groundY, 22 * p.scale, 6 * p.scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(190,190,205,0.65)';
+    ctx.lineWidth = Math.max(1, 1.3 * p.scale);
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.groundY - 1, 18 * p.scale, 4 * p.scale, 0, Math.PI * 1.04, Math.PI * 1.96);
+    ctx.stroke();
+  }
+  function drawChaseCone(p) {
+    const w = 15 * p.scale;
+    const h = 38 * p.scale;
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.groundY + 2, w * 1.2, 4 * p.scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const g = ctx.createLinearGradient(p.x - w, 0, p.x + w, 0);
+    g.addColorStop(0, '#ff7a3a');
+    g.addColorStop(0.55, '#e85a1a');
+    g.addColorStop(1, '#9f330d');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.groundY - h);
+    ctx.lineTo(p.x + w, p.groundY);
+    ctx.lineTo(p.x - w, p.groundY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#fdfdfd';
+    fillQuad(p.x - w * 0.55, p.groundY - h * 0.48, p.x + w * 0.55, p.groundY - h * 0.48,
+      p.x + w * 0.72, p.groundY - h * 0.36, p.x - w * 0.72, p.groundY - h * 0.36);
+  }
+  function drawChaseSign(p) {
+    const w = 78 * p.scale;
+    const h = 28 * p.scale;
+    const y = p.groundY - 72 * p.scale;
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    fillQuad(p.x - w * 0.45, y + h + 4, p.x + w * 0.55, y + h + 4, p.x + w * 0.74, p.groundY + 3, p.x - w * 0.28, p.groundY + 3);
+    ctx.fillStyle = '#5a5a62';
+    ctx.fillRect(p.x - 3 * p.scale, y + h, 6 * p.scale, p.groundY - y - h);
+    ctx.fillStyle = '#7a1c1d';
+    fillQuad(p.x + w / 2, y + 4, p.x + w / 2 + 8 * p.scale, y + 7, p.x + w / 2 + 8 * p.scale, y + h + 4, p.x + w / 2, y + h);
+    const pg = ctx.createLinearGradient(0, y, 0, y + h);
+    pg.addColorStop(0, '#e8484a');
+    pg.addColorStop(1, '#b82a2a');
+    ctx.fillStyle = pg;
+    roundRect(ctx, p.x - w / 2, y, w, h, 4 * p.scale);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = Math.max(1, 1.6 * p.scale);
+    roundRect(ctx, p.x - w / 2 + 3 * p.scale, y + 3 * p.scale, w - 6 * p.scale, h - 6 * p.scale, 3 * p.scale);
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.max(8, 14 * p.scale)}px "JetBrains Mono", Consolas, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('STOP', p.x, y + h / 2);
+    ctx.textAlign = 'left';
+  }
+  function drawChaseObstacle(o) {
+    const p = chaseProject(chaseAheadOf(o), o.lane, 0);
+    if (!p) return;
+    if (o.type === 'pothole') drawChasePothole(p);
+    else if (o.type === 'cone') drawChaseCone(p);
+    else if (o.type === 'sign') drawChaseSign(p);
+  }
+  function drawChaseCollectible(c) {
+    const ahead = chaseAheadOf(c);
+    const lift = Math.max(8, laneBaseYFor(c.lane) - c.y + Math.sin(c.bob || 0) * 4);
+    const p = chaseProject(ahead, c.lane, lift);
+    if (!p) return;
+    if (c.type === 'pitstop') {
+      const w = 70 * p.scale;
+      const h = 54 * p.scale;
+      ctx.fillStyle = 'rgba(126,226,126,0.22)';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.groundY - h * 0.32, w * 0.75, h * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#2f7a3a';
+      roundRect(ctx, p.x - w * 0.24, p.groundY - h, w * 0.48, h, 4 * p.scale);
+      ctx.fill();
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = i % 2 ? '#fafafa' : '#d63a3a';
+        ctx.fillRect(p.x - w / 2 + i * w / 6, p.groundY - h - 14 * p.scale, w / 6 + 1, 14 * p.scale);
+      }
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(7, 9 * p.scale)}px "JetBrains Mono", Consolas, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText('PIT', p.x, p.groundY - h * 0.36);
+      ctx.textAlign = 'left';
+      return;
+    }
+    if (c.type === 'nitro') {
+      ctx.fillStyle = 'rgba(0, 212, 255, 0.34)';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 18 * p.scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#00d4ff';
+      ctx.beginPath();
+      ctx.moveTo(p.x + 3 * p.scale, p.y - 20 * p.scale);
+      ctx.lineTo(p.x - 9 * p.scale, p.y + 2 * p.scale);
+      ctx.lineTo(p.x - 1 * p.scale, p.y + 2 * p.scale);
+      ctx.lineTo(p.x - 5 * p.scale, p.y + 20 * p.scale);
+      ctx.lineTo(p.x + 10 * p.scale, p.y - 4 * p.scale);
+      ctx.lineTo(p.x + 1 * p.scale, p.y - 4 * p.scale);
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+    if (c.type === 'fuel') {
+      const w = 22 * p.scale;
+      const h = 30 * p.scale;
+      ctx.fillStyle = gameColor('rgba(220,70,55,0.32)', 'rgba(0,114,178,0.36)');
+      ctx.beginPath();
+      ctx.arc(p.x, p.y + h * 0.35, 20 * p.scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = gameColor('#c0392b', '#005f8f');
+      roundRect(ctx, p.x - w / 2, p.y, w, h, 3 * p.scale);
+      ctx.fill();
+      ctx.strokeStyle = gameColor('#7d241b', '#00405c');
+      ctx.lineWidth = Math.max(1, 1.5 * p.scale);
+      ctx.stroke();
+      ctx.strokeStyle = gameColor('#e8897f', '#7fc7ef');
+      ctx.beginPath();
+      ctx.moveTo(p.x - w * 0.34, p.y + h * 0.22);
+      ctx.lineTo(p.x + w * 0.34, p.y + h * 0.78);
+      ctx.moveTo(p.x + w * 0.34, p.y + h * 0.22);
+      ctx.lineTo(p.x - w * 0.34, p.y + h * 0.78);
+      ctx.stroke();
+      return;
+    }
+    ctx.fillStyle = gameColor('rgba(245,215,110,0.42)', 'rgba(255,210,63,0.44)');
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 16 * p.scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = gameColor('#f5d76e', '#ffd23f');
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10 * p.scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = gameColor('#a86a1a', '#7a4b00');
+    ctx.font = `bold ${Math.max(8, 14 * p.scale)}px "JetBrains Mono", Consolas, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$', p.x, p.y);
+    ctx.textAlign = 'left';
+  }
+  function drawChaseSemi(s) {
+    const p = chaseProject(chaseAheadOf(s), 1, 0);
+    if (!p) return;
+    const w = 132 * p.scale;
+    const h = 44 * p.scale;
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.groundY + 4, w * 0.52, 8 * p.scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = s.color;
+    roundRect(ctx, p.x - w / 2, p.groundY - h, w, h, 5 * p.scale);
+    ctx.fill();
+    ctx.fillStyle = '#dadada';
+    roundRect(ctx, p.x + w * 0.20, p.groundY - h * 0.84, w * 0.30, h * 0.72, 4 * p.scale);
+    ctx.fill();
+    ctx.fillStyle = '#9cd0f0';
+    ctx.fillRect(p.x + w * 0.27, p.groundY - h * 0.70, w * 0.16, h * 0.22);
+  }
+  function drawChasePlayerCar(alpha) {
+    const lane = chaseLaneValue();
+    const x = CHASE_CENTER_X + (lane - 1) * 138;
+    const baseY = 493 - state.player.jumpOff * 0.74;
+    const duck = !!state.player.ducking;
+    const color = state.carStyle.body;
+    const stripe = state.carStyle.stripe;
+    const tilt = state.player.tilt || 0;
+    ctx.save();
+    ctx.globalAlpha = alpha == null ? 1 : alpha;
+    ctx.translate(x, baseY);
+    ctx.rotate(tilt * 0.22);
+    ctx.fillStyle = 'rgba(0,0,0,0.34)';
+    ctx.beginPath();
+    ctx.ellipse(0, 24 + state.player.jumpOff * 0.60, 54, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const bodyG = ctx.createLinearGradient(-52, -20, 52, 24);
+    bodyG.addColorStop(0, safeShade(color, 0.18));
+    bodyG.addColorStop(0.48, color);
+    bodyG.addColorStop(1, safeShade(color, -0.32));
+    ctx.fillStyle = bodyG;
+    ctx.beginPath();
+    ctx.moveTo(-58, 18);
+    ctx.lineTo(-46, -12);
+    ctx.quadraticCurveTo(-14, -30, 42, -14);
+    ctx.lineTo(58, 18);
+    ctx.quadraticCurveTo(24, 32, -28, 30);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = stripe;
+    ctx.fillRect(-8, -22, 16, 50);
+    ctx.fillStyle = '#15151c';
+    roundRect(ctx, -24, duck ? -18 : -24, 48, duck ? 18 : 26, 6);
+    ctx.fill();
+    ctx.fillStyle = '#ff3a3a';
+    ctx.fillRect(-43, 12, 18, 5);
+    ctx.fillRect(25, 12, 18, 5);
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(-41, 23, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(41, 23, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = 'bold 12px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(state.carNumber || 7), 0, 5);
+    ctx.restore();
+  }
+  function drawChaseGhostPlayer() {
+    const frame = currentGhostFrame();
+    if (!frame) return;
+    const diff = frame[1] - state.distance;
+    if (diff < -100 || diff > CHASE_DRAW_AHEAD) {
+      drawGhostArrow(diff);
+      return;
+    }
+    const lane = [0, 1, 2].reduce((best, l) =>
+      Math.abs(frame[2] - laneBaseYFor(l)) < Math.abs(frame[2] - laneBaseYFor(best)) ? l : best, 1);
+    const p = chaseProject(diff, lane, Math.max(0, laneBaseYFor(lane) - frame[2]));
+    if (!p) return;
+    ctx.save();
+    ctx.globalAlpha = 0.42;
+    ctx.translate(p.x, p.y);
+    ctx.scale(Math.max(0.45, p.scale * 0.44), Math.max(0.45, p.scale * 0.44));
+    ctx.setLineDash([8, 6]);
+    ctx.fillStyle = gameColor('#9be7ff', '#f0e442');
+    ctx.strokeStyle = gameColor('#ffffff', '#0072b2');
+    roundRect(ctx, -46, -18, 92, 36, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+  function drawChaseFinishLine() {
+    const ahead = TRIP_TOTAL - state.distance;
+    const p = chaseProject(ahead, 1, 0);
+    if (!p) return;
+    const w = p.roadHalf * 1.1;
+    const y = p.groundY - 4 * p.scale;
+    const cells = 12;
+    const cellW = w / cells;
+    const cellH = Math.max(3, 8 * p.scale);
+    for (let i = 0; i < cells; i++) {
+      ctx.fillStyle = i % 2 ? '#111' : '#fafafa';
+      fillQuad(p.x - w / 2 + i * cellW, y, p.x - w / 2 + (i + 1) * cellW, y,
+        p.x - w / 2 + (i + 1) * cellW + 8 * p.scale, y + cellH, p.x - w / 2 + i * cellW + 8 * p.scale, y + cellH);
+    }
+  }
+  function drawChaseWorld(biome) {
+    drawChaseSkyline(biome);
+    drawChaseRoad(biome);
+    drawChaseGeoMarkers(biome);
+    if (!(state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED)) return;
+    const items = [];
+    for (const s of state.semis) items.push({ kind: 'semi', item: s, ahead: chaseAheadOf(s) });
+    for (const c of state.collectibles) items.push({ kind: 'collectible', item: c, ahead: chaseAheadOf(c) });
+    for (const o of state.obstacles) items.push({ kind: 'obstacle', item: o, ahead: chaseAheadOf(o) });
+    items.sort((a, b) => b.ahead - a.ahead);
+    for (const entry of items) {
+      if (entry.ahead < -90 || entry.ahead > CHASE_DRAW_AHEAD) continue;
+      if (entry.kind === 'semi') drawChaseSemi(entry.item);
+      else if (entry.kind === 'collectible') drawChaseCollectible(entry.item);
+      else drawChaseObstacle(entry.item);
+    }
+    drawChaseFinishLine();
+    drawChaseGhostPlayer();
+    drawChasePlayerCar();
+  }
+
   function currentGhostFrame() {
     const g = state.ghostLoaded;
     if (!g || !state.settings.ghostVisible || state.screen !== SCREEN.PLAYING) return null;
@@ -3762,6 +4351,12 @@
         ctx.fillRect(o.x - 4, o.y - 6, o.w + 8, 5);
         ctx.fillRect(o.x + 8, o.y - 1, 4, 3);
         ctx.fillRect(o.x + o.w - 12, o.y - 1, 4, 3);
+        ctx.fillStyle = 'rgba(0,0,0,0.28)';
+        fillQuad(o.x + 8, o.y + o.h + 4, o.x + o.w + 8, o.y + o.h + 4, o.x + o.w + 20, GROUND_Y + 2, o.x + 24, GROUND_Y + 2);
+        ctx.fillStyle = '#7a1c1d';
+        fillQuad(o.x + o.w, o.y + 4, o.x + o.w + 8, o.y + 8, o.x + o.w + 8, o.y + o.h + 4, o.x + o.w, o.y + o.h);
+        ctx.fillStyle = '#ff6567';
+        fillQuad(o.x + 4, o.y, o.x + o.w, o.y, o.x + o.w + 8, o.y + 5, o.x + 12, o.y + 5);
         const pg = ctx.createLinearGradient(0, o.y, 0, o.y + o.h);   // beveled red panel
         pg.addColorStop(0, '#e8484a'); pg.addColorStop(1, '#b82a2a');
         ctx.fillStyle = pg;
@@ -4381,6 +4976,8 @@
     applyViewTransform();
     const b = currentBiome();
     const shake = state.screen === SCREEN.PLAYING ? shakeOffset() : { x: 0, y: 0 };
+    const chaseMode = state.cameraMode === CAMERA_CHASE &&
+      (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED);
 
     ctx.save();
     ctx.translate(shake.x, shake.y);
@@ -4391,20 +4988,25 @@
     drawBirds();
     drawFarMountains(b);
     drawAtmosphere(b);
-    drawMidScenery(b);
-    drawGround(b);
-    drawNearScenery(b);
-
-    if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
-      drawSemis();
-      drawCollectibles();
-      drawObstacles();
-      drawFinishLine();
-      drawSpeedLines();
-      drawGhostPlayer();
-      drawPlayer();
-      drawParticles();
+    if (chaseMode) {
+      drawChaseWorld(b);
       drawScorePopups();
+    } else {
+      drawMidScenery(b);
+      drawGround(b);
+      drawNearScenery(b);
+
+      if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+        drawSemis();
+        drawCollectibles();
+        drawObstacles();
+        drawFinishLine();
+        drawSpeedLines();
+        drawGhostPlayer();
+        drawPlayer();
+        drawParticles();
+        drawScorePopups();
+      }
     }
 
     ctx.restore();
@@ -4643,6 +5245,49 @@
         state.cloudScores = snapCloudScores;
       }
       check('high-score qualification honors loaded cloud board', pass, detail);
+    }
+
+    // 4c) Camera switching must be renderer-only: physics/spawn/collision keep
+    //     owning the same live object arrays, and the toggle is reversible.
+    {
+      const snapCamera = state.cameraMode;
+      const obstacleRef = state.obstacles;
+      const collectibleRef = state.collectibles;
+      let pass = false, detail = '';
+      try {
+        state.cameraMode = CAMERA_SIDE;
+        toggleCameraMode();
+        const chase = state.cameraMode === CAMERA_CHASE;
+        toggleCameraMode();
+        const side = state.cameraMode === CAMERA_SIDE;
+        pass = chase && side &&
+          obstacleRef === state.obstacles &&
+          collectibleRef === state.collectibles;
+        detail = state.cameraMode;
+      } catch (e) { detail = String(e); }
+      finally {
+        state.cameraMode = snapCamera;
+      }
+      check('camera toggle is renderer-only and reversible', pass, detail);
+    }
+
+    // 4d) Visual-depth constants are structural QA, not decorative preferences:
+    //     road paint moves as one sheet, parallax ramps far-to-near, and map
+    //     labels stay off for the immersive build.
+    {
+      const roadOk = ROAD_SCROLL === 1.0;
+      const parallaxOk = CLOUD_PARALLAX < MOUNTAIN_PARALLAX &&
+        MOUNTAIN_PARALLAX < SKYLINE_PARALLAX &&
+        SKYLINE_PARALLAX < MID_SCENERY_PARALLAX &&
+        MID_SCENERY_PARALLAX < GEO_SIGN_PARALLAX;
+      const labelsOk = SHOW_GEO_LABELS === false && SHOW_WAYFINDING === false;
+      check('visual QA constants lock road/parallax/labels',
+        roadOk && parallaxOk && labelsOk,
+        JSON.stringify({
+          road: ROAD_SCROLL,
+          parallax: [CLOUD_PARALLAX, MOUNTAIN_PARALLAX, SKYLINE_PARALLAX, MID_SCENERY_PARALLAX, GEO_SIGN_PARALLAX],
+          labels: [SHOW_GEO_LABELS, SHOW_WAYFINDING]
+        }));
     }
 
     // 5) achievements never duplicate — unlock is idempotent (snapshot + restore).

@@ -85,6 +85,7 @@ submission proof screenshots.
 | `S` / down | Duck under low signs |
 | `P` / `Esc` | Pause |
 | `M` | Mute |
+| `T` | Switch side / chase camera |
 | `?` | Controls |
 | Gamepad / Touch | A jump, B duck, D-pad/stick or lane buttons |
 
@@ -99,12 +100,14 @@ stretch. Your inputs are about positioning.
 - Cross-lane obstacle patterns with a fair line through.
 - Four Nashville legs: downtown skyline, Music Row studios, Cumberland
   riverfront, and Lower Broadway neon.
-- Nashville route detail uses approximate WGS84 anchors and landmark cues for
-  the Ryman, AT&T/333 Commerce, Country Music Hall of Fame, Music Row studios,
-  Seigenthaler bridge, Nissan Stadium, Bridgestone Arena, Riverfront, and Lower
-  Broadway.
+- Nashville route detail uses approximate WGS84 anchors and landmark geometry
+  for the Ryman, AT&T/333 Commerce, Country Music Hall of Fame, Music Row
+  studios, Seigenthaler bridge, Nissan Stadium, Bridgestone Arena, Riverfront,
+  and Lower Broadway. Map-like coordinate placards are disabled by default.
 - Skill-dominant scoring with combos, near-miss bonuses, and lane-risk bonuses.
 - Ghost Race records replay telemetry and exports/imports shareable JSON.
+- Side and chase camera renderers read the same live obstacles, pickups, pit
+  stops, lane state, and collision model.
 - Procedural art and audio, particles, screen shake, achievements, high scores,
   and local persistence.
 - Keyboard + gamepad + touch; DPR-aware rendering; accessibility settings.
