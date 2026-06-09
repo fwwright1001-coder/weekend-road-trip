@@ -1509,7 +1509,8 @@
     state.nextBirdAt = 3;
     state.ghostRecording = makeGhostRecording();
     state.ghostSampleTimer = 0;
-    if (state.ghostLoaded) unlockAchievement('ghost-race');
+    // Only counts as racing the replay if the ghost car is actually shown.
+    if (state.ghostLoaded && state.settings.ghostVisible) unlockAchievement('ghost-race');
     unlockAchievement('start');
     audio.init();
     audio.startEngine();
@@ -1673,7 +1674,9 @@
       if (!ghost) throw new Error('Invalid ghost payload');
       state.ghostLoaded = ghost;
       saveGhost(ghost);
-      state.ghostMessage = 'Ghost loaded. Start the trip to race it.';
+      state.ghostMessage = state.settings.ghostVisible
+        ? 'Ghost loaded. Start the trip to race it.'
+        : 'Ghost loaded. Turn on "Show ghost replay car" in Settings to race it.';
       unlockAchievement('ghost-race');
     } catch (e) {
       state.ghostMessage = 'That ghost JSON could not be loaded.';
@@ -3071,17 +3074,6 @@
     ctx.fillStyle = 'rgba(245,215,110,0.32)';
     for (let i = 0; i < 7; i++) ctx.fillRect(x + 34 + i * 14, baseY - 30, 6, 18);
   }
-  function drawDowntownStreetLevel(x, baseY) {
-    ctx.fillStyle = '#262634';
-    roundRect(ctx, x, baseY - 50, 190, 50, 4);
-    ctx.fill();
-    ctx.fillStyle = '#171824';
-    for (let i = 0; i < 4; i++) ctx.fillRect(x + 14 + i * 44, baseY - 38, 28, 32);
-    drawNeonBox(x + 16, baseY - 44, 66, 16, '#6ee7ff', '2ND AVE', 8);
-    drawNeonBox(x + 102, baseY - 44, 66, 16, '#ff6b9a', 'LIVE', 8);
-    ctx.fillStyle = '#f5d76e';
-    for (let i = 0; i < 10; i++) ctx.fillRect(x + 8 + i * 18, baseY - 4, 10, 2);
-  }
   function drawDowntownGeoGrid(origin, baseY) {
     if (!SHOW_WAYFINDING) return;
     const signs = [
@@ -3255,10 +3247,13 @@
       const x = ((i * 180) - (off * 0.22 % 180)) - 90;
       ctx.fillRect(x, waterTop + 66 + (i % 3) * 8, 120, 5);
     }
-    // Tile period must equal the drawn span (960) — at 1040 an 80px hole in the
-    // deck scrolled across the screen every cycle, reading as a broken bridge.
-    drawPedestrianBridge(-((off % 960) + 960) % 960 - 110, waterTop + 20);
-    drawPedestrianBridge(-((off % 960) + 960) % 960 + 850, waterTop + 20);
+    // Tile period must equal the drawn span (960), and THREE tiles are needed:
+    // the base sits anywhere in [-1920, -960], so two tiles could leave a
+    // right-edge gap for part of every cycle. Three cover the viewport always.
+    const bridgeBase = -pathModulo(off, 960) - 960;
+    drawPedestrianBridge(bridgeBase, waterTop + 20);
+    drawPedestrianBridge(bridgeBase + 960, waterTop + 20);
+    drawPedestrianBridge(bridgeBase + 1920, waterTop + 20);
     drawCumberlandBankLabels(waterTop);
     const period = 840;
     const start = -((off * 0.6 % period) + period) % period;
@@ -3459,40 +3454,6 @@
       drawLampGlow(bx, by + 2, 18, '#f5d76e', 0.13);
     }
   }
-  function drawCrowdSilhouettes(x, baseY) {
-    ctx.fillStyle = 'rgba(12,12,16,0.62)';
-    for (let i = 0; i < 18; i++) {
-      const px = x + i * 34 + (i % 3) * 4;
-      const h = 16 + (i % 4) * 3;
-      ctx.beginPath();
-      ctx.arc(px, baseY - h - 8, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillRect(px - 3, baseY - h - 4, 6, h);
-    }
-  }
-  function drawLowerBroadwayAvenueMarkers(x, baseY) {
-    if (!SHOW_WAYFINDING) return;
-    const marks = [
-      { dx: -90, label: '5TH AVE' },
-      { dx: 82, label: '4TH' },
-      { dx: 236, label: '3RD' },
-      { dx: 392, label: '2ND' },
-      { dx: 560, label: '1ST AVE' }
-    ];
-    for (const m of marks) {
-      ctx.fillStyle = '#1a1b22';
-      ctx.fillRect(x + m.dx, baseY - 21, 54, 17);
-      ctx.strokeStyle = '#d7c06d';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + m.dx + 2, baseY - 19, 50, 13);
-      ctx.fillStyle = '#f5d76e';
-      ctx.font = 'bold 7px "JetBrains Mono", Consolas, monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(m.label, x + m.dx + 27, baseY - 12);
-    }
-    ctx.textAlign = 'left';
-  }
   function drawRymanAlleyCue(x, baseY) {
     ctx.fillStyle = '#2b1d1b';
     ctx.beginPath();
@@ -3529,8 +3490,9 @@
     // periodically stacked props on top of each other.)
     const shoulderY = laneBaseYFor(2) - 12;          // base line above the asphalt edge
     const off = state.distance * ROAD_SCROLL;        // planted: moves with the road sheet
-    ctx.fillStyle = biomeColor(biome, 'grass');
-    // Grass tufts on the far grass strip (not on the asphalt)
+    // Tufts must contrast with the grass strip they sit on (same-color fills
+    // painted over drawGround's identical fill are invisible dead work).
+    ctx.fillStyle = safeShade(biomeColor(biome, 'grass'), 0.22);
     for (let i = 0; i < 28; i++) {
       const x = ((i * 50) - (off % 50)) - 25;
       const tuftY = shoulderY - 8;
@@ -4584,7 +4546,8 @@
       ctx.lineWidth = 2;
       for (let i = 0; i < 5; i++) {
         const y = 50 + i * 105;
-        const x = VIEW_W + 110 - ((Math.floor(state.runTime * 1400) + i * 137) % (VIEW_W + 220));
+        // 160px wrap margin > max streak length (150) — no edge pop.
+        const x = VIEW_W + 160 - ((Math.floor(state.runTime * 1400) + i * 137) % (VIEW_W + 320));
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 70 + (i % 3) * 40, y); ctx.stroke();
       }
     }
@@ -4594,9 +4557,11 @@
     ctx.textBaseline = 'top';
     ctx.shadowColor = '#00d4ff';
     ctx.shadowBlur = 12;
-    ctx.fillText('⚡ NITRO ⚡', VIEW_W / 2, 12);
+    // Below the top DOM HUD row (score/stage/trip cards) so the label is
+    // never clipped behind a card.
+    ctx.fillText('⚡ NITRO ⚡', VIEW_W / 2, 56);
     ctx.shadowBlur = 0;
-    const bw = 180, bx = (VIEW_W - bw) / 2, by = 38;
+    const bw = 180, bx = (VIEW_W - bw) / 2, by = 82;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
     ctx.fillRect(bx, by, bw, 5);
     ctx.fillStyle = '#00d4ff';
@@ -4836,7 +4801,10 @@
   function drawSpeedLines() {
     if (reduceMotionOn()) return;   // motion-blur speed lines disabled for reduced motion
     // Only at higher speeds; intensity scales with how fast above base
-    const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+    // Clamped: per-leg speed caps exceed MAX_SPEED (speedScale up to 1.45), so
+    // the raw frac overshoots 1 — unclamped it blew intensity past its 0..1
+    // design range (alpha/count out of bounds on the later legs).
+    const frac = Math.min(1, (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
     if (frac < 0.55) return;
     const intensity = (frac - 0.55) / 0.45; // 0..1
     const count = Math.floor(4 + intensity * 14);
@@ -4849,7 +4817,9 @@
       const r = noise01(i * 7.13);
       const y = 100 + r * (GROUND_Y - 120);
       const len = 40 + r * 80 + intensity * 60;
-      const x = W + 100 - ((Math.floor(state.distance * 4) + i * 71) % (W + 200));
+      // Wrap margin (200) exceeds the max line length (~180) so lines enter
+      // and leave fully off-screen instead of popping mid-viewport.
+      const x = W + 200 - ((Math.floor(state.distance * 4) + i * 71) % (W + 400));
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x + len, y);
@@ -4858,9 +4828,9 @@
     ctx.restore();
   }
   function drawSpeedVignette() {
-    const frac = (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+    const frac = Math.min(1, (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
     if (frac < 0.7) return;
-    const intensity = (frac - 0.7) / 0.3;
+    const intensity = (frac - 0.7) / 0.3;   // clamped frac keeps this 0..1
     const g = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 540);
     g.addColorStop(0, 'rgba(0,0,0,0)');
     g.addColorStop(1, `rgba(0,0,0,${0.18 * intensity})`);
@@ -5079,7 +5049,7 @@
     }
 
     // Engine pitch follows speed
-    audio.updateEngine((state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED));
+    audio.updateEngine(Math.max(0, Math.min(1, (state.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED))));
 
     // Exhaust puffs while moving fast
     exhaustTimer -= dt;
@@ -5175,8 +5145,11 @@
         // lane), then center/near lanes. Previously draw-by-type let far-lane
         // cones paint over a visually nearer truck.
         drawCollectibles(2);
-        drawObstacles(2);
         drawSemis();
+        // Lane-2 OBSTACLES draw after the semi on purpose: a decorative,
+        // non-colliding truck must never hide a live blocker (a fully occluded
+        // far-lane pothole defeats the "hits are a pure skill signal" intent).
+        drawObstacles(2);
         for (const lane of [1, 0]) {
           drawCollectibles(lane);
           drawObstacles(lane);

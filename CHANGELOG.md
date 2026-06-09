@@ -2,6 +2,27 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-09 - Feel-rework audit: ten verified fixes before merge
+
+A six-reviewer adversarial audit of the feel-rework diff (every finding
+re-verified against the code before being accepted; one claim refuted):
+
+- Semis can no longer hide live far-lane obstacles: lane-2 blockers draw OVER
+  the decorative truck (a fully occluded pothole defeated the "hits are a pure
+  skill signal" intent).
+- Speed fractions clamped to 0..1 at every consumer (speed lines, vignette,
+  engine pitch) — per-leg speed caps exceed MAX_SPEED, so the raw fraction
+  overshot to ~2 on later legs.
+- Speed lines and nitro streaks get wrap margins larger than their max length,
+  so they enter/exit fully off-screen instead of popping mid-viewport.
+- Cumberland pedestrian bridge tiled with THREE segments — two still left a
+  right-edge gap for part of every cycle.
+- "Race the Replay" achievement only unlocks when the ghost car is actually
+  visible; ghost-import message reflects the opt-in setting.
+- Grass tufts shaded off the base grass color (they were same-color-on-same-
+  color: invisible dead work); nitro banner moved below the HUD card row;
+  three orphaned draw functions deleted.
+
 ## 2026-06-09 - Feel rework: stable backgrounds, calmer speed, clean composition
 
 A root-cause diagnosis pass (every claim code-verified) behind the player
