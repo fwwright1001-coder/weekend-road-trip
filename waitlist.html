@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Road Crew Touring Co. — Join the Crew</title>
+  <meta name="description" content="Road Crew Touring Co. — sign up for Weekend Road Trip build notes, daily challenge seeds, and class demo updates. Live crew counter backed by Neon Postgres on Vercel." />
+  <style>
+    :root {
+      --bg: #0d1020;
+      --panel: rgba(13, 16, 33, 0.92);
+      --gold: #f5d76e;
+      --cyan: #6ee7ff;
+      --pink: #ff4fb8;
+      --text: #ececf2;
+      --muted: #9aa0b4;
+      --good: #7ee27e;
+      --bad: #ff6b3a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 500px at 50% -10%, rgba(245, 215, 110, 0.08), transparent 60%),
+        radial-gradient(900px 420px at 85% 110%, rgba(255, 79, 184, 0.07), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+    main {
+      width: min(620px, 100%);
+      background: var(--panel);
+      border: 1px solid rgba(245, 215, 110, 0.55);
+      border-radius: 14px;
+      box-shadow: 0 0 36px rgba(245, 215, 110, 0.12), 0 18px 50px rgba(0, 0, 0, 0.5);
+      padding: 36px 34px 28px;
+      text-align: center;
+    }
+    .kicker {
+      letter-spacing: 0.32em;
+      font-size: 12px;
+      color: var(--pink);
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 10px 0 4px;
+      font-size: clamp(26px, 5.5vw, 38px);
+      letter-spacing: 0.08em;
+      color: var(--gold);
+      text-shadow: 0 0 18px rgba(245, 215, 110, 0.45);
+    }
+    .tagline { color: var(--muted); font-size: 13px; margin: 0 0 22px; line-height: 1.55; }
+    .tagline strong { color: var(--text); font-weight: 600; }
+    .counter-wrap {
+      margin: 0 auto 24px;
+      padding: 14px 18px;
+      border: 1px solid rgba(110, 231, 255, 0.4);
+      border-radius: 10px;
+      display: inline-block;
+      min-width: 240px;
+      background: rgba(10, 14, 28, 0.6);
+    }
+    .counter {
+      font-size: 44px;
+      font-weight: 700;
+      color: var(--cyan);
+      text-shadow: 0 0 16px rgba(110, 231, 255, 0.5);
+      line-height: 1.1;
+    }
+    .counter-label { font-size: 11px; letter-spacing: 0.2em; color: var(--muted); text-transform: uppercase; }
+    form { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    input {
+      flex: 1 1 180px;
+      background: #0a0d1c;
+      color: var(--text);
+      border: 1px solid #2c3150;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font: inherit;
+      font-size: 14px;
+      min-height: 44px;
+    }
+    input:focus-visible, button:focus-visible, a:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px;
+    }
+    button {
+      background: var(--gold);
+      color: #181824;
+      font: inherit;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 26px;
+      min-height: 44px;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .status { min-height: 20px; font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+    .status.good { color: var(--good); }
+    .status.bad { color: var(--bad); }
+    .links { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; border-top: 1px solid #23284a; padding-top: 18px; }
+    a { color: var(--cyan); text-decoration: none; font-size: 13px; letter-spacing: 0.06em; }
+    a:hover { text-decoration: underline; }
+    .fine { color: var(--muted); font-size: 11px; margin-top: 14px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">Road Crew Touring Co.</p>
+    <h1>JOIN THE ROAD CREW</h1>
+    <p class="tagline">
+      One tank of gas. Four legs of Nashville neon. <strong>Weekend Road Trip</strong>
+      is the Music City night-cruise arcade game — join the crew for build notes,
+      daily challenge seeds, and class demo updates.
+    </p>
+
+    <div class="counter-wrap">
+      <div class="counter" id="crew-count" aria-live="polite">—</div>
+      <div class="counter-label">drivers on the crew</div>
+    </div>
+
+    <form id="crew-form" novalidate>
+      <div class="row">
+        <label for="crew-name">Name</label>
+        <input id="crew-name" name="name" type="text" maxlength="80" autocomplete="name" placeholder="Name" />
+        <label for="crew-email">Email</label>
+        <input id="crew-email" name="email" type="email" maxlength="120" autocomplete="email" placeholder="Email" required />
+        <button type="submit" id="crew-submit">JOIN</button>
+      </div>
+    </form>
+    <p class="status" id="crew-status" role="status" aria-live="polite"></p>
+
+    <nav class="links" aria-label="Project links">
+      <a href="./">▶ PLAY WEEKEND ROAD TRIP</a>
+      <a href="https://github.com/fwwright1001-coder/weekend-road-trip">GITHUB REPO</a>
+    </nav>
+    <p class="fine">
+      Signups are stored in Neon Serverless Postgres through a Vercel serverless
+      function (<code>api/waitlist.js</code>) — validated, lowercased, and upserted
+      so duplicates never create junk rows. On static hosting this page falls back
+      to localStorage and says so. ENGR 5513 — Forrest Wright — Lipscomb MSAI 2026.
+    </p>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+      const countEl = document.getElementById('crew-count');
+      const statusEl = document.getElementById('crew-status');
+      const form = document.getElementById('crew-form');
+      const nameEl = document.getElementById('crew-name');
+      const emailEl = document.getElementById('crew-email');
+      const submitEl = document.getElementById('crew-submit');
+      const LOCAL_KEY = 'wrt.roadcrew.landing.v1';
+      let cloud = false;
+
+      const setStatus = (msg, cls) => {
+        statusEl.textContent = msg;
+        statusEl.className = 'status' + (cls ? ' ' + cls : '');
+      };
+      const localList = () => {
+        try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || []; } catch (e) { return []; }
+      };
+      const showCount = (n) => { countEl.textContent = String(n); };
+
+      // Cloud first; if the API is unreachable (GitHub Pages, file://, local
+      // static server) drop to the localStorage fallback and say so plainly.
+      fetch('api/waitlist', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('api unavailable'))))
+        .then((data) => {
+          cloud = true;
+          showCount(Number(data.count) || 0);
+          setStatus('Cloud list online — stored in Neon Postgres via Vercel.', '');
+        })
+        .catch(() => {
+          cloud = false;
+          showCount(localList().length);
+          setStatus('Local fallback active; the Vercel deployment saves to Neon.', '');
+        });
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const email = String(emailEl.value || '').trim().toLowerCase();
+        const name = String(nameEl.value || '').trim().replace(/\s+/g, ' ');
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          setStatus('Enter a valid email to join the crew.', 'bad');
+          emailEl.focus();
+          return;
+        }
+        if (!cloud) {
+          const list = localList().filter((s) => s.email !== email);
+          list.push({ name, email, savedAt: new Date().toISOString(), storage: 'local' });
+          try { localStorage.setItem(LOCAL_KEY, JSON.stringify(list)); } catch (err) {}
+          showCount(list.length);
+          setStatus('Saved locally. The Vercel deployment of this page saves to Neon.', 'good');
+          form.reset();
+          return;
+        }
+        submitEl.disabled = true;
+        setStatus('Saving to Neon…', '');
+        fetch('api/waitlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, interest: 'road-crew', source: 'road-crew-landing' })
+        })
+          .then((r) => r.json().then((data) => ({ ok: r.ok, status: r.status, data })))
+          .then(({ ok, status, data }) => {
+            if (ok && data && data.ok) {
+              showCount(Number(data.count) || 0);
+              setStatus('Saved to Neon. Welcome to the crew, ' + (name || data.email) + '!', 'good');
+              form.reset();
+            } else if (status === 503) {
+              setStatus('Neon is not connected yet; add DATABASE_URL in Vercel.', 'bad');
+            } else {
+              setStatus((data && data.error) || 'That signup could not be saved — try again.', 'bad');
+            }
+          })
+          .catch(() => setStatus('Network hiccup — your signup was not saved. Try again.', 'bad'))
+          .finally(() => { submitEl.disabled = false; });
+      });
+    })();
+  </script>
+</body>
+</html>
