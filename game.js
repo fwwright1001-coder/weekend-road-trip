@@ -52,7 +52,8 @@
   const JUMP_V = -16;
   const PLAYER_X = 170;
   const BASE_SPEED = 5;
-  const MAX_SPEED = 11.0;          // widened top end (was 9.5); per-leg speedScale escalates toward it
+  const MAX_SPEED = 9.0;           // trimmed 11.0->9.0 (2026-06-09 feel rework): the world read as
+                                   // jarringly fast; per-leg speedScale still escalates toward it
   const SPEED_ACCEL = 0.07;        // (retained for reference; manual throttle retired — speed auto-escalates)
   const SPEED_BRAKE = 0.16;
   const SPEED_DRAG = 0.018;
@@ -70,7 +71,9 @@
   const LANE_COMMIT_FRAC = 0.5;    // past this tween fraction you occupy only the destination lane
   const laneBaseYFor = (i) => GROUND_Y + LANE_DY[Math.max(0, Math.min(LANE_COUNT - 1, i))];
   const FUEL_MAX = 100;
-  const FUEL_DRAIN_PER_SEC = 1.4;
+  const FUEL_DRAIN_PER_SEC = 1.15; // trimmed 1.4->1.15 with the speed cut: trips run ~22% longer
+                                   // in time, so per-second drain drops to keep total time-drain
+                                   // roughly constant (sim re-proves all economy bands)
   const FUEL_LOW_FRAC = 0.15;      // fuel fraction below which state.fuelLow trips (the audio/UI layer consumes it)
   const HIT_FUEL_PENALTY = 20;     // per-hit fuel cost. Hits are always avoidable (see minBlockingGap), so
                                    // this is a pure skill signal. Bumped 14->20 alongside the auto-throttle
@@ -115,6 +118,9 @@
   const GHOST_DISTANCE_SCALE = 0.28;
   const GHOST_MAX_FRAMES = 20000;  // import cap: a real run samples a few thousand frames at
                                    // GHOST_SAMPLE_STEP, so anything larger is malformed/hostile
+  const GHOST_VERSION = 2;         // bumped with the 2026-06-09 speed retune — v1 ghosts were
+                                   // recorded at the old (faster) speeds and would unfairly
+                                   // outpace every post-retune run, so they no longer load
   const CAMERA_SIDE = 'side';
   const CAMERA_CHASE = 'chase';
 
@@ -275,7 +281,8 @@
   const DEFAULT_SETTINGS = {
     screenShake: true,
     colorblind: false,
-    ghostVisible: true,
+    ghostVisible: false,   // ghost car is OPT-IN (2026-06-09 feel rework): no
+                           // translucent twin racing you unless you choose it
     // Audio — all folded into the single wrt.settings.v1 key. The legacy
     // wrt.muted.v1 key is migrated on first load (see loadSettings).
     muted: false,
@@ -649,6 +656,11 @@
       const raw = localStorage.getItem(SETTINGS_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
       const s = { ...seeded, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+      // One-time migration (2026-06-09): the ghost car switched from opt-out to
+      // OPT-IN. Profiles saved in the opt-out era carry ghostVisible:true the
+      // player never chose — reset it; re-enabling in Settings stamps ghostOptIn
+      // so the explicit choice sticks from then on.
+      if (s.ghostVisible && !(parsed && parsed.ghostOptIn)) s.ghostVisible = false;
       // Coerce/clamp so a stale or hand-edited payload can never break audio/UI.
       let vol = Number(s.masterVolume);
       if (!Number.isFinite(vol)) vol = DEFAULT_SETTINGS.masterVolume;
@@ -728,7 +740,7 @@
     }
   }
   function normalizeGhost(data) {
-    if (!data || data.version !== 1 || data.game !== 'Weekend Road Trip') return null;
+    if (!data || data.version !== GHOST_VERSION || data.game !== 'Weekend Road Trip') return null;
     // Bounded frame count (spec): reject oversized pastes instead of ballooning
     // memory / the localStorage quota with a malformed or hostile payload.
     if (!Array.isArray(data.frames) || data.frames.length < 2 ||
@@ -749,7 +761,7 @@
       ]);
     if (frames.length < 2) return null;
     return {
-      version: 1,
+      version: GHOST_VERSION,
       game: 'Weekend Road Trip',
       created: String(data.created || new Date().toISOString()),
       outcome: data.outcome === 'win' ? 'win' : 'gameover',
@@ -1426,6 +1438,9 @@
         state.settings[key] = Math.max(0, Math.min(1, v));
       } else {
         state.settings[key] = input.checked;
+        // Re-enabling the ghost car is an explicit choice — stamp it so the
+        // opt-in migration in loadSettings never resets it again.
+        if (key === 'ghostVisible' && input.checked) state.settings.ghostOptIn = true;
       }
       if (persist) saveSettings();
       applySettings();
@@ -1616,7 +1631,10 @@
     if (g) {
       const pct = Math.min(100, Math.round((g.distance / TRIP_TOTAL) * 100));
       ghostSummaryEl.textContent =
-        `Loaded ghost: ${pct}% trip, ${pad(g.score, 6)} points, ${g.duration.toFixed(1)} seconds. Start the trip to race it.`;
+        `Loaded ghost: ${pct}% trip, ${pad(g.score, 6)} points, ${g.duration.toFixed(1)} seconds. ` +
+        (state.settings.ghostVisible
+          ? 'Start the trip to race it.'
+          : 'Turn on "Show ghost replay car" in Settings to race it.');
       ghostPayloadEl.value = ghostPayload();
     } else {
       ghostSummaryEl.textContent =
@@ -1673,7 +1691,7 @@
   }
   function makeGhostRecording() {
     return {
-      version: 1,
+      version: GHOST_VERSION,
       game: 'Weekend Road Trip',
       created: new Date().toISOString(),
       outcome: 'gameover',
@@ -2032,7 +2050,7 @@
       // (min-gap enforcement in spawn() still guarantees blockers stay clearable.)
       const density = currentDifficulty().obstacleDensity || 1;
       state.spawnTimer = Math.max(SPAWN_MIN_INTERVAL,
-        (0.85 + Math.random() * 0.7 - state.speed * 0.045) / density);
+        (0.85 + Math.random() * 0.7 - state.speed * 0.055) / density);
     }
 
     // Pit stop spawns at distance milestones
@@ -2160,7 +2178,7 @@
           state.nitro = NITRO_DURATION;
           const npts = Math.round(NITRO_POINTS * mult);
           state.score += npts;
-          screenShake(6, 0.25);
+          // (no screen shake — shake is impact feedback; a pickup is a reward)
           spawnPickupBurst(c.x + c.w / 2, c.y + c.h / 2, '#00d4ff');
           spawnScorePopup(c.x + c.w / 2, c.y, `NITRO!  +${npts}`, '#00d4ff');
           audio.playBiome();
@@ -2408,9 +2426,12 @@
   function shakeOffset() {
     if (!state.settings.screenShake || reduceMotionOn() || state.shakeT <= 0) return { x: 0, y: 0 };
     const t = state.shakeT / 0.35;
+    // Coherent damped oscillation instead of fresh white noise per frame —
+    // the old per-frame Math.random read as the whole scene twitching.
+    const a = state.runTime * 55;
     return {
-      x: (Math.random() - 0.5) * state.shakeMag * t,
-      y: (Math.random() - 0.5) * state.shakeMag * t
+      x: Math.sin(a * 1.3) * state.shakeMag * 0.5 * t,
+      y: Math.cos(a) * state.shakeMag * 0.5 * t
     };
   }
 
@@ -2450,10 +2471,13 @@
     return BIOMES[Math.min(state.biomeIdx + 1, BIOMES.length - 1)];
   }
   function biomeBlend() {
-    // 0 in middle of biome, → 1 in last 200 units (transition zone)
+    // 0 in middle of biome, → 1 across the transition zone. Kept SHORT: while
+    // blending, two whole mid-scenery layers are superimposed at partial alpha
+    // — the most literal "translucent overlapping assets" moment in the game —
+    // so the dissolve is a quick beat, not a lingering double exposure.
     const b = BIOMES[state.biomeIdx];
     const start = state.biomeIdx === 0 ? 0 : BIOMES[state.biomeIdx - 1].end;
-    const trans = 220;
+    const trans = 80;
     if (b.end - state.distance < trans) {
       return 1 - (b.end - state.distance) / trans;
     }
@@ -2579,11 +2603,14 @@
   function pathModulo(value, period) {
     return ((value % period) + period) % period;
   }
-  const CLOUD_PARALLAX = 0.04;
-  const MOUNTAIN_PARALLAX = 0.08;
-  const SKYLINE_PARALLAX = 0.12;
-  const MID_SCENERY_PARALLAX = 0.18;
-  const GEO_SIGN_PARALLAX = 0.22;
+  // Re-graded x0.7 in the 2026-06-09 feel rework: combined with the world-speed
+  // trim, background layers drift instead of whipping by. Strict far-to-near
+  // ordering is locked by self-test 4d; ROAD_SCROLL stays exactly 1.0.
+  const CLOUD_PARALLAX = 0.028;
+  const MOUNTAIN_PARALLAX = 0.056;
+  const SKYLINE_PARALLAX = 0.084;
+  const MID_SCENERY_PARALLAX = 0.126;
+  const GEO_SIGN_PARALLAX = 0.154;
   const ROAD_SCROLL = 1.0; // every painted asphalt detail moves with obstacles
   const SHOW_GEO_LABELS = false; // remove map-like place + coordinate placards
   const SHOW_WAYFINDING = false; // remove non-gameplay text labels from scenery
@@ -2647,7 +2674,14 @@
     ctx.font = `bold ${fontSize || 11}px "JetBrains Mono", Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    if (SHOW_WAYFINDING && label) ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+    if (SHOW_WAYFINDING && label) {
+      ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+    } else {
+      // Text labels are off — fill the tube frame with abstract neon dashes so
+      // the sign still reads as lit signage, not an empty outline.
+      ctx.fillRect(x + w * 0.18, y + h / 2 - 1.5, w * 0.38, 3);
+      ctx.fillRect(x + w * 0.62, y + h / 2 - 1.5, w * 0.2, 3);
+    }
     ctx.restore();
     ctx.textAlign = 'left';
   }
@@ -2660,12 +2694,13 @@
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
   }
-  function drawRoadSign(x, y, w, h, color, label) {
-    const postH = GROUND_Y - (y + h);
+  function drawRoadSign(x, y, w, h, color, label, baseY) {
+    const ground = baseY !== undefined ? baseY : GROUND_Y;
+    const postH = ground - (y + h);
     const postXs = w > 68 ? [x + w * 0.26, x + w * 0.74] : [x + w / 2];
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.26)';
-    fillQuad(x + 6, y + h + 4, x + w + 9, y + h + 4, x + w + 22, GROUND_Y + 2, x + 17, GROUND_Y + 2);
+    fillQuad(x + 6, y + h + 4, x + w + 9, y + h + 4, x + w + 22, ground + 2, x + 17, ground + 2);
     for (const px of postXs) {
       const postW = 5;
       const pg = ctx.createLinearGradient(px - postW / 2, 0, px + postW / 2, 0);
@@ -2682,9 +2717,9 @@
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(postXs[0], y + h + 10);
-      ctx.lineTo(postXs[1], GROUND_Y - 12);
+      ctx.lineTo(postXs[1], ground - 12);
       ctx.moveTo(postXs[1], y + h + 10);
-      ctx.lineTo(postXs[0], GROUND_Y - 12);
+      ctx.lineTo(postXs[0], ground - 12);
       ctx.stroke();
     }
     ctx.fillStyle = safeShade(color, -0.42);
@@ -2715,6 +2750,22 @@
       ctx.textBaseline = 'middle';
       ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
       ctx.textAlign = 'left';
+    } else {
+      // Wayfinding text is off by default — give the board non-textual content
+      // (route chevrons) so it never reads as an empty placeholder panel.
+      ctx.strokeStyle = 'rgba(255,255,255,0.78)';
+      ctx.lineWidth = 2;
+      const cy = y + h / 2;
+      const n = w > 60 ? 3 : 2;
+      const startX = x + w / 2 - (n * 14) / 2 + 3;
+      ctx.beginPath();
+      for (let ci = 0; ci < n; ci++) {
+        const cx = startX + ci * 14;
+        ctx.moveTo(cx, cy - 5);
+        ctx.lineTo(cx + 6, cy);
+        ctx.lineTo(cx, cy + 5);
+      }
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -2828,8 +2879,12 @@
     ctx.lineTo(start, baseY);
     for (let i = 0; i < 8; i++) {
       const x = start + i * p;
-      const n1 = noise01(i + Math.floor(off / p) * 0.37);
-      const n2 = noise01(i * 2.3 + 9);
+      // World-anchored noise key: post-wrap slot i must equal pre-wrap slot
+      // i+1 (k is identical), so each hill keeps its silhouette while it
+      // scrolls instead of the whole ridge snapping to a new shape per period.
+      const k = i + Math.floor(off / p);
+      const n1 = noise01(k * 0.37);
+      const n2 = noise01(k * 2.3 + 9);
       ctx.bezierCurveTo(
         x + p * 0.22, baseY - amp * (0.45 + n1 * 0.55),
         x + p * 0.72, baseY - amp * (0.30 + n2 * 0.65),
@@ -2860,9 +2915,14 @@
     ctx.globalAlpha = biome.timeOfDay === 'sunset' ? 0.32 : 0.24;
     for (let chunk = 0; chunk < 4; chunk++) {
       const origin = start + chunk * period;
+      // Seed by STABLE world-chunk id, not the continuous origin: a continuous
+      // seed re-randomizes every building height each frame (the sin-hash fully
+      // decorrelates on sub-pixel shifts), which made the whole skyline band
+      // flicker/bob. The id form is seamless across the modulo wrap.
+      const id = chunk + Math.floor(off / period);
       for (let i = 0; i < 8; i++) {
-        const w0 = 34 + noise01(origin + i) * 36;
-        const h0 = 34 + noise01(origin + i * 4.1) * 76;
+        const w0 = 34 + noise01(id * 13.7 + i) * 36;
+        const h0 = 34 + noise01(id * 9.1 + i * 4.1) * 76;
         const x = origin + 20 + i * 78;
         ctx.fillStyle = biome.timeOfDay === 'sunset' ? '#231b2c' : '#30354b';
         ctx.fillRect(x, baseY - h0, w0, h0);
@@ -2912,16 +2972,17 @@
     const start = -((off % period) + period) % period;
     for (let chunk = -1; chunk < 3; chunk++) {
       const origin = start + chunk * period;
-      drawBatmanTower(origin + 350, baseY);
+      // Back-to-front, with the Country-Hall wedge given its own clear slot
+      // (it used to be drawn last ACROSS two towers, slicing through their
+      // window grids) and the marquee drawn in front as deliberate signage.
       drawBroadShoulderTower(origin + 92, baseY, 96, 150, '#272940');
       drawBroadShoulderTower(origin + 210, baseY, 92, 112, '#313047');
       drawBroadShoulderTower(origin + 520, baseY, 118, 132, '#292b42');
-      drawBroadShoulderTower(origin + 660, baseY, 96, 180, '#24243a');
+      drawCountryHallShape(origin + 636, baseY);
       drawBroadShoulderTower(origin + 790, baseY, 105, 120, '#30314a');
-      drawMusicCityMarquee(origin + 34, baseY);
+      drawBatmanTower(origin + 350, baseY);
       drawRymanRoofline(origin + 22, baseY);
-      drawCountryHallShape(origin + 590, baseY);
-      drawDowntownStreetLevel(origin + 118, baseY);
+      drawMusicCityMarquee(origin + 34, baseY);
       drawDowntownGeoGrid(origin, baseY);
     }
   }
@@ -3194,8 +3255,10 @@
       const x = ((i * 180) - (off * 0.22 % 180)) - 90;
       ctx.fillRect(x, waterTop + 66 + (i % 3) * 8, 120, 5);
     }
-    drawPedestrianBridge(-((off % 1040) + 1040) % 1040 - 110, waterTop + 20);
-    drawPedestrianBridge(-((off % 1040) + 1040) % 1040 + 930, waterTop + 20);
+    // Tile period must equal the drawn span (960) — at 1040 an 80px hole in the
+    // deck scrolled across the screen every cycle, reading as a broken bridge.
+    drawPedestrianBridge(-((off % 960) + 960) % 960 - 110, waterTop + 20);
+    drawPedestrianBridge(-((off % 960) + 960) % 960 + 850, waterTop + 20);
     drawCumberlandBankLabels(waterTop);
     const period = 840;
     const start = -((off * 0.6 % period) + period) % period;
@@ -3293,27 +3356,30 @@
   }
   function drawBroadwayMid(off) {
     const baseY = GROUND_Y;
-    const period = 720;
+    // Period 1040 so the chunk CONTENT actually fits inside one period — at 720
+    // the arena overflowed into the next chunk and ghosted over its neon signs.
+    const period = 1040;
     const start = -((off % period) + period) % period;
-    for (let chunk = -1; chunk < 4; chunk++) {
+    for (let chunk = -1; chunk < 3; chunk++) {
       const x = start + chunk * period;
-      drawBridgestoneArena(x - 118, baseY);
       drawHonkyTonkFront(x + 18, baseY, 126, '#5b2c51', '#ff62d2', 'LIVE');
       drawHonkyTonkFront(x + 152, baseY, 138, '#4a334f', '#6ee7ff', 'MUSIC');
       drawHonkyTonkFront(x + 300, baseY, 116, '#67312c', '#ffd166', 'BBQ');
       drawHonkyTonkFront(x + 424, baseY, 132, '#2b4560', '#8cff86', 'TONK');
       drawVerticalNeon(x + 578, baseY - 154, '#ff495c', 'NASH');
-      drawVerticalNeon(x + 660, baseY - 146, '#f5d76e', 'OPEN');
+      drawVerticalNeon(x + 645, baseY - 146, '#f5d76e', 'OPEN');
       drawBroadwayStringLights(x + 18, baseY - 142);
-      drawCrowdSilhouettes(x + 20, baseY);
-      drawLowerBroadwayAvenueMarkers(x, baseY);
       drawRymanAlleyCue(x + 92, baseY);
-      drawBridgeLandingCue(x + 650, baseY);
+      drawBridgeLandingCue(x + 700, baseY);
+      drawBridgestoneArena(x + 836, baseY);
+      // (crowd silhouettes + avenue markers removed: they sat below the opaque
+      // ground fill and could never be seen — dead per-frame work)
     }
   }
   function drawBridgestoneArena(x, baseY) {
     ctx.save();
-    ctx.globalAlpha = 0.88;
+    // Opaque body — the old 0.88 alpha let the sky/skyline ghost through a
+    // building, which read as a glitch rather than distance.
     ctx.fillStyle = '#2d3038';
     ctx.beginPath();
     ctx.moveTo(x, baseY);
@@ -3456,81 +3522,78 @@
   }
 
   function drawNearScenery(biome) {
-    // Near-ground details — fast parallax (0.7x)
-    const off = state.distance * 0.7;
+    // Roadside props live on the FAR SHOULDER (just beyond the asphalt edge)
+    // and scroll with the road itself, so nothing ever stands in a driving
+    // lane. (Pre-lane-system these anchored to GROUND_Y — the middle of
+    // today's three-lane road — and used independent modulo wavelengths that
+    // periodically stacked props on top of each other.)
+    const shoulderY = laneBaseYFor(2) - 12;          // base line above the asphalt edge
+    const off = state.distance * ROAD_SCROLL;        // planted: moves with the road sheet
     ctx.fillStyle = biomeColor(biome, 'grass');
-    // Grass tufts
+    // Grass tufts on the far grass strip (not on the asphalt)
     for (let i = 0; i < 28; i++) {
       const x = ((i * 50) - (off % 50)) - 25;
-      const tuftY = GROUND_Y - 4;
+      const tuftY = shoulderY - 8;
       ctx.fillRect(x, tuftY, 3, 4);
       ctx.fillRect(x + 6, tuftY - 1, 3, 5);
       ctx.fillRect(x + 12, tuftY, 3, 4);
     }
-    // Route-specific roadside detail
-    if (biome.name === 'DOWNTOWN') {
-      ctx.fillStyle = '#2a2a2e';
-      for (let i = 0; i < 6; i++) {
-        const x = ((i * 240) - (off % 240)) - 120;
-        // streetlight pole + lamp
-        ctx.fillRect(x, GROUND_Y - 60, 4, 60);
-        ctx.fillRect(x - 12, GROUND_Y - 64, 20, 4);
-        ctx.fillStyle = '#f5d76e';
-        ctx.fillRect(x - 10, GROUND_Y - 60, 6, 4);
-        drawLampGlow(x - 7, GROUND_Y - 58, 34, '#f5d76e', 0.15);
-        ctx.fillStyle = '#2a2a2e';
-      }
-      for (let i = 0; i < 3; i++) {
-        const x = ((i * 340) - (off % 340)) - 60;
-        drawRoadSign(x, GROUND_Y - 92, 72, 28, '#176d3c', i % 2 ? 'BROADWAY' : 'DOWNTOWN');
-      }
-    } else if (biome.name === 'MUSIC ROW') {
-      for (let i = 0; i < 8; i++) {
-        const x = ((i * 150) - (off % 150)) - 75;
-        ctx.fillStyle = '#513423';
-        ctx.fillRect(x, GROUND_Y - 34, 6, 34);
-        ctx.fillStyle = '#f5d76e';
-        ctx.fillRect(x + 6, GROUND_Y - 34, 34, 16);
-        ctx.fillStyle = '#1a1a26';
-        ctx.fillRect(x + 10, GROUND_Y - 30, 26, 3);
-        ctx.fillRect(x + 10, GROUND_Y - 24, 18, 3);
-      }
-      for (let i = 0; i < 4; i++) {
-        const x = ((i * 280) - (off % 280)) - 120;
-        drawRoadSign(x, GROUND_Y - 82, 58, 24, '#5b4d3a', i % 2 ? '16TH AVE' : 'STUDIO');
-      }
-    } else if (biome.name === 'CUMBERLAND') {
-      ctx.fillStyle = '#2e3942';
-      for (let i = 0; i < 10; i++) {
-        const x = ((i * 112) - (off % 112)) - 56;
-        ctx.fillRect(x, GROUND_Y - 44, 5, 44);
-        ctx.fillRect(x + 18, GROUND_Y - 44, 5, 44);
-        ctx.fillRect(x - 4, GROUND_Y - 40, 32, 4);
-        ctx.fillStyle = '#d2c58a';
-        ctx.fillRect(x - 4, GROUND_Y - 54, 32, 3);
-        ctx.fillStyle = '#2e3942';
-      }
-      for (let i = 0; i < 4; i++) {
-        const x = ((i * 280) - (off % 280)) - 80;
-        drawRoadSign(x, GROUND_Y - 86, 74, 24, '#255a7a', 'RIVERFRONT');
-      }
-    } else if (biome.name === 'BROADWAY') {
-      for (let i = 0; i < 7; i++) {
-        const x = ((i * 170) - (off % 170)) - 85;
-        const color = ['#ff4fb8', '#64d7ff', '#f5d76e', '#7ee27e'][i % 4];
+    // One shared world-anchored slot grid per biome: each 220px slot hosts at
+    // most ONE prop (type alternates by slot id), so generators can never
+    // collide. Slot ids are stable world chunks — geometry never flickers.
+    const SLOT = 220;
+    const firstSlot = Math.floor((off - 140) / SLOT);
+    const lastSlot = Math.ceil((off + W + 140) / SLOT);
+    for (let s = firstSlot; s <= lastSlot; s++) {
+      const x = s * SLOT - off + (noise01(s * 7.7) - 0.5) * 50;   // stable jitter
+      if (biome.name === 'DOWNTOWN') {
+        if (s % 2 === 0) {
+          // streetlight pole + lamp arm reaching over the shoulder
+          ctx.fillStyle = '#2a2a2e';
+          ctx.fillRect(x, shoulderY - 52, 4, 52);
+          ctx.fillRect(x - 12, shoulderY - 56, 20, 4);
+          ctx.fillStyle = '#f5d76e';
+          ctx.fillRect(x - 10, shoulderY - 52, 6, 4);
+          drawLampGlow(x - 7, shoulderY - 50, 30, '#f5d76e', 0.15);
+        } else {
+          drawRoadSign(x, shoulderY - 78, 64, 24, '#176d3c', s % 4 === 1 ? 'BROADWAY' : 'DOWNTOWN', shoulderY);
+        }
+      } else if (biome.name === 'MUSIC ROW') {
+        if (s % 2 === 0) {
+          // studio mailbox-marquee
+          ctx.fillStyle = '#513423';
+          ctx.fillRect(x, shoulderY - 30, 6, 30);
+          ctx.fillStyle = '#f5d76e';
+          ctx.fillRect(x + 6, shoulderY - 30, 30, 14);
+          ctx.fillStyle = '#1a1a26';
+          ctx.fillRect(x + 9, shoulderY - 27, 24, 3);
+          ctx.fillRect(x + 9, shoulderY - 21, 16, 3);
+        } else {
+          drawRoadSign(x, shoulderY - 70, 56, 22, '#5b4d3a', s % 4 === 1 ? '16TH AVE' : 'STUDIO', shoulderY);
+        }
+      } else if (biome.name === 'CUMBERLAND') {
+        if (s % 2 === 0) {
+          // dock rail segment
+          ctx.fillStyle = '#2e3942';
+          ctx.fillRect(x, shoulderY - 38, 5, 38);
+          ctx.fillRect(x + 18, shoulderY - 38, 5, 38);
+          ctx.fillRect(x - 4, shoulderY - 34, 32, 4);
+          ctx.fillStyle = '#d2c58a';
+          ctx.fillRect(x - 4, shoulderY - 46, 32, 3);
+        } else {
+          drawRoadSign(x, shoulderY - 72, 64, 22, '#255a7a', 'RIVERFRONT', shoulderY);
+        }
+      } else if (biome.name === 'BROADWAY') {
+        // lit storefront marquee every slot — Broadway should feel dense
+        const color = ['#ff4fb8', '#64d7ff', '#f5d76e', '#7ee27e'][((s % 4) + 4) % 4];
         ctx.fillStyle = '#181824';
-        ctx.fillRect(x, GROUND_Y - 58, 52, 22);
+        ctx.fillRect(x, shoulderY - 50, 52, 22);
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
-        ctx.strokeRect(x + 3, GROUND_Y - 55, 46, 16);
+        ctx.strokeRect(x + 3, shoulderY - 47, 46, 16);
         ctx.fillStyle = color;
-        ctx.fillRect(x + 10, GROUND_Y - 48, 26, 3);
-        drawLampGlow(x + 26, GROUND_Y - 48, 30, color, 0.14);
-      }
-      ctx.fillStyle = 'rgba(255, 79, 184, 0.20)';
-      for (let i = 0; i < 12; i++) {
-        const x = ((i * 90) - (off % 90)) - 40;
-        ctx.fillRect(x, GROUND_Y - 6, 42, 3);
+        ctx.fillRect(x + 10, shoulderY - 40, 26, 3);
+        drawLampGlow(x + 26, shoulderY - 40, 28, color, 0.14);
       }
     }
     drawGeoAnchorMarkers(biome);
@@ -4364,8 +4427,9 @@
     drawPlayerGT();   // the GT body is the only car now
   }
 
-  function drawObstacles() {
+  function drawObstacles(laneFilter) {
     for (const o of state.obstacles) {
+      if (laneFilter !== undefined && o.lane !== laneFilter) continue;
       if (o.type === 'pothole') {
         // Cracked asphalt depression — high-contrast rim + depth + cracks, plus a
         // dark outline so it stays readable against the warm dusk grade.
@@ -4513,11 +4577,15 @@
     ctx.strokeRect(4, 4, VIEW_W - 8, VIEW_H - 8);
     ctx.shadowBlur = 0;
     if (!calm) {
+      // Horizontal streaks sweeping backward — they sell forward speed. (The
+      // old version scrolled them VERTICALLY at 1400px/s, which read as the
+      // scene moving up and down.)
       ctx.strokeStyle = 'rgba(0, 212, 255, 0.35)';
       ctx.lineWidth = 2;
       for (let i = 0; i < 5; i++) {
-        const y = (i * 113 + Math.floor(state.runTime * 1400)) % VIEW_H;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(70 + (i % 3) * 40, y); ctx.stroke();
+        const y = 50 + i * 105;
+        const x = VIEW_W + 110 - ((Math.floor(state.runTime * 1400) + i * 137) % (VIEW_W + 220));
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 70 + (i % 3) * 40, y); ctx.stroke();
       }
     }
     ctx.fillStyle = '#00d4ff';
@@ -4536,8 +4604,9 @@
     ctx.restore();
   }
 
-  function drawCollectibles() {
+  function drawCollectibles(laneFilter) {
     for (const c of state.collectibles) {
+      if (laneFilter !== undefined && c.lane !== laneFilter) continue;
       if (c.type === 'pitstop') {
         drawPitstop(c);
         continue;
@@ -4775,12 +4844,12 @@
     ctx.strokeStyle = `rgba(255, 255, 255, ${0.15 + intensity * 0.35})`;
     ctx.lineWidth = 1.2;
     for (let i = 0; i < count; i++) {
-      // pseudo-random but stable per-frame seed by state.distance for some flicker
-      const seed = (i * 9301 + Math.floor(state.distance * 1.4)) % 233280;
-      const r = (seed / 233280);
+      // Stable per-line y (no per-frame reseed shimmer), and the streaks sweep
+      // BACKWARD with the world — they used to jump forward against the scroll.
+      const r = noise01(i * 7.13);
       const y = 100 + r * (GROUND_Y - 120);
       const len = 40 + r * 80 + intensity * 60;
-      const x = (Math.floor(state.distance * 4) + i * 71) % (W + 200) - 100;
+      const x = W + 100 - ((Math.floor(state.distance * 4) + i * 71) % (W + 200));
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x + len, y);
@@ -5080,15 +5149,18 @@
     const chaseMode = state.cameraMode === CAMERA_CHASE &&
       (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED);
 
-    ctx.save();
-    ctx.translate(shake.x, shake.y);
-
+    // The far background (sky through atmosphere) stays UNSHAKEN — shaking the
+    // whole scene read as the background twitching. Impact shake belongs to the
+    // road/gameplay layer only.
     drawSky(b);
     drawSun(b);
     drawClouds(b);
     drawBirds();
     drawFarMountains(b);
     drawAtmosphere(b);
+
+    ctx.save();
+    ctx.translate(shake.x, shake.y);
     if (chaseMode) {
       drawChaseWorld(b);
       drawScorePopups();
@@ -5098,9 +5170,17 @@
       drawNearScenery(b);
 
       if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) {
+        // Painter's order by depth: far-lane entities first, then semis (their
+        // bottom edge reads nearer than the far lane but behind the center
+        // lane), then center/near lanes. Previously draw-by-type let far-lane
+        // cones paint over a visually nearer truck.
+        drawCollectibles(2);
+        drawObstacles(2);
         drawSemis();
-        drawCollectibles();
-        drawObstacles();
+        for (const lane of [1, 0]) {
+          drawCollectibles(lane);
+          drawObstacles(lane);
+        }
         drawFinishLine();
         drawSpeedLines();
         drawGhostPlayer();
@@ -5109,7 +5189,6 @@
         drawScorePopups();
       }
     }
-
     ctx.restore();
 
     drawColorGrade(b);   // cinematic vignette + subtle per-biome grade (all screens)
@@ -5406,7 +5485,7 @@
     // 4e) Ghost import validation: bounded frame count + finite-only coercion
     //     (pure function — no state touched).
     {
-      const mk = (frames) => ({ version: 1, game: 'Weekend Road Trip', frames });
+      const mk = (frames) => ({ version: GHOST_VERSION, game: 'Weekend Road Trip', frames });
       const okGhost = normalizeGhost(mk([[0, 0, 432, 5, 0], [0.1, 10, 432, 5, 0]]));
       const oversized = normalizeGhost(mk(new Array(GHOST_MAX_FRAMES + 1).fill([0, 0, 432, 5, 0])));
       check('ghost import: sane payload accepted, oversized rejected',

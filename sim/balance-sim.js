@@ -29,10 +29,10 @@ const GRAVITY = 0.78;
 const JUMP_V = -16;
 const PLAYER_X = 170;
 const BASE_SPEED = 5;
-const MAX_SPEED = 11.0;               // mirror game.js (widened 9.5 -> 11.0)
+const MAX_SPEED = 9.0;                // mirror game.js (trimmed 11.0 -> 9.0, 2026-06-09 feel rework)
 const MIN_GAP_TIME = 0.72;            // mirror game.js: speed-aware min same-lane blocker gap (s)
 const FUEL_MAX = 100;
-const FUEL_DRAIN_PER_SEC = 1.4;
+const FUEL_DRAIN_PER_SEC = 1.15;      // mirror game.js (trimmed 1.4 -> 1.15 with the speed cut)
 const HIT_FUEL_PENALTY = 20;
 const SPAWN_MIN_INTERVAL = 0.32;
 const TRIP_TOTAL = 20000;
@@ -318,7 +318,7 @@ function economyRun(policy, seed) {
           if (rng() < policy.hitRate(leg)) { blockersHit++; fuel -= HIT_FUEL_PENALTY; }
         }
       }
-      spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.045) / d.obstacleDensity);
+      spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.055) / d.obstacleDensity);
     }
 
     // pit-stop spawn at distance milestone (mirror updateWorld); collected ~890
@@ -373,7 +373,7 @@ function scoreModel(policy, seed) {
       if (r < fuelChance) { if (rng() < policy.grab) bump(25); }
       else if (r < fuelChance + snackChance) { if (rng() < policy.grab) bump(50); }
       else { const n = samplePatternBlockers(leg, rng); for (let k = 0; k < n; k++) if (rng() < policy.nearMiss) bump(35); }
-      spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.045) / d.obstacleDensity);
+      spawnTimer = Math.max(SPAWN_MIN_INTERVAL, (0.85 + rng() * 0.7 - speed * 0.055) / d.obstacleDensity);
     }
     score += speed * DT * 3;
     distance += speed * 60 * DT;

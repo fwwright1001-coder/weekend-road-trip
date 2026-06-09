@@ -2,6 +2,41 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-09 - Feel rework: stable backgrounds, calmer speed, clean composition
+
+A root-cause diagnosis pass (every claim code-verified) behind the player
+feedback "the background bobs, everything moves too fast, assets are
+translucent/overlapping":
+
+- **Fixed the background "bob"** — three real bugs, not a camera issue: the far
+  skyline re-randomized every building's height EVERY FRAME (continuous noise
+  seed fully decorrelated per frame; now seeded by stable world-chunk ids), the
+  rolling hills snapped to a new silhouette at every parallax wrap (now
+  world-anchored so hills keep their shape while scrolling), and screen shake
+  translated the whole scene including the sky with fresh white noise each
+  frame (now a coherent damped oscillation applied only to the road/gameplay
+  layers; nitro pickups no longer shake at all).
+- **Calmer speed**: MAX_SPEED 11.0 → 9.0 and all five parallax factors ×0.7;
+  fuel drain 1.15/s and the spawn-cadence speed term retuned in lockstep, with
+  the sim re-proving all 10 acceptance criteria (skill dominance actually rose
+  to 12.6x; moderate finish 100%, careless dry 98.8%).
+- **Ghost car is now opt-in**: off by default with a one-time migration for
+  saved profiles (re-enabling in Settings sticks); ghost format bumped to v2 so
+  replays recorded at the old speeds can't unfairly outrace post-retune runs.
+- **Composition cleanup**: roadside props (streetlights, signs, mailboxes,
+  rails, neon marquees) moved from mid-road — they anchored to the pre-lane-era
+  baseline — onto the far shoulder on a collision-free slot grid; sign boards
+  and neon boxes get chevron/dash content instead of rendering as empty
+  placeholder panels; Bridgestone Arena is opaque and fits inside its scenery
+  period (it ghosted over the next chunk's neon at 0.88 alpha); the Cumberland
+  bridge deck no longer has an 80px scrolling hole; Downtown landmarks are
+  drawn back-to-front with the Country-Hall wedge in its own slot (no more
+  roof slicing through tower windows); biome cross-fade shortened 220 → 80
+  units; speed lines and nitro streaks are horizontal and sweep with the world
+  (the streaks used to scroll vertically at 1400px/s); semis draw in correct
+  depth order between the far and center lanes; dead always-occluded draws
+  (crowds, street-level podium) removed.
+
 ## 2026-06-09 - Spec-audit closure: calm mode, input parity, ghost hardening
 
 A 13-dimension audit of the full project spec (every claimed gap adversarially
