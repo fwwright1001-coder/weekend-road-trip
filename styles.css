@@ -395,6 +395,8 @@ button.waitlist-submit {
 .waitlist-status.ok { color: var(--good); }
 .waitlist-status.bad { color: var(--bad); }
 .waitlist-status.pending { color: var(--blue); }
+.waitlist-link { color: var(--blue); text-decoration: none; }
+.waitlist-link:hover, .waitlist-link:focus-visible { text-decoration: underline; }
 
 .credit {
   margin-top: 10px;
