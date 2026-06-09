@@ -2,6 +2,37 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-06-09 - Spec-audit closure: calm mode, input parity, ghost hardening
+
+A 13-dimension audit of the full project spec (every claimed gap adversarially
+re-verified) found no missing features and eleven partial deviations; this pass
+closes the code-level ones and documents the deliberate ones.
+
+- Reduce-motion now gates EVERY canvas motion effect at the source: particle
+  spawns (sparks, pickup bursts, dust, exhaust, tire smoke), score-popup drift,
+  the combo pill pop-scale, suspension bob, collectible hover, and the nitro
+  pickup pulse. The damage flash becomes a steady edge border so hit feedback
+  survives calm mode. Locked by a new self-test.
+- Title screen attract motion: the live world behind the menu now visibly moves
+  (cloud drift + bird flocks) without touching any gameplay state; stays still
+  under reduce-motion.
+- Gamepad/touch parity: Y toggles the camera and X mutes on gamepad, a CAM
+  touch button joins the pause cluster, the d-pad/stick now navigates every
+  menu (including Settings and the volume slider), and the initials screen is
+  fully playable on pad.
+- Combo is now truly uncapped: the count and score multiplier keep climbing
+  past 25 (only the SFX pitch ramp clamps); the balance sim mirrors the change
+  and skill-vs-distance dominance rose from 7.82x to 10.25x. New self-test.
+- Ghost hardening: imported ghosts are rejected above a 20,000-frame cap,
+  non-finite fields coerce to safe defaults (Infinity no longer slips through),
+  and the FIRST finished run always saves a ghost regardless of distance.
+  Locked by two new self-tests.
+- Side-view racing stripe honors the run's livery (the chase view already did).
+- Docs truthfulness: ARCHITECTURE.md and BALANCE.md regenerated against the
+  current code and sim output (7 gates, 19 self-tests, current fuel/combo
+  constants); semis-as-ambience and edge-triggered lane hops documented as
+  deliberate design choices.
+
 ## 2026-06-07 - Visual QA road/parallax cleanup
 
 - Unified every asphalt-painted detail behind `ROAD_SCROLL = 1.0`, so road

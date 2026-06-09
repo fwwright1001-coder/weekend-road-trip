@@ -12,9 +12,11 @@ This document is the honest engineering story behind that.
 
 ## 1. What it is
 
-- **Zero dependencies, no build step.** `index.html` + `styles.css` + `game.js`
-  (~3.5k lines, one IIFE). Open the file, it runs. All art is procedural (vector
-  + Canvas), all audio is synthesized (Web Audio) — no asset pipeline.
+- **Dependency-light, no build step.** `index.html` + `styles.css` + `game.js`
+  (~5.5k lines, one IIFE). Open the file, it runs. All art is procedural (vector
+  + Canvas), all audio is synthesized (Web Audio) — no asset pipeline. The one
+  production dependency (`@neondatabase/serverless`) belongs to the optional
+  Vercel API layer, not the game.
 - **Runs everywhere.** Keyboard, gamepad, and touch input parity; DPR-aware
   rendering for crisp output at any zoom/Retina scale; an accessibility pass
   (reduce-motion default, colorblind palette, ARIA, focus management).
@@ -25,11 +27,20 @@ This document is the honest engineering story behind that.
 index.html      markup + DOM HUD/menus (screen-space over the canvas)
 styles.css      HUD, menus, touch controls, responsive + a11y rules
 game.js         the engine: state machine, physics, spawn, collision,
-                Nashville route rendering (5 parallax layers), audio,
-                persistence, ghost race
+                Nashville route rendering (5 parallax layers), side + chase
+                camera renderers, audio, persistence, ghost race
+launch.js       Road Crew signup client (Vercel API vs local fallback)
+api/waitlist.js      Vercel serverless: Road Crew signups -> Neon email_signups
+api/highscores.js    Vercel serverless: cloud scores -> Neon game_high_scores
+database/schema.sql  Neon table definitions (also bootstrapped by the APIs)
 sim/balance-sim.js   headless Node model of the physics + spawn + economy
-qa/run-selftests.js  headless Node persistence/settings/a11y self-tests
-.github/workflows/ci.yml  runs both checks on every push / PR
+qa/run-selftests.js  runs the in-game self-test harness headlessly (19 checks)
+qa/smoke-dom.js      DOM contract: every JS element reference resolves
+qa/waitlist-contract.js          Road Crew API contract
+qa/highscores-contract.js        cloud high-score API contract
+qa/highscores-client-contract.js cloud high-score client contract
+qa/launch-contract.js            Road Crew client contract
+.github/workflows/ci.yml  runs all seven gates on every push / PR
 ```
 
 ---
@@ -57,6 +68,21 @@ Two design choices that carry the rest:
    `laneBaseY − jumpOff`, where the jump integrates in an independent `jumpOff`
    space. This is what lets you change lanes *mid-air* without the jump and the
    lane fighting each other.
+
+Two deliberate deviations from a literal reading of the project spec, kept on
+purpose and documented honestly:
+
+- **Lane hops are edge-triggered — one hop per press.** A held key does NOT
+  auto-repeat across lanes; a press made mid-hop is buffered and chains on
+  completion. The held-key auto-repeat variant was play-tested and logged as a
+  HIGH-severity bug (accidental multi-hop chaos) in
+  [`qc/playtest-2026-06-02_lane-beta.md`](qc/playtest-2026-06-02_lane-beta.md);
+  the spec is at [`qc/beta-lane-spec.json`](qc/beta-lane-spec.json).
+- **Semis are non-colliding ambience.** They overtake faster than the world
+  scrolls, so a hitboxed semi could create an unavoidable hit — which would
+  violate the fairness invariant below. They keep their readable silhouette in
+  both cameras; the *colliding* traffic pressure comes from the lane-gated
+  obstacle set the sim proves solvable.
 
 ---
 
@@ -90,7 +116,7 @@ criteria; it exits non-zero if any fails:
      finale is the climax .............. PASS
 [6]  lanes solvable (open lane clears).. PASS   BROADWAY lead 0.888s > 0.57s reach
      open lane reachable in time ....... PASS
-[7]  skill dominates distance (>=2.5x).. PASS   weaver 7.82x a grinder
+[7]  skill dominates distance (>=2.5x).. PASS   weaver 10.25x a grinder
      skilled / moderate finish ......... 100% / 99.8%
      careless runs dry ................. 97.6%
 ```
@@ -151,13 +177,20 @@ simulation you can run in two seconds.
 
 ## 5. Testing & CI
 
+`npm test` chains seven deterministic gates; the build is red if any fails:
+
 ```bash
-node sim/balance-sim.js     # 10 balance/physics acceptance criteria (exit 0 = pass)
-node qa/run-selftests.js    # persistence / settings / a11y self-tests (12 checks)
+node sim/balance-sim.js               # 10 balance/physics acceptance criteria
+node qa/run-selftests.js              # in-game self-test harness, headless (19 checks)
+node qa/smoke-dom.js                  # DOM contract: all JS element refs resolve
+node qa/waitlist-contract.js          # Road Crew API contract (20 checks)
+node qa/highscores-contract.js        # cloud high-score API contract (19 checks)
+node qa/highscores-client-contract.js # cloud high-score client contract (11 checks)
+node qa/launch-contract.js            # Road Crew client contract (17 checks)
 ```
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs both on every push and
-PR — the same gate enforced locally on every commit. The QC reports in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all seven on every
+push and PR — the same gate enforced locally on every commit. The QC reports in
 [`qc/`](qc/) are the audit trail: each is a real headless play-test with the
 method, evidence, and verdict recorded.
 

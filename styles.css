@@ -730,6 +730,7 @@ body.reduce-motion *::after {
 .tc-btn.tc-jump  { min-width: 78px; min-height: 78px; border-radius: 50%; font-size: 14px; border-color: var(--gold); }
 .tc-btn.tc-duck  { min-height: 64px; }
 .tc-btn.tc-pause { position: absolute; top: 14px; right: 16px; bottom: auto; min-width: 44px; min-height: 44px; font-size: 16px; border-radius: 10px; }
+.tc-btn.tc-cam   { position: absolute; top: 14px; right: 68px; bottom: auto; min-width: 44px; min-height: 44px; font-size: 11px; border-radius: 10px; }
 .tc-btn.pressed  { background: var(--gold); color: #1a1a2e; transform: scale(0.94); }
 
 /* Keep the play surface from scrolling / pinch-zooming under the fingers. */

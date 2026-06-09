@@ -1,12 +1,14 @@
 name: CI
 
-# The game is dependency-free vanilla JS, but balance and physics are guarded by
-# two headless Node checks that must stay green on every push / PR:
+# The game is dependency-light vanilla JS, guarded by seven headless Node gates
+# that must stay green on every push / PR (the same chain as `npm test`):
 #   - sim/balance-sim.js : proves jump-arc symmetry, per-lane solvability +
 #     reachability, a climaxing difficulty curve, and the fuel economy bands.
 #     Exits non-zero if any of its 10 acceptance criteria fail.
-#   - qa/run-selftests.js : persistence round-trips, settings/scores/achievements,
-#     reduce-motion default, audio init. Exits non-zero on any failure.
+#   - qa/run-selftests.js : the in-game self-test harness, headless — persistence
+#     round-trips, settings, camera, ghost validation, reduce-motion gates.
+#   - qa/smoke-dom.js + four API/client contract suites : Vercel/Neon Road Crew
+#     and cloud high-score paths, including the static-hosting fallbacks.
 # These are the same gates enforced locally on every commit.
 
 on:

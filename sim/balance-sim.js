@@ -73,8 +73,8 @@ const LANE_TWEEN_DUR = 0.16;
 const LANE_COMMIT_FRAC = 0.5;
 const REACTION_R = 0.25;                // human+actuation reaction budget (s)
 const SPAWN_LEAD_PX = (W + 60) - PLAYER_X;  // px a blocker travels from spawn to the player
-// Combo scoring (mirror game.js)
-const COMBO_CEILING = 25;
+// Combo scoring (mirror game.js — count + multiplier are UNCAPPED; the game
+// clamps only the SFX pitch ramp, which has no scoring effect)
 const comboMult = (c) => 1 + Math.max(0, c - 1) * 0.6;
 const comboWindow = (c) => Math.max(1.5, 4.0 - c * 0.12);
 // Per-leg pattern weights + maxLaneSpan (mirror game.js)
@@ -365,7 +365,7 @@ function scoreModel(policy, seed) {
     if (leg > lastLeg) { score += 500; lastLeg = leg; }   // biome-clear bonus
     const d = DIFFICULTY[leg];
     const speed = AUTO(leg);
-    const bump = (val) => { combo = Math.min(COMBO_CEILING, combo + 1); comboT = comboWindow(combo); score += Math.round(val * comboMult(combo)); };
+    const bump = (val) => { combo += 1; comboT = comboWindow(combo); score += Math.round(val * comboMult(combo)); };
     spawnTimer -= DT;
     if (spawnTimer <= 0) {
       const fuelChance = Math.min(0.4, 0.10 * d.fuelSpawnRate), snackChance = 0.18;

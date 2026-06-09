@@ -113,6 +113,8 @@
   const MAX_SCORES = 5;
   const GHOST_SAMPLE_STEP = 0.08;
   const GHOST_DISTANCE_SCALE = 0.28;
+  const GHOST_MAX_FRAMES = 20000;  // import cap: a real run samples a few thousand frames at
+                                   // GHOST_SAMPLE_STEP, so anything larger is malformed/hostile
   const CAMERA_SIDE = 'side';
   const CAMERA_CHASE = 'chase';
 
@@ -308,7 +310,7 @@
     { id: 'pitstop', title: 'Full-Service Stop', desc: 'Pull through a pit stop.' },
     { id: 'combo-5', title: 'Perfect Snack Line', desc: 'Build a 5-chain combo.' },
     { id: 'combo-15', title: 'In the Zone', desc: 'Build a 15-chain combo.' },
-    { id: 'combo-25', title: 'Untouchable', desc: 'Max out a 25-chain combo.' },
+    { id: 'combo-25', title: 'Untouchable', desc: 'Build a 25-chain combo.' },
     { id: 'max-speed', title: 'Cruise Control Hero', desc: 'Reach top speed.' },
     { id: 'low-fuel', title: 'Running on Fumes', desc: 'Keep driving below 15 percent fuel.' },
     { id: 'music-row', title: 'Music Row Roll', desc: 'Reach the Music Row leg.' },
@@ -475,6 +477,7 @@
     // floating "+50" texts
     scorePopups: [],
     runTime: 0,
+    ambient: 0,        // title-screen attract drift (cloud layer); never advances in play
     runStats: { hits: 0, pickups: 0, fuel: 0, snacks: 0, pitstops: 0 },
     // mini-events
     semis: [],
@@ -495,8 +498,9 @@
     cloudScoreWritePending: false
   };
   const COMBO_BASE_WINDOW = 4.0;  // base seconds before combo resets; shrinks as combo climbs
-  const COMBO_CEILING = 25;       // soft cap on combo COUNT (bounds runaway), but the multiplier
-                                  // keeps climbing — combo is now the score engine, not a flat x5.
+  const COMBO_CEILING = 25;       // clamps the SFX pitch ramp ONLY — the combo count and score
+                                  // multiplier are uncapped, so a long clean chain keeps climbing
+                                  // (the shrinking decay window is the practical limit).
   const MAX_PARTICLES = 240;      // caps short-lived VFX so long sessions cannot balloon draw work
   const MAX_SCORE_POPUPS = 32;    // enough for busy combo bursts without unbounded text draws
   // Score multiplier from combo count: 1x, 1.6x, 2.2x ... combo5=3.4x, combo10=6.4x, combo20=12.4x.
@@ -725,15 +729,23 @@
   }
   function normalizeGhost(data) {
     if (!data || data.version !== 1 || data.game !== 'Weekend Road Trip') return null;
-    if (!Array.isArray(data.frames) || data.frames.length < 2) return null;
+    // Bounded frame count (spec): reject oversized pastes instead of ballooning
+    // memory / the localStorage quota with a malformed or hostile payload.
+    if (!Array.isArray(data.frames) || data.frames.length < 2 ||
+        data.frames.length > GHOST_MAX_FRAMES) return null;
+    // Finite-only coercion — Number(x) || fallback would let Infinity through (truthy).
+    const num = (v, fallback) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
     const frames = data.frames
       .filter((f) => Array.isArray(f) && f.length >= 5)
       .map((f) => [
-        Number(f[0]) || 0,
-        Number(f[1]) || 0,
-        Number(f[2]) || GROUND_Y,
-        Number(f[3]) || BASE_SPEED,
-        Number(f[4]) || 0
+        num(f[0], 0),
+        num(f[1], 0),
+        num(f[2], GROUND_Y),
+        num(f[3], BASE_SPEED),
+        num(f[4], 0)
       ]);
     if (frames.length < 2) return null;
     return {
@@ -741,9 +753,9 @@
       game: 'Weekend Road Trip',
       created: String(data.created || new Date().toISOString()),
       outcome: data.outcome === 'win' ? 'win' : 'gameover',
-      score: Math.floor(Number(data.score) || 0),
-      distance: Math.max(0, Number(data.distance) || frames[frames.length - 1][1]),
-      duration: Math.max(0, Number(data.duration) || frames[frames.length - 1][0]),
+      score: Math.floor(num(data.score, 0)),
+      distance: Math.max(0, num(data.distance, 0) || frames[frames.length - 1][1]),
+      duration: Math.max(0, num(data.duration, 0) || frames[frames.length - 1][0]),
       frames
     };
   }
@@ -1144,6 +1156,7 @@
         else if (action === 'laneUp') { if (state.screen === SCREEN.PLAYING) hopLane(+1); }
         else if (action === 'laneDown') { if (state.screen === SCREEN.PLAYING) hopLane(-1); }
         else if (action === 'pause') { if (state.screen === SCREEN.PLAYING) show(SCREEN.PAUSED); }
+        else if (action === 'camera') { if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) toggleCameraMode(); }
         else if (code) { state.keys.add(code); touchHeld.add(code); }
       };
       const up = (e) => {
@@ -1268,23 +1281,71 @@
       laneDown: b(14) || axisX < -0.45,
       confirm: b(0),
       pause: b(9),
-      help: b(8)
+      help: b(8),
+      // Keyboard parity for T (camera) and M (mute) — chase view and mute must
+      // be reachable without a keyboard.
+      camera: b(3),   // Y / triangle
+      mute: b(2)      // X / square
     };
 
     const prev = state.pad;
     state.padConnected = true;
-    ['jump', 'laneUp', 'laneDown', 'confirm', 'pause', 'help'].forEach((action) => {
+    ['jump', 'duck', 'laneUp', 'laneDown', 'confirm', 'pause', 'help', 'camera', 'mute'].forEach((action) => {
       if (next[action] && !prev[action]) handlePadAction(action);
     });
     state.padPrev = prev;
     state.pad = next;
   }
 
+  // --- Gamepad menu navigation -------------------------------------------
+  // D-pad / stick left-right moves DOM focus across the active screen's
+  // controls (buttons + settings inputs) and A activates the focused one, so a
+  // pad-only player can reach every menu — including Settings — without a
+  // keyboard. A focused volume slider consumes left/right as value nudges; A
+  // moves on from it.
+  function padFocusables() {
+    const el = screenEls[state.screen];
+    if (!el || !el.querySelectorAll) return [];
+    return Array.from(el.querySelectorAll('button, input')).filter((n) =>
+      !n.disabled && n.offsetParent !== null);
+  }
+  function padMoveFocus(dir) {
+    const items = padFocusables();
+    if (!items.length) return;
+    const active = document.activeElement;
+    if (active && active.type === 'range' && items.includes(active)) {
+      const step = (Number(active.step) || 0.05) * dir;
+      const lo = active.min !== '' ? Number(active.min) : 0;
+      const hi = active.max !== '' ? Number(active.max) : 1;
+      active.value = String(Math.max(lo, Math.min(hi, Number(active.value) + step)));
+      active.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    const idx = items.indexOf(active);
+    const next = idx === -1 ? (dir > 0 ? 0 : items.length - 1) : (idx + dir + items.length) % items.length;
+    items[next].focus();
+  }
+  function padActivateFocused() {
+    const active = document.activeElement;
+    if (!active || !padFocusables().includes(active)) return false;
+    if (active.type === 'range') { padMoveFocus(1); return true; }   // "done adjusting"
+    active.click();
+    return true;
+  }
+
   function handlePadAction(action) {
+    // Screen-independent actions mirror their keyboard twins (M mute, T camera).
+    if (action === 'mute') { audio.init(); audio.toggle(); return; }
+    if (action === 'camera') {
+      if (state.screen === SCREEN.PLAYING || state.screen === SCREEN.PAUSED) toggleCameraMode();
+      return;
+    }
     switch (state.screen) {
       case SCREEN.TITLE:
-        if (action === 'confirm') startRun();
+        if (action === 'confirm') { if (!padActivateFocused()) startRun(); }
         if (action === 'help') openHelp();
+        if (action === 'laneUp') padMoveFocus(1);
+        if (action === 'laneDown') padMoveFocus(-1);
         break;
       case SCREEN.PLAYING:
         if (action === 'jump') tryJump();
@@ -1294,20 +1355,37 @@
         if (action === 'help') openHelp();
         break;
       case SCREEN.PAUSED:
-        if (action === 'confirm' || action === 'pause') show(SCREEN.PLAYING);
+        if (action === 'confirm') { if (!padActivateFocused()) show(SCREEN.PLAYING); }
+        else if (action === 'pause') show(SCREEN.PLAYING);
+        if (action === 'laneUp') padMoveFocus(1);
+        if (action === 'laneDown') padMoveFocus(-1);
         break;
       case SCREEN.GAMEOVER:
       case SCREEN.WIN:
-        if (action === 'confirm') afterRun();
+        if (action === 'confirm') { if (!padActivateFocused()) afterRun(); }
+        if (action === 'laneUp') padMoveFocus(1);
+        if (action === 'laneDown') padMoveFocus(-1);
+        break;
+      case SCREEN.INITIALS:
+        // Arcade initials entry, pad edition: left/right picks the slot, duck
+        // (B / d-pad down / stick down) cycles the letter, A submits.
+        if (action === 'laneUp') handleInitialsKey('ArrowRight');
+        if (action === 'laneDown') handleInitialsKey('ArrowLeft');
+        if (action === 'duck') handleInitialsKey('ArrowDown');
+        if (action === 'confirm') handleInitialsKey('Enter');
         break;
       case SCREEN.SCORES:
       case SCREEN.ACHIEVEMENTS:
       case SCREEN.GHOST:
       case SCREEN.SETTINGS:
       case SCREEN.HELP:
-        if (action === 'confirm' || action === 'pause') {
+        if (action === 'confirm') {
+          if (!padActivateFocused()) show(state.prevScreen === state.screen ? SCREEN.TITLE : state.prevScreen);
+        } else if (action === 'pause') {
           show(state.prevScreen === state.screen ? SCREEN.TITLE : state.prevScreen);
         }
+        if (action === 'laneUp') padMoveFocus(1);
+        if (action === 'laneDown') padMoveFocus(-1);
         break;
     }
   }
@@ -1633,7 +1711,10 @@
     ghost.duration = Number(state.runTime.toFixed(2));
     const old = state.ghostLoaded;
     const isBetter = !old || ghost.distance > old.distance || ghost.score > old.score || outcome === 'win';
-    if (isBetter && ghost.distance > 300) {
+    // The FIRST finished run always saves (any distance) so a shareable ghost
+    // exists immediately; after that it's keep-best, with a 300-unit floor so a
+    // trivial stall can never overwrite a real replay.
+    if (isBetter && (!old || ghost.distance > 300)) {
       state.ghostLoaded = normalizeGhost(ghost);
       saveGhost(state.ghostLoaded);
       state.ghostMessage = 'Latest run saved as your ghost replay.';
@@ -1731,8 +1812,8 @@
     }
     if (p.laneBufferT > 0) p.laneBufferT -= dt;
     state.player.y = state.player.laneBaseY - state.player.jumpOff;
-    // gentle body wobble — sells the suspension
-    state.player.bob = Math.sin(state.distance * 0.05) * (state.speed * 0.12);
+    // gentle body wobble — sells the suspension (motion, so honors reduce-motion)
+    state.player.bob = reduceMotionOn() ? 0 : Math.sin(state.distance * 0.05) * (state.speed * 0.12);
     // wheel rotation
     state.player.wheelAngle += state.speed * 0.18 * f;
     // body tilt now comes from lane hops (manual throttle retired)
@@ -1994,7 +2075,7 @@
         if (!o.nearMissed && Math.abs(o.lane - state.player.lane) === 1 &&
             o.x + o.w < PLAYER_X + 24 && o.x + o.w > PLAYER_X - 30) {
           o.nearMissed = true;
-          state.combo = Math.min(COMBO_CEILING, state.combo + 1);
+          state.combo += 1;   // uncapped — the chain (and multiplier) keep climbing
           state.comboTimer = comboWindow(state.combo);
           const pts = Math.round(35 * comboMult(state.combo));
           state.score += pts;
@@ -2040,8 +2121,8 @@
         : (lanes.includes(c.lane) && rectsOverlap(pb, c));
       if (got) {
         c.taken = true;
-        // Bump combo (uncapped multiplier, soft-capped count)
-        state.combo = Math.min(COMBO_CEILING, state.combo + 1);
+        // Bump combo — uncapped, so stringing clean actions keeps paying more
+        state.combo += 1;
         state.comboTimer = comboWindow(state.combo);
         state.comboPopupT = 0.6;
         state.runStats.pickups += 1;
@@ -2052,7 +2133,7 @@
         // blocker is a deliberate risky line — reward it.
         const risky = c.type !== 'pitstop' && laneHasNearbyBlocker(c.lane);
         const mult = comboMult(state.combo) * (risky ? 1.5 : 1);
-        if (state.combo >= 2) audio.playCombo(state.combo);   // combo milestone feedback
+        if (state.combo >= 2) audio.playCombo(Math.min(COMBO_CEILING, state.combo));   // pitch ramp clamps; the score never does
         if (c.type === 'fuel') {
           state.runStats.fuel += 1;
           const pts = Math.round(FUEL_PICKUP_BONUS * mult);
@@ -2144,9 +2225,12 @@
   }
   function updateScorePopups(dt) {
     const f = dt * 60;
+    const drift = !reduceMotionOn();   // calm mode: popups fade in place, no float
     for (const p of state.scorePopups) {
-      p.y += p.vy * f;
-      p.vy *= Math.pow(0.96, f);
+      if (drift) {
+        p.y += p.vy * f;
+        p.vy *= Math.pow(0.96, f);
+      }
       p.life -= dt;
     }
     state.scorePopups = state.scorePopups.filter((p) => p.life > 0);
@@ -2173,8 +2257,9 @@
   function drawComboHud() {
     if (state.combo < 2 || state.screen !== SCREEN.PLAYING) return;
     const t = Math.min(1, state.comboPopupT * 2);
-    const scale = 1 + (1 - t) * 0.4;
-    const yOff = (1 - t) * -8;
+    const calm = reduceMotionOn();   // calm mode: steady pill, no pop-scale bounce
+    const scale = calm ? 1 : 1 + (1 - t) * 0.4;
+    const yOff = calm ? 0 : (1 - t) * -8;
     const label = `COMBO  x${state.combo}`;
     ctx.save();
     ctx.translate(W / 2, COMBO_Y + yOff);
@@ -2209,6 +2294,7 @@
   //   life, max, color, size, gravity }). The render loop fades them
   //   automatically based on life/max.
   function spawnSparks(x, y) {
+    if (reduceMotionOn()) return;   // particles are pure motion — gated at the source for calm mode
     for (let i = 0; i < 14; i++) {
       state.particles.push({
         x, y,
@@ -2224,6 +2310,7 @@
     capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnPickupBurst(x, y, color) {
+    if (reduceMotionOn()) return;
     for (let i = 0; i < 12; i++) {
       state.particles.push({
         x, y,
@@ -2252,6 +2339,7 @@
     capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnDust(x, y, count) {
+    if (reduceMotionOn()) return;
     for (let i = 0; i < count; i++) {
       state.particles.push({
         x: x + (Math.random() - 0.5) * 10,
@@ -2268,6 +2356,7 @@
     capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnExhaust(x, y) {
+    if (reduceMotionOn()) return;
     state.particles.push({
       x, y,
       vx: -2 - Math.random() * 2,
@@ -2281,6 +2370,7 @@
     capTransientList(state.particles, MAX_PARTICLES);
   }
   function spawnTireSmoke(x, y) {
+    if (reduceMotionOn()) return;
     for (let i = 0; i < 2; i++) {
       state.particles.push({
         x: x + (Math.random() - 0.5) * 6,
@@ -2683,8 +2773,10 @@
   }
 
   function drawClouds(biome) {
-    // Cloud layer — slow parallax (0.05x)
-    const off = state.distance * CLOUD_PARALLAX;
+    // Cloud layer — slow parallax. state.ambient drifts ONLY on the title
+    // screen (attract motion) so the menu world reads as live; in play it is
+    // frozen and distance owns the parallax exactly as before.
+    const off = (state.distance + state.ambient) * CLOUD_PARALLAX;
     ctx.save();
     ctx.shadowColor = biome.timeOfDay === 'sunset'
       ? 'rgba(126, 54, 80, 0.22)'
@@ -4213,8 +4305,8 @@
     // diffuser fins
     ctx.strokeStyle = accent; ctx.lineWidth = 1;
     for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(x + 5 + i * 4, floorY); ctx.lineTo(x + 7 + i * 4, floorY - 3.5); ctx.stroke(); }
-    // racing stripe
-    ctx.save(); ctx.globalAlpha = 0.92; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4.5 * k;
+    // racing stripe — honors the run's livery (chase view already did)
+    ctx.save(); ctx.globalAlpha = 0.92; ctx.strokeStyle = state.carStyle.stripe || '#ffffff'; ctx.lineWidth = 4.5 * k;
     ctx.beginPath();
     ctx.moveTo(x + 4, tailY + 1);
     ctx.quadraticCurveTo(x + 3, deckY + 1, x + 18, deckY + 1.5);
@@ -4380,9 +4472,10 @@
   }
   // Nitro pickup — a glowing blue lightning bolt (concept by Levi Ray, PR #24).
   function drawNitro(c) {
+    const calm = reduceMotionOn();   // calm mode: no bob, steady glow
     const cx = c.x + c.w / 2;
-    const cy = c.y + Math.sin(c.bob) * 4 + c.h / 2;
-    const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(c.bob * 1.5));
+    const cy = c.y + (calm ? 0 : Math.sin(c.bob) * 4) + c.h / 2;
+    const pulse = calm ? 0.8 : 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(c.bob * 1.5));
     ctx.save();
     ctx.fillStyle = `rgba(0, 212, 255, ${0.30 * pulse})`;
     ctx.beginPath();
@@ -4453,7 +4546,7 @@
         drawNitro(c);
         continue;
       }
-      const float = Math.sin(c.bob) * 4;
+      const float = reduceMotionOn() ? 0 : Math.sin(c.bob) * 4;   // calm mode: no hover bob
       const y = c.y + float;
       if (c.type === 'fuel') {
         // Stereotypical NATO jerry can: red body with the signature embossed
@@ -4660,6 +4753,14 @@
   // ============================================================
   function drawDamageFlash() {
     if (state.flashTimer <= 0) return;
+    if (reduceMotionOn()) {
+      // Calm hit feedback: a steady edge border for the same duration — the
+      // "you got hit" information survives without the full-screen flash.
+      ctx.strokeStyle = 'rgba(232, 90, 26, 0.8)';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(3, 3, W - 6, H - 6);
+      return;
+    }
     ctx.fillStyle = `rgba(232, 90, 26, ${state.flashTimer * 1.4})`;
     ctx.fillRect(0, 0, W, H);
   }
@@ -5132,6 +5233,18 @@
     if (state.screen === SCREEN.PLAYING) {
       updateGame(dt);
       updateHUD();
+    } else if (state.screen === SCREEN.TITLE && !reduceMotionOn()) {
+      // Attract-mode ambience: drift the cloud layer and fly bird flocks so the
+      // live world behind the menu visibly moves. Touches NO gameplay state
+      // (obstacles, fuel, score, spawner) — purely background dressing, and
+      // calm mode keeps the title still.
+      state.ambient += dt * 140;
+      state.nextBirdAt -= dt;
+      if (state.nextBirdAt <= 0) {
+        spawnBirdFlock();
+        state.nextBirdAt = 7 + Math.random() * 8;
+      }
+      updateBirds(dt);
     }
     audioBanner.t = Math.max(0, audioBanner.t - dt);
     if (state.achievementToast) {
@@ -5288,6 +5401,54 @@
           parallax: [CLOUD_PARALLAX, MOUNTAIN_PARALLAX, SKYLINE_PARALLAX, MID_SCENERY_PARALLAX, GEO_SIGN_PARALLAX],
           labels: [SHOW_GEO_LABELS, SHOW_WAYFINDING]
         }));
+    }
+
+    // 4e) Ghost import validation: bounded frame count + finite-only coercion
+    //     (pure function — no state touched).
+    {
+      const mk = (frames) => ({ version: 1, game: 'Weekend Road Trip', frames });
+      const okGhost = normalizeGhost(mk([[0, 0, 432, 5, 0], [0.1, 10, 432, 5, 0]]));
+      const oversized = normalizeGhost(mk(new Array(GHOST_MAX_FRAMES + 1).fill([0, 0, 432, 5, 0])));
+      check('ghost import: sane payload accepted, oversized rejected',
+        !!okGhost && oversized === null, 'cap=' + GHOST_MAX_FRAMES);
+      const inf = normalizeGhost(mk([[Infinity, 0, 432, 5, 0], [0.1, 10, 432, 5, 0]]));
+      check('ghost import: non-finite frame fields coerced to safe defaults',
+        !!inf && inf.frames[0][0] === 0,
+        inf ? JSON.stringify(inf.frames[0]) : 'null');
+    }
+
+    // 4f) Combo multiplier is uncapped — a longer clean chain always pays more
+    //     (the "uncapped-feeling combo" requirement); only the SFX pitch clamps.
+    check('combo multiplier keeps climbing past the old 25 ceiling',
+      comboMult(26) > comboMult(25) && comboMult(40) > comboMult(25),
+      'x' + comboMult(25).toFixed(1) + ' @25 → x' + comboMult(40).toFixed(1) + ' @40');
+
+    // 4g) Reduce-motion gates canvas particles at the spawn source (in-memory
+    //     settings flip; snapshot + restore — non-destructive).
+    {
+      const realRM = state.settings.reduceMotion;
+      const realParticles = state.particles;
+      let pass = false, detail = '';
+      try {
+        state.particles = [];
+        state.settings.reduceMotion = true;
+        spawnSparks(100, 100);
+        spawnPickupBurst(100, 100, '#fff');
+        spawnDust(100, 100, 5);
+        spawnExhaust(100, 100);
+        spawnTireSmoke(100, 100);
+        const calmCount = state.particles.length;
+        state.settings.reduceMotion = false;
+        spawnSparks(100, 100);
+        const activeCount = state.particles.length;
+        pass = calmCount === 0 && activeCount > 0;
+        detail = 'calm spawns=' + calmCount + ', active spawns=' + activeCount;
+      } catch (e) { detail = String(e); }
+      finally {
+        state.settings.reduceMotion = realRM;
+        state.particles = realParticles;
+      }
+      check('reduce-motion gates particle spawns at the source', pass, detail);
     }
 
     // 5) achievements never duplicate — unlock is idempotent (snapshot + restore).

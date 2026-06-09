@@ -67,7 +67,7 @@ with `BIOMES`). The old per-biome `spawnMul` was removed.
 ## 3. No unavoidable back-to-back blockers (the Broadway cliff)
 
 **Root cause of the cliff:** the old final-leg `spawnMul = 0.55` produced spawn intervals as
-low as 0.32s. At `MAX_SPEED` (570 px/s) that is ~182 px between obstacles — far less
+low as 0.32s. At the then-current `MAX_SPEED` (570 px/s) that is ~182 px between obstacles — far less
 than a single jump needs — so two blocking obstacles (e.g. STOP-sign behind a pothole)
 could be physically impossible to clear. Forced hits then drained fuel right at the
 finish ("dry at ~96%").
@@ -78,9 +78,11 @@ finish ("dry at ~96%").
 guarantees a clearable gap and naturally thins dense legs instead of queuing an
 unreachable wall. Collectibles are exempt, so the lane still feels full.
 
-**Why these numbers are safe:** a full jump spans **390 px at MAX_SPEED**. Every leg's
-`minBlockingGap` exceeds that, so the player can always complete a jump and be grounded
-before the next blocker — even in the worst jump→duck transition.
+**Why these numbers are safe:** a full jump spans **451 px at MAX_SPEED** (11.0,
+widened from 9.5 in the auto-throttle retune — 660 px/s). Every leg's *effective*
+gap `max(minBlockingGap, MIN_GAP_TIME × effSpeed)` exceeds the per-leg jump span,
+so the player can always complete a jump and be grounded before the next blocker —
+even in the worst jump→duck transition.
 
 The sim proves this **constructively** with real pixel-collision detection: it builds the
 tightest *legal* blocker wall per leg (blockers exactly `minBlockingGap` apart,
@@ -110,8 +112,8 @@ Two deliberate balance changes restore a real, skill-based fuel pressure:
 
 | Lever | Was | Now | Why |
 |---|---|---|---|
-| `HIT_FUEL_PENALTY` | 12 | **14** | Hits are now always avoidable (§3), so the penalty is a pure skill signal. |
-| Pit-stop refuel | **FULL** (100) | **+40** (`PITSTOP_REFILL`) | A full reset made running dry unreachable. +40 is still the biggest single fuel pickup + 500 pts — a strong rescue, not an auto-win. |
+| `HIT_FUEL_PENALTY` | 12 | **20** (12→14→20) | Hits are always avoidable (§3), so the penalty is a pure skill signal. The auto-throttle retune made trips faster (less time-drain), so hits must carry the stakes. |
+| Pit-stop refuel | **FULL** (100) | **+28** (`PITSTOP_REFILL`, 40→28 with the retune) | A full reset made running dry unreachable. +28 is still the biggest single fuel pickup + 500 pts — a strong rescue, not an auto-win. |
 
 The BROADWAY fuel bump (`fuelSpawnRate 1.25`, `fuelPerCan 28`) is kept: it rewards players who
 *collect*, giving the finale a payoff feel, without rescuing a careless player (who grabs
@@ -121,38 +123,38 @@ Illustrative single-seed runs (pit stops modelled):
 
 | Run | Outcome | Fuel left | Min fuel | Blockers hit | Cans |
 |---|---|---|---|---|---|
-| **Skilled** (~92% speed, 0 hits, 85% cans) | **FINISH** | 94.4 | 91.7 | 0 / 22 | 6 / 8 |
-| **Moderate** (~80% speed, ~15% hit, 60% cans) | **FINISH** | 98.2 | 71.2 | 3 / 24 | 5 / 8 |
-| **Careless** (~70% hit, 25% cans) | **DRY @ 46%** | 0.0 | 0 | 12 / 14 | 1 / 3 |
+| **Skilled** (~92% speed, 0 hits, 85% cans) | **FINISH** | 95.1 | 90.6 | 0 / 30 | 4 / 4 |
+| **Moderate** (~80% speed, ~15% hit, 60% cans) | **FINISH** | 95.1 | 70.6 | 3 / 30 | 1 / 4 |
+| **Careless** (~70% hit, 25% cans) | **DRY @ 53%** | 0.0 | −6.9 | 7 / 13 | 1 / 2 |
 
 Because one seed proves nothing, the sim sweeps **500 seeds** per policy and asserts on
 aggregate rates (not a single lucky run):
 
 | Policy | Finish | Dry | Avg fuel left | Avg min fuel |
 |---|---|---|---|---|
-| Skilled | **100%** | 0% | 96.3 | 88.1 |
-| Moderate | **100%** | 0% | 89.2 | 66.1 |
-| Careless | 9.8% | **90.2%** | 38.4 | −2.7 |
+| Skilled | **100%** | 0% | 97.4 | 91.3 |
+| Moderate | **99.8%** | 0.2% | 89.1 | 63.4 |
+| Careless | 2.4% | **97.6%** | 38.8 | −4.8 |
 
 And the dry-rate scales smoothly with how careless you are — fuel pressure is proportional
 to mistakes, not a cliff (grab fixed at 25%):
 
 | Careless hit-rate | 40% | 50% | 60% | 70% | 80% |
 |---|---|---|---|---|---|
-| Runs dry | 19% | 45% | 71% | **90%** | 98% |
+| Runs dry | 40% | 65% | 88% | **98%** | 99.8% |
 
 The careless-dry result is honestly a **two-lever** property — it needs frequent hits *and*
 low fuel-collection. Holding hits at 70% and varying how many cans the player grabs:
 
 | Careless fuel-grab | 10% | 25% | 40% | 60% |
 |---|---|---|---|---|
-| Runs dry | 97% | **90%** | 78% | 62% |
+| Runs dry | 99% | **96%** | 92% | 87% |
 
 Assuming a careless player grabs few cans (≈25%) is realistic, not cherry-picked: a careless
 run dies early and never reaches the fuel-rich BROADWAY leg, so it can't self-rescue.
-So a clean run finishes with margin, a coin-flip player (≈50% hits) dies about half the
-time, and a genuinely careless player reliably runs dry. Pit stops remain a deliberate
-safety net, so an unusually lucky careless run can still scrape through (~10%) — flagged
+So a clean run finishes with margin, a coin-flip player (≈50% hits) dies more often than
+not, and a genuinely careless player reliably runs dry. Pit stops remain a deliberate
+safety net, so an unusually lucky careless run can still scrape through (~2%) — flagged
 honestly rather than hidden behind a cherry-picked seed or single policy.
 
 ---
@@ -166,13 +168,18 @@ audio/UI is implemented on this side (the audio/HUD layers own that).
 
 ---
 
-## 6. Combo math (verified, unchanged)
+## 6. Combo math (uncapped — the score engine)
 
-- Multiplier resets to 0 on collision (hit branch) and on the 4s window expiry — both
-  confirmed.
-- `COMBO_WINDOW = 4.0s`, `COMBO_MAX = 5`. Collectibles arrive often enough that a clean
-  5-pickup chain is achievable, but a single hit breaks it — achievable, not trivial. No
-  change needed.
+- The combo count and multiplier are **uncapped**: `mult = 1 + (chain − 1) × 0.6`
+  (x1, x1.6, x2.2 … x15.4 at 25, and climbing). `COMBO_CEILING = 25` clamps only
+  the SFX pitch ramp, which has no scoring effect; the sim mirrors the uncapped
+  math.
+- The decay window shrinks as the chain grows — `max(1.5, 4.0 − chain × 0.12)` —
+  so a long chain demands near-continuous skill; that window is the practical
+  limit, not a numeric cap.
+- The chain resets to 0 on collision (hit branch) and on window expiry — both
+  confirmed by sim + self-test ("combo multiplier keeps climbing past the old
+  25 ceiling").
 
 ---
 

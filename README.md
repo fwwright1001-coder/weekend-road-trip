@@ -87,7 +87,8 @@ submission proof screenshots.
 | `M` | Mute |
 | `T` | Switch side / chase camera |
 | `?` | Controls |
-| Gamepad / Touch | A jump, B duck, D-pad/stick or lane buttons |
+| Gamepad | A jump, B duck, D-pad/stick lanes & menus, Y camera, X mute |
+| Touch | Lane / jump / duck buttons + CAM and pause up top |
 
 The throttle is automatic. Speed escalates each leg, so Broadway is the fastest
 stretch. Your inputs are about positioning.
@@ -104,7 +105,11 @@ stretch. Your inputs are about positioning.
   for the Ryman, AT&T/333 Commerce, Country Music Hall of Fame, Music Row
   studios, Seigenthaler bridge, Nissan Stadium, Bridgestone Arena, Riverfront,
   and Lower Broadway. Map-like coordinate placards are disabled by default.
-- Skill-dominant scoring with combos, near-miss bonuses, and lane-risk bonuses.
+- Skill-dominant scoring with an uncapped combo multiplier, near-miss bonuses,
+  and lane-risk bonuses.
+- Semis are deliberate non-colliding ambience: they overtake faster than the
+  world scrolls, so a hitboxed semi could be unavoidable — which would break
+  the fairness invariant the sim proves.
 - Ghost Race records replay telemetry and exports/imports shareable JSON.
 - Side and chase camera renderers read the same live obstacles, pickups, pit
   stops, lane state, and collision model.
