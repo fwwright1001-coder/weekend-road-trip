@@ -7,7 +7,10 @@ A three-lane arcade driver where balance and fairness are **proven by a headless
 simulation**, not eyeballed, and built under a process with deterministic,
 machine-checked gates.
 
-**Play:** https://fwwright1001-coder.github.io/weekend-road-trip/
+**Play (Vercel production):** https://weekend-road-trip-forrestw200.vercel.app
+**Join the Road Crew (landing + live Neon counter):** https://weekend-road-trip-forrestw200.vercel.app/waitlist
+**Static fallback (GitHub Pages, localStorage mode):** https://fwwright1001-coder.github.io/weekend-road-trip/
+**How this deploys (branch → PR → preview → CI → prod):** [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ![Weekend Road Trip - three-lane gameplay](submission-media/hero-lanes.png)
 
