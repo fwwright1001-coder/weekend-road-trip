@@ -213,5 +213,5 @@ were self-confirming "no-action" notes or misreads.
 ## Running the proof
 
 ```
-node sim/balance-sim.js     # exits 0 only if all acceptance criteria pass across 500 seeds
+node sim/balance-sim.js     # exits 0 only if the deterministic fairness proof and the 500-seed economy sweep all pass
 ```

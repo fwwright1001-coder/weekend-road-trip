@@ -1,6 +1,6 @@
 # Architecture & Engineering Case Study
 
-Weekend Road Trip is a dependency-free, single-file HTML5 Canvas game — but the
+Weekend Road Trip is a dependency-light, no-build HTML5 Canvas game — but the
 reason it's in my portfolio isn't the game. It's how it was built and how its
 correctness is *proven*: a headless simulation gates every change, and the
 hardest feature (a 3-lane dodging system) ships with a **mathematical fairness
@@ -40,7 +40,7 @@ qa/waitlist-contract.js          Road Crew API contract
 qa/highscores-contract.js        cloud high-score API contract
 qa/highscores-client-contract.js cloud high-score client contract
 qa/launch-contract.js            Road Crew client contract
-.github/workflows/ci.yml  runs all seven gates on every push / PR
+.github/workflows/ci.yml  runs all seven gates on every push to main / PR
 ```
 
 ---
@@ -117,8 +117,8 @@ criteria; it exits non-zero if any fails:
 [6]  lanes solvable (open lane clears).. PASS   BROADWAY lead 1.086s > 0.57s reach
      open lane reachable in time ....... PASS
 [7]  skill dominates distance (>=2.5x).. PASS   weaver 12.60x a grinder
-     skilled / moderate finish ......... 100% / 99.8%
-     careless runs dry ................. 97.6%
+     skilled / moderate finish ......... 100% / 100%
+     careless runs dry ................. 98.8%
 ```
 
 **The bug the sim caught.** When the lane system raised top speed, the naive
@@ -190,7 +190,7 @@ node qa/launch-contract.js            # Road Crew client contract (17 checks)
 ```
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all seven on every
-push and PR — the same gate enforced locally on every commit. The QC reports in
+push to `main` and every PR — the same gate enforced locally on every commit. The QC reports in
 [`qc/`](qc/) are the audit trail: each is a real headless play-test with the
 method, evidence, and verdict recorded.
 

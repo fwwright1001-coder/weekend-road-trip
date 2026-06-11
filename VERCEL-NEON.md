@@ -1,7 +1,9 @@
 # Vercel + Neon Assignment Proof
 
-Weekend Road Trip remains playable on GitHub Pages, but this branch adds
-Vercel-ready backend paths for the class deployment/database assignment.
+Weekend Road Trip runs in production on Vercel
+(https://weekend-road-trip-forrestw200.vercel.app) with Neon Postgres behind it;
+GitHub Pages remains a static localStorage fallback. This doc covers the
+Vercel/Neon backend paths for the class deployment/database assignment.
 
 ## What Changed
 

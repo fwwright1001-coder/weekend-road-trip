@@ -36,7 +36,10 @@ path. The game still saves scores locally so it works on GitHub Pages and offlin
 but on Vercel each submitted run posts to `api/highscores.js`, creates/stores rows
 in `game_high_scores`, and displays the cloud leaderboard when Neon is connected.
 
-Play it live on GitHub Pages:
+Play it live (Vercel production, Neon-backed):
+https://weekend-road-trip-forrestw200.vercel.app
+
+Static fallback (GitHub Pages, localStorage mode):
 https://fwwright1001-coder.github.io/weekend-road-trip/
 
 Repo:

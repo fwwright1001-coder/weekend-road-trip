@@ -1,6 +1,6 @@
 # Contributing — adding a feature to Weekend Road Trip
 
-This game is a single `game.js` file (~1700 lines) plus `index.html` and `styles.css`. No build step, no dependencies. Drop your changes in, refresh the page.
+This game is a single `game.js` file (~5,500 lines) plus `index.html` and `styles.css`. No build step, and no dependencies for the game itself (only the optional Vercel API layer uses `@neondatabase/serverless`). Drop your changes in, refresh the page.
 
 If you're a classmate adding a feature for next week's ENGR 5513 assignment, this doc is the shortcut.
 

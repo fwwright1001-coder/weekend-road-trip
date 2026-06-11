@@ -143,7 +143,7 @@ node qa/launch-contract.js
 npm run stress
 ```
 
-These run on every push/PR via [GitHub Actions](.github/workflows/ci.yml).
+These run on every push to `main` and every PR via [GitHub Actions](.github/workflows/ci.yml).
 `npm run stress` is an on-demand load check for the Road Crew signup API path.
 
 ## Tech

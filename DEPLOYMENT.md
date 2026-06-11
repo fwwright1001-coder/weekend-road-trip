@@ -21,8 +21,8 @@ source control.
 2. **Push → Vercel builds a preview deployment automatically** and comments the
    URL on the PR. The feature is playable by anyone, on its own URL, without
    touching production.
-3. **CI gates the merge.** Every push and PR runs the same seven deterministic
-   checks as `npm test`:
+3. **CI gates the merge.** Every push to `main` and every PR runs the same seven
+   deterministic checks as `npm test`:
    balance simulation (10 fairness/economy acceptance criteria), the in-game
    self-test harness run headlessly (19 checks), a DOM contract smoke, and four
    API/client contract suites covering the Neon waitlist and cloud high-score
