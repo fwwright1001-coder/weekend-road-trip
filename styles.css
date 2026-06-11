@@ -64,6 +64,33 @@ html, body {
 .hidden { display: none !important; }
 
 /* ============================================================
+ * 3D render target (feature/road-trip-3d)
+ * Overlays the 2D #game canvas exactly; render3d.js toggles which is shown.
+ * ============================================================ */
+#game3d {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+#rt3d-status {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  z-index: 50;
+  margin: 0;
+  padding: 2px 7px;
+  font: 11px/1.45 "JetBrains Mono", Consolas, monospace;
+  color: #8fffd0;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 4px;
+  white-space: pre;
+  pointer-events: none;
+}
+
+/* ============================================================
  * HUD (visible during gameplay)
  * ============================================================ */
 
