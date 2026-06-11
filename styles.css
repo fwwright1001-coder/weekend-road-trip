@@ -924,3 +924,21 @@ button:active { transform: scale(0.96); }
 #win-stats .stat:nth-child(4) { animation-delay: 0.45s; }
 #win-stats .stat:nth-child(5) { animation-delay: 0.55s; }
 @keyframes stat-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* === RT3D ===================================================
+ * 3D chase-camera crossfade (render3d.js). Appended block — do not move.
+ * #game3d overlays #game (positioned in the earlier 3D section); these rules
+ * only manage the seamless opacity swap between the two renderers.
+ * - .rt3d-fade   : 3D canvas participates in the crossfade (starts invisible)
+ * - .rt3d-active : chase cam live -> fade the 3D frame in over the 2D frame
+ * The 2D canvas keeps its last frame underneath during the ~200ms blend, so
+ * there is never a flash of empty frame in either direction. */
+#game3d.rt3d-fade {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  will-change: opacity;
+}
+#game3d.rt3d-fade.rt3d-active { opacity: 1; }
+/* status chip only matters while the 3D view is up; fade it with the canvas */
+#game3d.rt3d-fade:not(.rt3d-active) ~ #rt3d-status { opacity: 0; transition: opacity 0.2s ease; }
