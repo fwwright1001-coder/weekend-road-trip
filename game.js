@@ -4372,6 +4372,25 @@
     ctx.fillStyle = hl;
     roundRect(ctx, x + w - 13, noseY + 1.5, 9, 5.5, 2); ctx.fill();
     ctx.fillStyle = 'rgba(255,248,168,0.28)'; ctx.fillRect(x + w - 4, noseY + 2.5, 16, 3);
+    // Low-light headlight beam (render-only): in the dawn + sunset legs the
+    // lens glow extends into a soft forward cone that fades with distance,
+    // grounding the car in the scene's lighting. Inside the tilt transform on
+    // purpose — the beam pitches with the car.
+    const tod = currentBiome().timeOfDay;
+    if (tod === 'dawn' || tod === 'sunset') {
+      const bx0 = x + w - 3, by0 = noseY + 4;
+      const beam = ctx.createLinearGradient(bx0, 0, bx0 + 160, 0);
+      beam.addColorStop(0, 'rgba(255,244,180,0.26)');
+      beam.addColorStop(1, 'rgba(255,244,180,0)');
+      ctx.fillStyle = beam;
+      ctx.beginPath();
+      ctx.moveTo(bx0, by0 - 1.5);
+      ctx.lineTo(bx0 + 160, by0 - 16);
+      ctx.lineTo(bx0 + 160, by0 + 22);
+      ctx.lineTo(bx0, by0 + 5.5);
+      ctx.closePath();
+      ctx.fill();
+    }
     // rear light + exhaust tip
     ctx.fillStyle = '#ff3a3a'; ctx.fillRect(x + 2, tailY + 1, 3, 4);
     ctx.fillStyle = '#999'; ctx.fillRect(x + 1, floorY - 5, 4, 3);
@@ -4576,6 +4595,20 @@
         drawPitstop(c);
         continue;
       }
+      // Ground-contact shadow (render-only): every floating pickup casts a soft
+      // ellipse on its lane's contact line so it reads as IN the scene instead
+      // of pasted on top. Shadow tightens + darkens the closer the item bobs to
+      // the road, and fades as it floats higher (jump-height pickups).
+      {
+        const sFloat = reduceMotionOn() ? 0 : Math.sin(c.bob) * 4;
+        const sy = laneBaseYFor(c.lane) + CAR_FOOT_OFFSET;
+        const lift = Math.max(0, sy - (c.y + sFloat + c.h));
+        const t = Math.max(0, 1 - lift / 130);
+        ctx.fillStyle = `rgba(0,0,0,${(0.08 + 0.16 * t).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(c.x + c.w / 2, sy, c.w * (0.28 + 0.24 * t), 3.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
       if (c.type === 'nitro') {
         drawNitro(c);
         continue;
@@ -4736,39 +4769,184 @@
   }
 
   function drawSemis() {
+    // Dressing pass (render-only): soft elliptical contact shadow, shaded +
+    // corrugated trailer, detailed cab (fairing, exhaust stack, grille, bumper,
+    // mudflaps) and wheels that visibly roll with the world scroll.
+    const roll = -state.distance * 0.12;   // scrolls left => wheels spin CCW
+    const wheelY = GROUND_Y - 4;
     for (const s of state.semis) {
-      // Trailer
-      ctx.fillStyle = s.color;
+      // Soft contact shadow (replaces the old hard floating rect).
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.beginPath();
+      ctx.ellipse(s.x + 118, GROUND_Y + 9, 126, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Trailer — vertical paint shading + corrugation ribs + rear door seam.
+      const tg = ctx.createLinearGradient(0, GROUND_Y - 64, 0, GROUND_Y - 8);
+      tg.addColorStop(0, safeShade(s.color, 0.22));
+      tg.addColorStop(0.45, s.color);
+      tg.addColorStop(1, safeShade(s.color, -0.3));
+      ctx.fillStyle = tg;
       roundRect(ctx, s.x, GROUND_Y - 64, 180, 56, 4);
       ctx.fill();
-      // Trailer logo stripe
+      ctx.strokeStyle = safeShade(s.color, -0.45);
+      ctx.lineWidth = 1;
+      roundRect(ctx, s.x, GROUND_Y - 64, 180, 56, 4);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,0.13)';
+      for (let rx = s.x + 14; rx < s.x + 172; rx += 12) {
+        ctx.beginPath();
+        ctx.moveTo(rx, GROUND_Y - 60);
+        ctx.lineTo(rx, GROUND_Y - 12);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';   // rear door seam
+      ctx.beginPath();
+      ctx.moveTo(s.x + 7, GROUND_Y - 58);
+      ctx.lineTo(s.x + 7, GROUND_Y - 12);
+      ctx.stroke();
+      // Roof highlight + logo stripe + underride guard.
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.fillRect(s.x + 3, GROUND_Y - 63, 174, 2.5);
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       ctx.fillRect(s.x + 16, GROUND_Y - 44, 148, 4);
-      // Cab
-      ctx.fillStyle = '#dadada';
+      ctx.fillStyle = '#22232a';
+      ctx.fillRect(s.x + 2, GROUND_Y - 9, 44, 3);
+      // Exhaust stack between trailer and cab.
+      ctx.fillStyle = '#55555c';
+      ctx.fillRect(s.x + 177, GROUND_Y - 60, 4, 52);
+      ctx.fillStyle = '#82828c';
+      ctx.fillRect(s.x + 176, GROUND_Y - 63, 6, 4);
+      // Cab — painted gradient, roof fairing, glinted windshield, door seam.
+      const cg = ctx.createLinearGradient(0, GROUND_Y - 52, 0, GROUND_Y - 8);
+      cg.addColorStop(0, '#f2f2f4');
+      cg.addColorStop(0.55, '#d6d6da');
+      cg.addColorStop(1, '#a3a3ab');
+      ctx.fillStyle = cg;
       roundRect(ctx, s.x + 180, GROUND_Y - 52, 56, 44, 5);
       ctx.fill();
-      // Cab windshield
-      ctx.fillStyle = '#9cd0f0';
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      roundRect(ctx, s.x + 180, GROUND_Y - 52, 56, 44, 5);
+      ctx.stroke();
+      ctx.fillStyle = '#c6c6cc';   // roof wind fairing sloping toward the trailer
+      ctx.beginPath();
+      ctx.moveTo(s.x + 181, GROUND_Y - 52);
+      ctx.quadraticCurveTo(s.x + 188, GROUND_Y - 60, s.x + 180, GROUND_Y - 60);
+      ctx.lineTo(s.x + 180, GROUND_Y - 52);
+      ctx.closePath();
+      ctx.fill();
+      const wg = ctx.createLinearGradient(0, GROUND_Y - 46, 0, GROUND_Y - 32);
+      wg.addColorStop(0, '#d6f0ff');
+      wg.addColorStop(1, '#79b8dd');
+      ctx.fillStyle = wg;
       ctx.fillRect(s.x + 198, GROUND_Y - 46, 28, 14);
-      // Headlight (we're facing -X so it's on the left side)
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';   // diagonal glass glint
+      ctx.beginPath();
+      ctx.moveTo(s.x + 202, GROUND_Y - 46);
+      ctx.lineTo(s.x + 208, GROUND_Y - 46);
+      ctx.lineTo(s.x + 200, GROUND_Y - 32);
+      ctx.lineTo(s.x + 198, GROUND_Y - 36);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)';   // door seam + handle
+      ctx.beginPath();
+      ctx.moveTo(s.x + 196, GROUND_Y - 48);
+      ctx.lineTo(s.x + 196, GROUND_Y - 12);
+      ctx.stroke();
+      ctx.fillStyle = '#5a5a62';
+      ctx.fillRect(s.x + 189, GROUND_Y - 28, 6, 2);
+      // Grille, bumper, headlight (truck faces -X; nose is on the right).
+      ctx.fillStyle = '#8d8d94';
+      ctx.fillRect(s.x + 231, GROUND_Y - 27, 5, 13);
+      ctx.fillStyle = '#3a3a40';
+      ctx.fillRect(s.x + 228, GROUND_Y - 13, 10, 5);
       ctx.fillStyle = '#fff8a8';
       ctx.fillRect(s.x + 234, GROUND_Y - 30, 4, 6);
-      // Wheels — three under trailer, one under cab
-      const wheelY = GROUND_Y - 4;
+      ctx.fillStyle = 'rgba(255,248,168,0.22)';   // headlight bloom
+      ctx.fillRect(s.x + 238, GROUND_Y - 29, 10, 4);
+      // Mudflaps behind the rear trailer axle + cab axle.
+      ctx.fillStyle = '#1c1d24';
+      ctx.fillRect(s.x + 34, GROUND_Y - 15, 7, 13);
+      ctx.fillRect(s.x + 230, GROUND_Y - 15, 7, 13);
+      // Wheels — tyre, rim, rotating spokes, hub.
       [s.x + 24, s.x + 96, s.x + 168, s.x + 220].forEach((wx) => {
         ctx.fillStyle = '#111';
         ctx.beginPath();
         ctx.arc(wx, wheelY, 9, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#888';
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';   // tyre top sheen
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
-        ctx.arc(wx, wheelY, 3, 0, Math.PI * 2);
+        ctx.arc(wx, wheelY, 7.6, Math.PI * 1.15, Math.PI * 1.85);
+        ctx.stroke();
+        ctx.fillStyle = '#8a8a92';
+        ctx.beginPath();
+        ctx.arc(wx, wheelY, 4.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.save();
+        ctx.translate(wx, wheelY);
+        ctx.rotate(roll);
+        ctx.strokeStyle = '#3c3c44';
+        ctx.lineWidth = 1.4;
+        for (let i = 0; i < 4; i++) {
+          ctx.rotate(Math.PI / 2);
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(3.8, 0);
+          ctx.stroke();
+        }
+        ctx.restore();
+        ctx.fillStyle = '#caced6';
+        ctx.beginPath();
+        ctx.arc(wx, wheelY, 1.5, 0, Math.PI * 2);
         ctx.fill();
       });
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(s.x + 4, GROUND_Y + 10, 232, 4);
+    }
+  }
+
+  // Render-only juice FX: spark rings on combo ticks (near-misses + chained
+  // pickups). Derived entirely inside the render layer by watching state.combo
+  // transitions — update() is untouched. Uses state.runTime as the clock so
+  // rings freeze during pause and self-purge across run resets (ages go
+  // negative when runTime rewinds to 0).
+  let fxPrevCombo = 0;
+  const fxRings = [];
+  function drawComboSparks() {
+    if (state.screen !== SCREEN.PLAYING && state.screen !== SCREEN.PAUSED) {
+      fxPrevCombo = 0;
+      fxRings.length = 0;
+      return;
+    }
+    const combo = state.combo || 0;
+    if (combo > fxPrevCombo && !reduceMotionOn()) {
+      fxRings.push({ t0: state.runTime, x: PLAYER_X + 66, y: state.player.y - 12 });
+      if (fxRings.length > 6) fxRings.shift();   // hard cap; rings are cheap but bounded
+    }
+    fxPrevCombo = combo;
+    const LIFE = 0.45;
+    for (let i = fxRings.length - 1; i >= 0; i--) {
+      const r = fxRings[i];
+      const age = state.runTime - r.t0;
+      if (age < 0 || age > LIFE) { fxRings.splice(i, 1); continue; }
+      const p = age / LIFE;
+      const rad = 10 + p * 38;
+      const a = (1 - p) * 0.85;
+      ctx.save();
+      ctx.strokeStyle = `rgba(255, 232, 154, ${a.toFixed(3)})`;
+      ctx.lineWidth = 2.5 * (1 - p) + 0.5;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(255, 255, 255, ${a.toFixed(3)})`;   // radiating tick sparks
+      ctx.lineWidth = 1.4;
+      for (let k = 0; k < 4; k++) {
+        const ang = k * (Math.PI / 2) + Math.PI / 4;
+        const r1 = rad + 2, r2 = rad + 8 + p * 6;
+        ctx.beginPath();
+        ctx.moveTo(r.x + Math.cos(ang) * r1, r.y + Math.sin(ang) * r1);
+        ctx.lineTo(r.x + Math.cos(ang) * r2, r.y + Math.sin(ang) * r2);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
   }
 
@@ -4953,9 +5131,19 @@
   // ============================================================
   // HUD
   // ============================================================
+  let hudScoreShown = 0;   // displayed score only — state.score stays authoritative
   function updateHUD() {
     const b = currentBiome();
-    hudScore.textContent = pad(state.score, 6);
+    // Score tween (display-side only): the HUD glides up to the real score so
+    // big pickups visibly count up instead of teleporting. Snaps instantly on
+    // run reset (score rewinds), when within a point, or under reduce-motion.
+    if (reduceMotionOn() || state.score < hudScoreShown) {
+      hudScoreShown = state.score;
+    } else {
+      hudScoreShown = Math.min(state.score, hudScoreShown + Math.max(1, (state.score - hudScoreShown) * 0.22));
+      if (state.score - hudScoreShown < 1) hudScoreShown = state.score;
+    }
+    hudScore.textContent = pad(Math.round(hudScoreShown), 6);
     hudBiome.textContent = `${b.name} ${state.biomeIdx + 1}/${BIOMES.length}`;
     hudMph.textContent = String(Math.round(state.speed * 12));
     const fuelFrac = Math.max(0, state.fuel) / FUEL_MAX;
@@ -5166,6 +5354,7 @@
         drawGhostPlayer();
         drawPlayer();
         drawParticles();
+        drawComboSparks();   // render-only combo/near-miss spark rings
         drawScorePopups();
       }
     }

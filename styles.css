@@ -154,7 +154,9 @@ html, body {
   font-weight: 700;
   color: var(--gold);
   letter-spacing: 0.07em;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  /* Drop shadow for legibility + a faint gold halo so the values share the
+     speedo's warm glow language. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 0.5em rgba(245, 215, 110, 0.3);
 }
 
 .hud-trip { min-width: 12.8em; }
@@ -190,6 +192,9 @@ html, body {
   border-radius: 0.45em;
   padding: 0.45em 1.55em;
   text-align: center;
+  /* Keep the shared card drop shadow, add a soft gold rim glow — the speedo is
+     the HUD's hero element and earns the brightest halo. */
+  box-shadow: 0 0.15em 0.6em rgba(0, 0, 0, 0.5), 0 0 0.9em rgba(245, 215, 110, 0.22);
 }
 .hud-mph {
   font-size: 3.15em;          /* ~44px at reference */
@@ -215,8 +220,22 @@ html, body {
   background: linear-gradient(90deg, var(--good), var(--gold));
   transition: width 0.15s linear, background 0.3s linear;
 }
-.hud-fuel-fill.low  { background: var(--bad); }
+.hud-fuel-fill.low {
+  background: var(--bad);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 0 0.6em rgba(220, 60, 40, 0.55);
+}
 .hud-fuel-fill.mid  { background: var(--gold); }
+/* Critical-fuel pulse: gentle brightness breathing on the red fill. Gated off
+   for the in-game reduce-motion setting (body class) AND the OS preference. */
+@keyframes hud-fuel-low-pulse {
+  50% { filter: brightness(1.4); }
+}
+body:not(.reduce-motion) .hud-fuel-fill.low {
+  animation: hud-fuel-low-pulse 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-fuel-fill.low { animation: none; }
+}
 
 /* ============================================================
  * Menu overlay
