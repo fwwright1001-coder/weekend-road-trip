@@ -76,9 +76,14 @@ html, body {
   display: block;
 }
 #rt3d-status {
+  /* Bottom-CENTER chip: the old left:8px/bottom:6px spot sat underneath the
+     speedo card (bottom-left HUD), clipping the text. The bottom row is
+     speedo-left / fuel-right with empty center, on touch layouts the corner
+     clusters also leave the center free. */
   position: absolute;
-  left: 8px;
-  bottom: 6px;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
   z-index: 50;
   margin: 0;
   padding: 2px 7px;
