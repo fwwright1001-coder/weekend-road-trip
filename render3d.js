@@ -20,8 +20,15 @@
 //   2D screen y (GROUND_Y = road, smaller = up)   ->  3D height Y
 //   biomeIdx + biomeBlend()                       ->  sky / fog / sun / ground
 //
-// Look: "polished stylized" — clean low-poly shapes, PCFSoft shadows, ACES
-// tone mapping, gradient sky dome, clearcoat car paint, biome-aware sun.
+// Look: "heavy stylized" — multi-part beveled car hull (ExtrudeGeometry),
+// canvas-baked asphalt with worn wheel tracks, InstancedMesh scenery per
+// Nashville leg (window-lit towers, the AT&T twin-spire 'Batman building',
+// a Ryman-style arched hall, Music Row brick studios with awnings, Cumberland
+// pines, Broadway honky-tonk facades with neon blade signs + streetlight
+// cones), pooled 3D particles (landing dust / near-miss sparks), and the
+// per-biome exposure / sun-disc / cloud grade from the fidelity pass.
+// All scenery scrolls by rewriting per-instance matrices with one scratch
+// Object3D — zero allocations inside the frame loop.
 // If anything here throws during render, game.js disables 3D and falls back.
 // ============================================================
 import * as THREE from 'three';
@@ -49,9 +56,7 @@ const Z_FAR = -110;      // farthest visible road point
 const CAM_POS = { x: 0, y: 3.6, z: 10 };
 const CAM_LOOK = { x: 0, y: 1.4, z: -22 };
 const FOV_BASE = 55, FOV_GAIN = 12;
-const SCN_COUNT = 20;    // roadside props per side
-const SCN_GAP = 16;      // spacing between props (world units)
-const SCN_SPAN = 320;    // scroll length before a prop recycles into the distance
+const SCN_SPAN = 308;    // scroll length before a scenery slot recycles
 // Sun direction + intensity per biome leg (dawn / morning / afternoon / sunset).
 const SUN_POS = [
   [16, 12, -30],  // DOWNTOWN  — dawn, low-ish to the right
@@ -72,25 +77,36 @@ let scene, camera, renderer, car, wheels = [], cabin = null;
 let hemi, sun, skyMat, bodyMat, stripeMat, shadowMesh, driverGrp;
 let sunSprite = null, sunSpriteMat = null;   // billboard sun disc on the dome
 const clouds = [];                            // drifting billboard cloud sprites
-let WINDOW_TEX = null;                        // shared DOWNTOWN window-grid textures
+let WINDOW_TEX = null;                        // shared window-grid textures
 let initialized = false;
 let permFail = false;       // WebGL/init/render failed once -> stay 2D forever
 let lastApplied = false;    // mode we last applied (crossfade state)
-const dashes = [], posts = [], scnSlots = [];
+const dashes = [];
+let guardPosts = null, guardRefl = null;   // instanced guardrail posts + reflectors
+const GUARD_N = 18;                        // posts per side
 let lastBiomeIdx = -1;
+let activeBiomeSet = -1;
 let lastLivery = '';
 let lastT = 0;
+let prevJumping = false;     // landing-dust edge detector
+const sparkedSet = new WeakSet();  // obstacles that already burst sparks
 const statusEl = () => document.getElementById('rt3d-status');
 
 // Shared geometries / materials (built once, reused by every pooled mesh).
 let G = {}, M = {};
 // Per-type object pools so we never allocate meshes inside the frame loop.
 const pools = {};
+// Biome scenery sets: [{ group, update(scroll) }] — index-aligned with BIOMES.
+const biomeSets = [];
+// Road texture scroll bookkeeping.
+let roadTexWorldPerRepeat = 1;
 
 // Scratch objects for per-frame blending (avoid per-frame allocation).
 const _ca = new THREE.Color(), _cb = new THREE.Color(), _out = new THREE.Color();
+const _pc = new THREE.Color();                 // particle colour scratch
 const _sunA = new THREE.Vector3(), _sunB = new THREE.Vector3();
 const _white = new THREE.Color(0xffffff);
+const _dummy = new THREE.Object3D();           // instanced-matrix scratch
 const camCur = { x: CAM_POS.x, y: CAM_POS.y };
 const lookCur = { x: CAM_LOOK.x };
 
@@ -160,10 +176,17 @@ function biomeLerp(arr) {
 }
 
 // ============================================================
-// CANVAS TEXTURES — sun disc, clouds, DOWNTOWN window grids
-// (built once at init; never disposed — rebuildScenery() only disposes
-// per-prop geometries/materials, and material.dispose() leaves textures alone)
+// CANVAS-BAKED TEXTURES (procedural; no external files, built once at init)
 // ============================================================
+function canvasTex(w, h, draw, srgb = true) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 function makeSunTexture() {
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
   const cx = cv.getContext('2d');
@@ -230,6 +253,7 @@ function windowTextures() {
 
 // 6-slot material array for BoxGeometry: window grid on the four walls,
 // plain tone on roof/underside (group order: +x, -x, +y, -y, +z, -z).
+// Pass 0xffffff as the tone when the mesh is tinted per-instance instead.
 function facadeMats(tone, tex, intensity = 1.15) {
   const wall = new THREE.MeshStandardMaterial({
     color: tone, roughness: 0.85,
@@ -237,6 +261,167 @@ function facadeMats(tone, tex, intensity = 1.15) {
   });
   const flat = new THREE.MeshStandardMaterial({ color: tone, roughness: 0.95 });
   return [wall, wall, flat, flat, wall, wall];
+}
+
+// Asphalt: neutral mid-grey (the per-biome road tint multiplies on top),
+// speckle noise, tar cracks, and two darker worn wheel tracks per lane.
+function makeAsphaltTextures() {
+  const draw = (ctx, w, h, forBump) => {
+    ctx.fillStyle = forBump ? '#808080' : '#b4b4b8';
+    ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 2600; i++) {
+      const v = Math.random();
+      ctx.fillStyle = v < 0.5
+        ? `rgba(255,255,255,${0.04 + Math.random() * 0.10})`
+        : `rgba(0,0,0,${0.05 + Math.random() * 0.12})`;
+      ctx.fillRect((Math.random() * w) | 0, (Math.random() * h) | 0,
+        1 + ((Math.random() * 2) | 0), 1 + ((Math.random() * 2) | 0));
+    }
+    // worn wheel tracks: lanes at u = 0.5 + laneX/12; wheels sit ±1.04 world
+    const laneU = [0.5 - LANE_W / (ROAD_HALF * 2), 0.5, 0.5 + LANE_W / (ROAD_HALF * 2)];
+    const wheelDu = 1.04 / (ROAD_HALF * 2);
+    for (const lu of laneU) {
+      for (const s of [-1, 1]) {
+        const x = (lu + s * wheelDu) * w;
+        const grad = ctx.createLinearGradient(x - 11, 0, x + 11, 0);
+        grad.addColorStop(0, 'rgba(0,0,0,0)');
+        grad.addColorStop(0.5, 'rgba(0,0,0,0.26)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x - 11, 0, 22, h);
+      }
+    }
+    // a few faint tar cracks
+    ctx.strokeStyle = 'rgba(0,0,0,0.14)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 7; i++) {
+      ctx.beginPath();
+      let cx = Math.random() * w, cy = Math.random() * h;
+      ctx.moveTo(cx, cy);
+      for (let j = 0; j < 5; j++) {
+        cx += (Math.random() - 0.5) * 26; cy += 8 + Math.random() * 22;
+        ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+    }
+  };
+  const map = canvasTex(256, 512, (c, w, h) => draw(c, w, h, false), true);
+  const bump = canvasTex(128, 256, (c, w, h) => draw(c, w, h, true), false);
+  for (const t of [map, bump]) {
+    t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1, 8);
+  }
+  return { map, bump };
+}
+
+// Brick: neutral warm base (instance colour gives each studio its own brick
+// tone), mortar courses with a running bond offset.
+function makeBrickTexture() {
+  return canvasTex(128, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#b8a89c'; ctx.fillRect(0, 0, w, h);
+    const bh = 8, bw = 16;
+    for (let y = 0; y < h; y += bh) {
+      ctx.fillStyle = 'rgba(240,232,220,0.85)';
+      ctx.fillRect(0, y, w, 1);
+      const off = ((y / bh) | 0) % 2 ? bw / 2 : 0;
+      for (let x = -bw; x < w; x += bw) {
+        ctx.fillRect(x + off, y, 1, bh);
+        ctx.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,255,255'},${0.03 + Math.random() * 0.06})`;
+        ctx.fillRect(x + off + 1, y + 1, bw - 1, bh - 1);
+        ctx.fillStyle = 'rgba(240,232,220,0.85)';
+      }
+    }
+  });
+}
+
+function makeAwningTexture() {
+  return canvasTex(64, 32, (ctx, w, h) => {
+    for (let x = 0; x < w; x += 16) {
+      ctx.fillStyle = '#f4f4f0'; ctx.fillRect(x, 0, 8, h);
+      ctx.fillStyle = '#9a9aa0'; ctx.fillRect(x + 8, 0, 8, h);
+    }
+  });
+}
+
+// Honky-tonk facade: dark wall, rows of warm-lit windows, lit ground floor.
+function makeHonkyTonkFacade() {
+  const wins = [];
+  const map = canvasTex(128, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#241c2c'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#3a3046'; ctx.fillRect(0, 0, w, 10);         // cornice
+    const cols = 3, rows = 5, cw = w / cols, rh = (h - 70) / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let cIdx = 0; cIdx < cols; cIdx++) {
+        const x = cIdx * cw + 7, y = 14 + r * rh + 4, ww = cw - 14, wh = rh - 10;
+        if (Math.random() < 0.78) {
+          wins.push([x, y, ww, wh]);
+          ctx.fillStyle = '#ffc56a'; ctx.fillRect(x, y, ww, wh);
+        } else {
+          ctx.fillStyle = '#1b1622'; ctx.fillRect(x, y, ww, wh);
+        }
+      }
+    }
+    // lit ground floor: door + wide window
+    wins.push([10, h - 52, 36, 44], [56, h - 48, 62, 36]);
+    ctx.fillStyle = '#ffdf9a'; ctx.fillRect(10, h - 52, 36, 44);
+    ctx.fillStyle = '#ffc56a'; ctx.fillRect(56, h - 48, 62, 36);
+  });
+  const emissive = canvasTex(128, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#ffc56a';
+    for (const win of wins) ctx.fillRect(win[0], win[1], win[2], win[3]);
+  });
+  return { map, emissive };
+}
+
+// Neon blade sign: white blocks on black (instance colour = the neon hue).
+function makeSignTexture() {
+  return canvasTex(64, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#0a0a0c'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(3, 3, w - 6, 2); ctx.fillRect(3, h - 5, w - 6, 2);  // frame
+    ctx.fillRect(3, 3, 2, h - 6); ctx.fillRect(w - 5, 3, 2, h - 6);
+    ctx.fillRect(10, 10, w - 20, 22);                                // marquee block
+    for (let i = 0; i < 5; i++) ctx.fillRect(16, 42 + i * 16, w - 32, 10); // letters
+  });
+}
+
+// Ryman-style arched window (warm glow with a rounded top).
+function makeArchTexture() {
+  return canvasTex(32, 64, (ctx, w, h) => {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#ffd9a0';
+    ctx.beginPath();
+    ctx.moveTo(4, h - 2); ctx.lineTo(4, 18);
+    ctx.arc(w / 2, 18, w / 2 - 4, Math.PI, 0);
+    ctx.lineTo(w - 4, h - 2); ctx.closePath(); ctx.fill();
+  });
+}
+
+// Soft round puff for dust particles.
+function makePuffTexture() {
+  return canvasTex(64, 64, (ctx, w, h) => {
+    const g = ctx.createRadialGradient(w / 2, h / 2, 2, w / 2, h / 2, w / 2);
+    g.addColorStop(0, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.6, 'rgba(255,255,255,0.4)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  });
+}
+
+// Tiny equirect environment: sky-over-horizon gradient + bright streaks, so
+// chrome / clearcoat picks up believable reflections with no HDR download.
+function makeEnvTexture() {
+  const t = canvasTex(64, 32, (ctx, w, h) => {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#7fb4e8'); g.addColorStop(0.45, '#ffe2b8');
+    g.addColorStop(0.55, '#caa27a'); g.addColorStop(1, '#33302c');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(255,246,224,0.85)';
+    ctx.fillRect(6, 13, 14, 2); ctx.fillRect(30, 15, 18, 2); ctx.fillRect(52, 12, 9, 2);
+  });
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  return t;
 }
 
 // ============================================================
@@ -344,36 +529,140 @@ const make = {
 };
 
 // ============================================================
-// THE CAR — low-poly convertible facing -Z; livery read live from state
+// THE CAR — multi-part beveled hull (ExtrudeGeometry) facing -Z;
+// chrome bumpers, fender arches, hood scoop, lit dash + seats, torus-spoke
+// wheels. Livery (body + stripe colour) is read live from state.
 // ============================================================
 function buildCar() {
   const g = new THREE.Group();
-  bodyMat = new THREE.MeshPhysicalMaterial({ color: 0xc81e28, roughness: 0.28, metalness: 0.1, clearcoat: 0.9, clearcoatRoughness: 0.18 });
-  stripeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+  bodyMat = new THREE.MeshPhysicalMaterial({
+    color: 0xc81e28, roughness: 0.3, metalness: 0.25,
+    clearcoat: 1.0, clearcoatRoughness: 0.12,
+  });
+  stripeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x1b1b20, roughness: 0.7 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.85, roughness: 0.3 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fc4d8, roughness: 0.08, metalness: 0.0, transparent: true, opacity: 0.45 });
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xe8eaee, metalness: 1.0, roughness: 0.1 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fc4d8, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.42 });
   const tail = new THREE.MeshStandardMaterial({ color: 0xff3838, emissive: 0xcc1010, emissiveIntensity: 1.3, roughness: 0.4 });
-  const lamp = new THREE.MeshStandardMaterial({ color: 0xfff3c0, emissive: 0xfff0b0, emissiveIntensity: 1.4 });
+  const lamp = new THREE.MeshStandardMaterial({ color: 0xfff3c0, emissive: 0xfff0b0, emissiveIntensity: 1.5 });
+  const seatMat = new THREE.MeshStandardMaterial({ color: 0x4a2c22, roughness: 0.85 });
+  const gauge = new THREE.MeshStandardMaterial({ color: 0x9fe8d8, emissive: 0x76d8c4, emissiveIntensity: 1.3 });
 
-  // main hull: lower body + raised hood + rear deck + dark rocker
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.6, 4.1), bodyMat); hull.position.y = 0.62;
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.32, 1.5), bodyMat); hood.position.set(0, 0.86, -1.25);
-  const rear = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.4, 1.2), bodyMat); rear.position.set(0, 0.9, 1.35);
-  const sill = new THREE.Mesh(new THREE.BoxGeometry(2.08, 0.28, 3.4), dark); sill.position.y = 0.4;
-  // racing stripe down hood + rear deck (honors the run's livery)
-  const stripeH = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.04, 1.52), stripeMat); stripeH.position.set(0, 1.04, -1.25);
-  const stripeR = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.04, 1.22), stripeMat); stripeR.position.set(0, 1.12, 1.35);
+  // --- hull: a side-profile Shape extruded across the car's width, with a
+  // bevel that rounds the flanks into soft fenders ------------------------
+  const prof = new THREE.Shape();
+  prof.moveTo(-2.10, 0.30);
+  prof.lineTo(-2.10, 0.62);   // nose face
+  prof.lineTo(-1.78, 0.72);   // hood leading edge
+  prof.lineTo(-0.62, 0.84);   // hood
+  prof.lineTo(-0.34, 0.92);   // cowl
+  prof.lineTo(-0.10, 0.84);   // cockpit dip (open top)
+  prof.lineTo(0.78, 0.86);
+  prof.lineTo(1.10, 0.96);    // rear deck rise
+  prof.lineTo(1.86, 0.96);
+  prof.lineTo(2.10, 0.80);    // tail kick
+  prof.lineTo(2.10, 0.30);
+  prof.closePath();
+  const hullGeo = new THREE.ExtrudeGeometry(prof, {
+    depth: 1.66, bevelEnabled: true, bevelThickness: 0.17, bevelSize: 0.10,
+    bevelSegments: 3, curveSegments: 6,
+  });
+  hullGeo.translate(0, 0, -(1.66 / 2 + 0.17));   // centre the width
+  hullGeo.rotateY(-Math.PI / 2);                 // profile-x -> world -Z nose
+  const hull = new THREE.Mesh(hullGeo, bodyMat);
+  g.add(hull);
 
-  // open cockpit: a dark recessed tub with two seats, a windshield + a rollbar
-  const tub = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 1.9), dark); tub.position.set(0, 0.95, 0.15);
-  const seatL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.6), dark); seatL.position.set(-0.4, 1.18, 0.45);
-  const seatR = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.6), dark); seatR.position.set(0.4, 1.18, 0.45);
-  const wind = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.5, 0.08), glass); wind.position.set(0, 1.3, -0.75); wind.rotation.x = -0.35;
-  cabin = wind; // hidden on duck (see renderFrame)
-  const barL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), chrome); barL.position.set(-0.55, 1.35, 0.95);
-  const barR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), chrome); barR.position.set(0.55, 1.35, 0.95);
-  const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.12, 0.12), chrome); barTop.position.set(0, 1.55, 0.95);
+  // dark rocker sill under the hull
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.26, 3.5), dark);
+  sill.position.y = 0.33; g.add(sill);
+
+  // fender arches over each wheel (half-torus, body colour)
+  const archGeo = new THREE.TorusGeometry(0.5, 0.12, 10, 16, Math.PI);
+  for (const [x, z] of [[-1.04, -1.42], [1.04, -1.42], [-1.04, 1.46], [1.04, 1.46]]) {
+    const a = new THREE.Mesh(archGeo, bodyMat);
+    a.position.set(x, 0.5, z); a.rotation.y = Math.PI / 2;
+    g.add(a);
+  }
+
+  // hood scoop + dark intake
+  const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.10, 0.55), bodyMat);
+  scoop.position.set(0, 0.93, -1.12); g.add(scoop);
+  const intake = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.06, 0.08), dark);
+  intake.position.set(0, 0.95, -1.42); g.add(intake);
+
+  // racing stripes: hood (following the beveled hood slope) + rear deck
+  const stripeH = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.03, 1.40), stripeMat);
+  stripeH.position.set(0, 0.92, -1.18); stripeH.rotation.x = -0.114;
+  const stripeR = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.03, 0.78), stripeMat);
+  stripeR.position.set(0, 1.075, 1.48);
+  g.add(stripeH, stripeR);
+
+  // chrome bumpers + grille + exhaust + mirrors
+  const bumperF = new THREE.Mesh(new THREE.BoxGeometry(2.06, 0.16, 0.30), chrome);
+  bumperF.position.set(0, 0.42, -2.10);
+  const bumperR = new THREE.Mesh(new THREE.BoxGeometry(2.06, 0.16, 0.30), chrome);
+  bumperR.position.set(0, 0.42, 2.10);
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.16, 0.05), dark);
+  grille.position.set(0, 0.55, -2.12);
+  const grilleTrim = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.03, 0.05), chrome);
+  grilleTrim.position.set(0, 0.65, -2.12);
+  g.add(bumperF, bumperR, grille, grilleTrim);
+  const exGeo = new THREE.CylinderGeometry(0.055, 0.06, 0.26, 10);
+  exGeo.rotateX(Math.PI / 2);
+  for (const x of [-0.45, 0.45]) {
+    const ex = new THREE.Mesh(exGeo, chrome);
+    ex.position.set(x, 0.34, 2.18); g.add(ex);
+  }
+  for (const x of [-1.04, 1.04]) {
+    const mir = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.14), chrome);
+    mir.position.set(x, 0.98, -0.5); g.add(mir);
+  }
+
+  // headlights: emissive housings + glass lens domes; tail lights
+  const lensGeo = new THREE.SphereGeometry(0.12, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+  lensGeo.rotateX(-Math.PI / 2);
+  for (const x of [-0.62, 0.62]) {
+    const hlight = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.18, 0.06), lamp);
+    hlight.position.set(x, 0.68, -2.10);
+    const lens = new THREE.Mesh(lensGeo, glass);
+    lens.position.set(x, 0.68, -2.12);
+    g.add(hlight, lens);
+    const tlight = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.15, 0.06), tail);
+    tlight.position.set(x, 0.80, 2.12);
+    g.add(tlight);
+  }
+
+  // --- cockpit interior: tub, dash with lit gauges, wheel, two seats -------
+  const tub = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.4, 1.85), dark);
+  tub.position.set(0, 0.78, 0.30); g.add(tub);
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.16, 0.30), dark);
+  dash.position.set(0, 1.02, -0.50); g.add(dash);
+  for (let i = 0; i < 3; i++) {
+    const gd = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.05, 0.02), gauge);
+    gd.position.set(-0.52 + i * 0.16, 1.07, -0.36); gd.rotation.x = -0.5;
+    g.add(gd);
+  }
+  const swheel = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.025, 8, 18), dark);
+  swheel.position.set(-0.40, 1.10, -0.26); swheel.rotation.x = -1.15;
+  g.add(swheel);
+  for (const x of [-0.40, 0.40]) {
+    const seatB = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.13, 0.5), seatMat);
+    seatB.position.set(x, 0.95, 0.45);
+    const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.45, 0.12), seatMat);
+    seatBack.position.set(x, 1.16, 0.70); seatBack.rotation.x = 0.16;
+    const headrest = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.13, 0.1), seatMat);
+    headrest.position.set(x, 1.43, 0.74);
+    g.add(seatB, seatBack, headrest);
+  }
+
+  // windshield (drops when ducking) + chrome rollbar
+  const wind = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.5, 0.06), glass);
+  wind.position.set(0, 1.18, -0.66); wind.rotation.x = -0.38;
+  cabin = wind; g.add(wind);
+  const barL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), chrome); barL.position.set(-0.55, 1.3, 0.95);
+  const barR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), chrome); barR.position.set(0.55, 1.3, 0.95);
+  const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.1), chrome); barTop.position.set(0, 1.5, 0.95);
+  g.add(barL, barR, barTop);
 
   // driver figure (Marty) — torso + head + cap, sat in the left seat
   driverGrp = new THREE.Group();
@@ -385,30 +674,27 @@ function buildCar() {
   const armL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.1), shirt); armL.position.set(-0.18, 0.32, -0.18); armL.rotation.x = 0.7;
   const armR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.1), shirt); armR.position.set(0.18, 0.32, -0.18); armR.rotation.x = 0.7;
   driverGrp.add(torso, head, cap, armL, armR);
-  driverGrp.position.set(-0.4, 1.05, 0.35);
+  driverGrp.position.set(-0.4, 0.98, 0.4);
+  g.add(driverGrp);
 
-  // lights + bumpers (front = -Z, rear = +Z)
-  const tl1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.08), tail); tl1.position.set(-0.6, 0.78, 2.06);
-  const tl2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.08), tail); tl2.position.set(0.6, 0.78, 2.06);
-  const hl1 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), lamp); hl1.position.set(-0.62, 0.78, -2.06);
-  const hl2 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), lamp); hl2.position.set(0.62, 0.78, -2.06);
-  const bumperF = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, 0.2), dark); bumperF.position.set(0, 0.5, -2.05);
-  const bumperR = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, 0.2), dark); bumperR.position.set(0, 0.5, 2.05);
-
-  g.add(sill, hull, hood, rear, stripeH, stripeR, tub, seatL, seatR, wind, barL, barR, barTop, driverGrp, tl1, tl2, hl1, hl2, bumperF, bumperR);
-
-  // wheels — protrude beyond the body, light rims + a spoke so spin reads
-  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.38, 20); wheelGeo.rotateZ(Math.PI / 2);
-  const rimGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.4, 16); rimGeo.rotateZ(Math.PI / 2);
-  const spokeGeo = new THREE.BoxGeometry(0.42, 0.09, 0.52);
-  const wp = [[-1.06, -1.4], [1.06, -1.4], [-1.06, 1.45], [1.06, 1.45]];
+  // --- wheels: torus tire + chrome hub + 3 spoke bars (6 visible spokes) ---
+  const tireGeo = new THREE.TorusGeometry(0.36, 0.15, 12, 20);
+  const hubGeo = new THREE.CylinderGeometry(0.17, 0.17, 0.3, 12);
+  hubGeo.rotateZ(Math.PI / 2);
+  const spokeGeo = new THREE.BoxGeometry(0.05, 0.60, 0.06);
+  const wp = [[-1.04, -1.42], [1.04, -1.42], [-1.04, 1.46], [1.04, 1.46]];
   wheels = [];
   for (const [x, z] of wp) {
     const w = new THREE.Group(); w.position.set(x, 0.5, z);
-    const tire = new THREE.Mesh(wheelGeo, M.tire);
-    const rim = new THREE.Mesh(rimGeo, chrome);
-    const spoke = new THREE.Mesh(spokeGeo, chrome);
-    w.add(tire, rim, spoke);
+    const tire = new THREE.Mesh(tireGeo, M.tire);
+    tire.rotation.y = Math.PI / 2;
+    w.add(tire);
+    w.add(new THREE.Mesh(hubGeo, chrome));
+    for (let i = 0; i < 3; i++) {
+      const sp = new THREE.Mesh(spokeGeo, chrome);
+      sp.rotation.x = i * (Math.PI / 3);
+      w.add(sp);
+    }
     g.add(w);
     wheels.push(w);
   }
@@ -417,156 +703,539 @@ function buildCar() {
 }
 
 // ============================================================
-// ROADSIDE SCENERY — Nashville legs: DOWNTOWN towers, MUSIC ROW houses,
-// CUMBERLAND pines + river rocks, BROADWAY neon honky-tonks.
+// INSTANCED ROADSIDE SCENERY — one prebuilt set per Nashville leg, all four
+// resident in the scene; only the active leg's group is visible. Slots scroll
+// by rewriting instance matrices (a scratch Object3D; zero per-frame allocs).
 // ============================================================
-function buildProp(name, slot) {
-  const g = new THREE.Group();
-  const rnd = (a, b) => a + Math.random() * (b - a);
-  if (name === 'DOWNTOWN') {
-    // Dawn towers with emissive window grids (reusing the BROADWAY emissive
-    // pattern), varied setback silhouettes, and two fixed landmark slots.
-    const texes = windowTextures();
-    const tone = [0x4a4e5a, 0x53506a, 0x3e4a5c, 0x615a52][(Math.random() * 4) | 0];
-    const landmark = slot ? slot.landmark : '';
-    if (landmark === 'spire') {
-      // AT&T "Batman building": dark glass slab, recessed crown, twin spires.
-      const w = 5.4, d = 4.2, h = 21;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), facadeMats(0x2e3444, texes[2], 1.25));
-      body.position.y = h / 2; g.add(body);
-      const crown = new THREE.Mesh(new THREE.BoxGeometry(w * 0.6, 2.4, d * 0.66),
-        new THREE.MeshStandardMaterial({ color: 0x232838, roughness: 0.9 }));
-      crown.position.y = h + 1.2; g.add(crown);
-      const spireMat = new THREE.MeshStandardMaterial({ color: 0x1c2030, roughness: 0.7 });
-      const tipMat = new THREE.MeshStandardMaterial({ color: 0xff6a4a, emissive: 0xff3a20, emissiveIntensity: 1.8 });
-      for (const sx of [-1, 1]) {
-        const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.32, 7, 6), spireMat);
-        spire.position.set(sx * (w / 2 - 0.5), h + 3.5, 0); g.add(spire);
-        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), tipMat);
-        tip.position.set(sx * (w / 2 - 0.5), h + 7.1, 0); g.add(tip);
-      }
-    } else if (landmark === 'drum') {
-      // Round drum tower: windowed cylinder, wide dark cap, lit ring, mast.
-      const h = 15, r = 2.7;
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 18),
-        new THREE.MeshStandardMaterial({
-          color: 0x4d5566, roughness: 0.85,
-          emissive: 0xffc488, emissiveIntensity: 1.1, emissiveMap: texes[1],
-        }));
-      body.position.y = h / 2; g.add(body);
-      const ring = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.34, r + 0.34, 0.3, 18),
-        new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffc070, emissiveIntensity: 1.5 }));
-      ring.position.y = h + 0.15; g.add(ring);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.55, r + 0.55, 0.9, 18),
-        new THREE.MeshStandardMaterial({ color: 0x2a2f3c, roughness: 0.9 }));
-      cap.position.y = h + 0.75; g.add(cap);
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.13, 3.4, 6),
-        new THREE.MeshStandardMaterial({ color: 0x39404e, roughness: 0.7 }));
-      mast.position.y = h + 2.9; g.add(mast);
-    } else {
-      // Regular tower: windowed base + optional windowed setback tier +
-      // optional rooftop mechanical box / antenna for silhouette variety.
-      const h = rnd(6, 19), w = rnd(2.8, 6), d = rnd(2.8, 6);
-      const tex = texes[h > 13 ? 2 : (h > 9 ? 1 : 0)];
-      const base = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), facadeMats(tone, tex));
-      base.position.y = h / 2; g.add(base);
-      let topY = h;
-      if (Math.random() < 0.55) {
-        const tw = w * rnd(0.5, 0.75), th = rnd(2, 5), td = d * rnd(0.5, 0.75);
-        const tier = new THREE.Mesh(new THREE.BoxGeometry(tw, th, td), facadeMats(tone, texes[0]));
-        tier.position.y = topY + th / 2; g.add(tier);
-        topY += th;
-      }
-      if (Math.random() < 0.4) {
-        const mech = new THREE.Mesh(new THREE.BoxGeometry(w * 0.34, rnd(0.6, 1.2), d * 0.34),
-          new THREE.MeshStandardMaterial({ color: 0x2c2f38, roughness: 1 }));
-        mech.position.y = topY + 0.45; g.add(mech);
-      }
-      if (Math.random() < 0.3) {
-        const ah = rnd(2, 4);
-        const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.1, ah, 5),
-          new THREE.MeshStandardMaterial({ color: 0x39404e, roughness: 0.8 }));
-        ant.position.y = topY + ah / 2; g.add(ant);
-      }
-    }
-  } else if (name === 'MUSIC ROW') {
-    // low brick studio-houses with pitched roofs, the odd tree between them
-    if (Math.random() < 0.65) {
-      const hw = rnd(2.6, 4), hh = rnd(2.2, 3.4), hd = rnd(2.6, 4);
-      const brick = [0x8c5a48, 0x9c6a50, 0x7a6258, 0xa88a6a][(Math.random() * 4) | 0];
-      const body = new THREE.Mesh(new THREE.BoxGeometry(hw, hh, hd), new THREE.MeshStandardMaterial({ color: brick, roughness: 0.95 }));
-      body.position.y = hh / 2; g.add(body);
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(hw, hd) * 0.75, rnd(1, 1.7), 4), new THREE.MeshStandardMaterial({ color: 0x3a3236, roughness: 1, flatShading: true }));
-      roof.position.y = hh + 0.55; roof.rotation.y = Math.PI / 4; g.add(roof);
-    } else {
-      const th = rnd(1.2, 2);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, th, 7), new THREE.MeshStandardMaterial({ color: 0x5a3c22, roughness: 1 }));
-      trunk.position.y = th / 2; g.add(trunk);
-      // Fuller canopy: a cluster of rounded blobs instead of one low-poly chunk
-      // (single detail-0 icosahedrons read as flat green slabs from the chase
-      // camera). The whole prop is also yaw-billboarded toward the camera in
-      // renderFrame() via userData.tree.
-      const crownMat = new THREE.MeshStandardMaterial({ color: 0x4a7a3a, roughness: 1, flatShading: true });
-      const r0 = rnd(1.1, 1.6);
-      const c0 = new THREE.Mesh(new THREE.IcosahedronGeometry(r0, 1), crownMat); c0.position.y = th + 1.05;
-      const c1 = new THREE.Mesh(new THREE.IcosahedronGeometry(r0 * 0.7, 1), crownMat); c1.position.set(r0 * 0.55, th + 0.78, 0.15);
-      const c2 = new THREE.Mesh(new THREE.IcosahedronGeometry(r0 * 0.62, 1), crownMat); c2.position.set(-r0 * 0.5, th + 0.9, -0.12);
-      g.add(c0, c1, c2);
-      g.userData.tree = true;
-    }
-  } else if (name === 'CUMBERLAND') {
-    // riverfront: pines + grey rocks
-    if (Math.random() < 0.7) {
-      const th = rnd(1, 1.8);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, th, 7), new THREE.MeshStandardMaterial({ color: 0x5a3c22, roughness: 1 }));
-      trunk.position.y = th / 2; g.add(trunk);
-      const green = new THREE.MeshStandardMaterial({ color: 0x2f6a34, roughness: 1 });
-      const ch = rnd(2.5, 4.2);
-      const c1 = new THREE.Mesh(new THREE.ConeGeometry(rnd(1.1, 1.8), ch, 8), green); c1.position.y = th + ch / 2 - 0.2; g.add(c1);
-      const c2 = new THREE.Mesh(new THREE.ConeGeometry(rnd(0.8, 1.2), ch * 0.7, 8), green); c2.position.y = th + ch * 0.9; g.add(c2);
-      g.userData.tree = true;   // yaw-billboarded toward the chase camera
-    } else {
-      const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(rnd(1, 2.2), 0), new THREE.MeshStandardMaterial({ color: 0x6b6e72, roughness: 1, flatShading: true }));
-      rock.position.y = rnd(0.2, 0.6); rock.scale.y = rnd(0.5, 0.9); g.add(rock);
-    }
-  } else { // BROADWAY — neon honky-tonk blocks
-    const h = rnd(4, 9), w = rnd(3, 5.5), d = rnd(3, 5);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x2c2436, roughness: 0.9, emissive: 0x14101e, emissiveIntensity: 1 });
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); b.position.y = h / 2; g.add(b);
-    const neon = [0xff2d95, 0x2de6ff, 0xffd23f, 0x9d4edd][(Math.random() * 4) | 0];
-    const sign = new THREE.Mesh(
-      new THREE.BoxGeometry(0.3, rnd(1.6, Math.max(1.8, h * 0.55)), 0.55),
-      new THREE.MeshStandardMaterial({ color: neon, emissive: neon, emissiveIntensity: 1.6, roughness: 0.4 }));
-    sign.position.set(-(w / 2) - 0.18, h * 0.55, 0); g.add(sign);
-    if (Math.random() < 0.6) {
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(w * 0.8, 0.22, 0.18),
-        new THREE.MeshStandardMaterial({ color: 0xffe9a0, emissive: 0xffd76a, emissiveIntensity: 1.3 }));
-      strip.position.set(0, rnd(1.4, h - 0.6), d / 2 + 0.1); g.add(strip);
-    }
-  }
-  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return g;
+function makeInstanced(geo, mat, count, shadow = true) {
+  const im = new THREE.InstancedMesh(geo, mat, count);
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  im.frustumCulled = false;        // instances span the whole road; never cull
+  im.castShadow = shadow;
+  return im;
+}
+const rnd = (a, b) => a + Math.random() * (b - a);
+function wrapZ(base, scroll, span) {
+  return Z_NEAR - ((((base - scroll) % span) + span) % span);
 }
 
-// Rebuild every slot's prop for the given biome (called on biome change only).
-function rebuildScenery(name) {
-  for (const grp of scnSlots) {
-    for (let j = grp.children.length - 1; j >= 0; j--) {
-      const child = grp.children[j];
-      grp.remove(child);
-      child.traverse((o) => {
-        if (o.isMesh) {
-          o.geometry.dispose();
-          // DOWNTOWN facades use 6-slot material arrays; dispose each entry
-          // (shared window CanvasTextures survive — material.dispose() never
-          // touches textures, and double-dispose of a reused entry is a no-op).
-          const mats = Array.isArray(o.material) ? o.material : [o.material];
-          for (const m of mats) m.dispose();
-        }
-      });
-    }
-    grp.add(buildProp(name, grp.userData));
+// -- DOWNTOWN: window-lit tower instancing + three landmark set pieces:
+// the AT&T 'Batman building', the round drum tower, a Ryman-style hall ------
+function buildDowntownSet() {
+  const group = new THREE.Group();
+  const texes = windowTextures();
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);
+  const N = 22;
+  // dawn towers: white-base facade mats, tinted per instance (4 grey-blue tones)
+  const towers = makeInstanced(boxGeo, facadeMats(0xffffff, texes[1], 1.1), N);
+  const capMat = new THREE.MeshStandardMaterial({ color: 0x2c2f38, roughness: 1 });
+  const caps = makeInstanced(boxGeo, capMat, N);
+  const tones = [0x4a4e5a, 0x53506a, 0x3e4a5c, 0x615a52];
+  const slots = [];
+  for (let k = 0; k < N; k++) {
+    const side = k & 1 ? 1 : -1;
+    slots.push({
+      side, base: (k >> 1) * 28 + (side > 0 ? 14 : 0),
+      margin: rnd(4, 28), w: rnd(2.8, 6), h: rnd(6, 19), d: rnd(2.8, 6),
+      cap: Math.random() < 0.5 ? rnd(0.6, 2.4) : 0,
+    });
+    towers.setColorAt(k, _ca.set(tones[k % 4]));
   }
+  towers.instanceColor.needsUpdate = true;
+  group.add(towers, caps);
+
+  // AT&T "Batman building": dark glass slab, recessed crown, twin spires
+  // (design carried over from the fidelity pass, now a scrolling set piece).
+  const bat = new THREE.Group();
+  {
+    const w = 5.4, d = 4.2, h = 21;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), facadeMats(0x2e3444, texes[2], 1.25));
+    body.position.y = h / 2; bat.add(body);
+    const crown = new THREE.Mesh(new THREE.BoxGeometry(w * 0.6, 2.4, d * 0.66),
+      new THREE.MeshStandardMaterial({ color: 0x232838, roughness: 0.9 }));
+    crown.position.y = h + 1.2; bat.add(crown);
+    const spireMat = new THREE.MeshStandardMaterial({ color: 0x1c2030, roughness: 0.7 });
+    const tipMat = new THREE.MeshStandardMaterial({ color: 0xff6a4a, emissive: 0xff3a20, emissiveIntensity: 1.8 });
+    for (const sx of [-1, 1]) {
+      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.32, 7, 6), spireMat);
+      spire.position.set(sx * (w / 2 - 0.5), h + 3.5, 0); bat.add(spire);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), tipMat);
+      tip.position.set(sx * (w / 2 - 0.5), h + 7.1, 0); bat.add(tip);
+    }
+  }
+  bat.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  group.add(bat);
+
+  // Round drum tower: windowed cylinder, lit ring, wide dark cap, mast.
+  const drum = new THREE.Group();
+  {
+    const h = 15, r = 2.7;
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 18),
+      new THREE.MeshStandardMaterial({
+        color: 0x4d5566, roughness: 0.85,
+        emissive: 0xffc488, emissiveIntensity: 1.1, emissiveMap: texes[1],
+      }));
+    body.position.y = h / 2; drum.add(body);
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.34, r + 0.34, 0.3, 18),
+      new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffc070, emissiveIntensity: 1.5 }));
+    ring.position.y = h + 0.15; drum.add(ring);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.55, r + 0.55, 0.9, 18),
+      new THREE.MeshStandardMaterial({ color: 0x2a2f3c, roughness: 0.9 }));
+    cap.position.y = h + 0.75; drum.add(cap);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.13, 3.4, 6),
+      new THREE.MeshStandardMaterial({ color: 0x39404e, roughness: 0.7 }));
+    mast.position.y = h + 2.9; drum.add(mast);
+  }
+  drum.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  group.add(drum);
+
+  // Ryman-style arched hall: brick box + barrel roof + warm arch windows.
+  const ryman = new THREE.Group();
+  {
+    const brick = makeBrickTexture();
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(7, 4.6, 10),
+      new THREE.MeshStandardMaterial({ map: brick, color: 0x9c5a44, roughness: 0.95 }));
+    hall.position.y = 2.3; ryman.add(hall);
+    const roofGeo = new THREE.CylinderGeometry(3.55, 3.55, 10.2, 18, 1, false, 0, Math.PI);
+    roofGeo.rotateZ(Math.PI / 2); roofGeo.rotateY(Math.PI / 2);
+    const roof = new THREE.Mesh(roofGeo, new THREE.MeshStandardMaterial({ color: 0x4a4046, roughness: 0.9 }));
+    roof.position.y = 4.6; roof.scale.y = 0.62;
+    ryman.add(roof);
+    const archTex = makeArchTexture();
+    const archMat = new THREE.MeshStandardMaterial({
+      map: archTex, emissiveMap: archTex, emissive: 0xffc879, emissiveIntensity: 1.0,
+      transparent: true, alphaTest: 0.4,
+    });
+    for (let i = 0; i < 3; i++) {
+      const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.9), archMat);
+      win.position.set(3.52, 2.2, -3 + i * 3);
+      win.rotation.y = Math.PI / 2;
+      ryman.add(win);
+    }
+  }
+  ryman.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  group.add(ryman);
+
+  return {
+    group,
+    update(scroll) {
+      for (let k = 0; k < N; k++) {
+        const s = slots[k];
+        const z = wrapZ(s.base, scroll, SCN_SPAN);
+        _dummy.position.set(s.side * (ROAD_HALF + s.margin + s.w / 2), 0, z);
+        _dummy.scale.set(s.w, s.h, s.d);
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.updateMatrix();
+        towers.setMatrixAt(k, _dummy.matrix);
+        if (s.cap > 0) {
+          _dummy.position.y = s.h;
+          _dummy.scale.set(s.w * 0.45, s.cap, s.d * 0.45);
+        } else {
+          _dummy.scale.setScalar(0.0001);
+        }
+        _dummy.updateMatrix();
+        caps.setMatrixAt(k, _dummy.matrix);
+      }
+      towers.instanceMatrix.needsUpdate = true;
+      caps.instanceMatrix.needsUpdate = true;
+      bat.position.set(ROAD_HALF + 9, 0, wrapZ(46, scroll, SCN_SPAN));
+      drum.position.set(-(ROAD_HALF + 7), 0, wrapZ(132, scroll, SCN_SPAN));
+      ryman.position.set(-(ROAD_HALF + 8.5), 0, wrapZ(236, scroll, SCN_SPAN));
+    },
+  };
+}
+
+// -- MUSIC ROW: brick studio-houses with striped awnings + clustered trees --
+function buildMusicRowSet() {
+  const group = new THREE.Group();
+  const brick = makeBrickTexture();
+  const studioMat = new THREE.MeshStandardMaterial({ map: brick, roughness: 0.95 });
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);
+  const NS = 14;
+  const studios = makeInstanced(boxGeo, studioMat, NS);
+  const roofGeo = new THREE.ConeGeometry(0.74, 1, 4); roofGeo.translate(0, 0.5, 0); roofGeo.rotateY(Math.PI / 4);
+  const roofs = makeInstanced(roofGeo, new THREE.MeshStandardMaterial({ color: 0x3a3236, roughness: 1, flatShading: true }), NS);
+  const awnGeo = new THREE.BoxGeometry(0.9, 0.05, 1);
+  const awnings = makeInstanced(awnGeo, new THREE.MeshStandardMaterial({ map: makeAwningTexture(), roughness: 0.8 }), NS, false);
+  const brickTones = [0x8c5a48, 0x9c6a50, 0x7a6258, 0xa88a6a];
+  const awnTones = [0xc0392b, 0x2a7a8c, 0x4a6a3a, 0x8c5aa0];
+  const sSlots = [];
+  for (let k = 0; k < NS; k++) {
+    const side = k & 1 ? 1 : -1;
+    sSlots.push({
+      side, base: (k >> 1) * 44 + (side > 0 ? 22 : 0),
+      margin: rnd(2.5, 12), w: rnd(2.8, 4.2), h: rnd(2.2, 3.4), d: rnd(2.8, 4),
+      roofH: rnd(1.0, 1.7),
+    });
+    studios.setColorAt(k, _ca.set(brickTones[k % 4]));
+    awnings.setColorAt(k, _ca.set(awnTones[k % 4]));
+  }
+  studios.instanceColor.needsUpdate = true;
+  awnings.instanceColor.needsUpdate = true;
+  group.add(studios, roofs, awnings);
+
+  // trees: trunk + a 3-blob canopy cluster (detail-1 icosahedra), the cluster
+  // yaw-billboarded toward the chase camera so it never reads edge-on.
+  const NT = 10;
+  const trunkGeo = new THREE.CylinderGeometry(0.2, 0.28, 1, 7); trunkGeo.translate(0, 0.5, 0);
+  const trunks = makeInstanced(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5a3c22, roughness: 1 }), NT);
+  const crownMat = new THREE.MeshStandardMaterial({ color: 0x4a7a3a, roughness: 1, flatShading: true });
+  const crowns = makeInstanced(new THREE.IcosahedronGeometry(1, 1), crownMat, NT * 3);
+  const blobOff = [[0, 0, 0, 1], [0.55, -0.27, 0.15, 0.7], [-0.5, -0.15, -0.12, 0.62]]; // x,y,z,scale (×r0)
+  const tSlots = [];
+  for (let k = 0; k < NT; k++) {
+    const side = k & 1 ? 1 : -1;
+    tSlots.push({
+      side, base: (k >> 1) * 62 + (side > 0 ? 10 : 41),
+      margin: rnd(2, 16), th: rnd(1.2, 2), r0: rnd(1.1, 1.6),
+    });
+  }
+  group.add(trunks, crowns);
+
+  return {
+    group,
+    update(scroll) {
+      for (let k = 0; k < NS; k++) {
+        const s = sSlots[k];
+        const z = wrapZ(s.base, scroll, SCN_SPAN);
+        const x = s.side * (ROAD_HALF + s.margin + s.d / 2);
+        _dummy.position.set(x, 0, z);
+        _dummy.scale.set(s.d, s.h, s.w);     // depth toward the road, width along it
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.updateMatrix();
+        studios.setMatrixAt(k, _dummy.matrix);
+        _dummy.position.y = s.h;
+        _dummy.scale.set(s.d * 1.4, s.roofH, s.w * 1.4);
+        _dummy.updateMatrix();
+        roofs.setMatrixAt(k, _dummy.matrix);
+        // awning hangs off the road-facing wall, sloping down toward the road
+        _dummy.position.set(x - s.side * (s.d / 2 + 0.28), s.h * 0.62, z);
+        _dummy.scale.set(1, 1, s.w * 0.55);
+        _dummy.rotation.set(0, 0, -s.side * 0.42);
+        _dummy.updateMatrix();
+        awnings.setMatrixAt(k, _dummy.matrix);
+      }
+      studios.instanceMatrix.needsUpdate = true;
+      roofs.instanceMatrix.needsUpdate = true;
+      awnings.instanceMatrix.needsUpdate = true;
+      for (let k = 0; k < NT; k++) {
+        const s = tSlots[k];
+        const z = wrapZ(s.base, scroll, SCN_SPAN);
+        const x = s.side * (ROAD_HALF + s.margin);
+        _dummy.position.set(x, 0, z);
+        _dummy.scale.set(1, s.th, 1);
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.updateMatrix();
+        trunks.setMatrixAt(k, _dummy.matrix);
+        // canopy cluster, yawed toward the camera (full face, never a slab)
+        const yaw = Math.atan2(camera.position.x - x, camera.position.z - z);
+        const cy = Math.cos(yaw), sy = Math.sin(yaw);
+        for (let b = 0; b < 3; b++) {
+          const o = blobOff[b];
+          const bx = o[0] * s.r0, bz = o[2] * s.r0;
+          _dummy.position.set(x + bx * cy + bz * sy, s.th + 1.05 * s.r0 + o[1] * s.r0, z - bx * sy + bz * cy);
+          _dummy.scale.setScalar(s.r0 * o[3]);
+          _dummy.rotation.set(0, yaw, 0);
+          _dummy.updateMatrix();
+          crowns.setMatrixAt(k * 3 + b, _dummy.matrix);
+        }
+      }
+      trunks.instanceMatrix.needsUpdate = true;
+      crowns.instanceMatrix.needsUpdate = true;
+    },
+  };
+}
+
+// -- CUMBERLAND: instanced pines (trunk + two stacked cones) + river rocks ---
+function buildCumberlandSet() {
+  const group = new THREE.Group();
+  const NP = 32, NR = 10;
+  const trunkGeo = new THREE.CylinderGeometry(0.22, 0.3, 1, 7); trunkGeo.translate(0, 0.5, 0);
+  const trunks = makeInstanced(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5a3c22, roughness: 1 }), NP);
+  const coneGeo = new THREE.ConeGeometry(1, 1, 8); coneGeo.translate(0, 0.5, 0);
+  const greenMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+  const cones1 = makeInstanced(coneGeo, greenMat, NP);
+  const cones2 = makeInstanced(coneGeo, greenMat, NP);
+  const rocks = makeInstanced(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x6b6e72, roughness: 1, flatShading: true }), NR);
+  const pSlots = [], rSlots = [];
+  for (let k = 0; k < NP; k++) {
+    const side = k & 1 ? 1 : -1;
+    pSlots.push({
+      side, base: (k >> 1) * 19.25 + (side > 0 ? 9.6 : 0),
+      margin: rnd(1.5, 15), th: rnd(1, 1.8),
+      r1: rnd(1.1, 1.8), h1: rnd(2.5, 4.2), r2: rnd(0.7, 1.1),
+    });
+    _ca.setHSL(0.33 + rnd(-0.03, 0.03), rnd(0.32, 0.45), rnd(0.22, 0.32));
+    cones1.setColorAt(k, _ca);
+    cones2.setColorAt(k, _ca);
+  }
+  cones1.instanceColor.needsUpdate = true;
+  cones2.instanceColor.needsUpdate = true;
+  for (let k = 0; k < NR; k++) {
+    const side = k & 1 ? 1 : -1;
+    rSlots.push({
+      side, base: (k >> 1) * 61 + (side > 0 ? 31 : 7),
+      margin: rnd(1.5, 14), r: rnd(0.8, 2.0), ys: rnd(0.45, 0.8), rot: rnd(0, Math.PI),
+    });
+  }
+  group.add(trunks, cones1, cones2, rocks);
+  return {
+    group,
+    update(scroll) {
+      for (let k = 0; k < NP; k++) {
+        const s = pSlots[k];
+        const z = wrapZ(s.base, scroll, SCN_SPAN);
+        const x = s.side * (ROAD_HALF + s.margin);
+        _dummy.position.set(x, 0, z);
+        _dummy.scale.set(1, s.th, 1);
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.updateMatrix();
+        trunks.setMatrixAt(k, _dummy.matrix);
+        _dummy.position.y = s.th - 0.2;
+        _dummy.scale.set(s.r1, s.h1, s.r1);
+        _dummy.updateMatrix();
+        cones1.setMatrixAt(k, _dummy.matrix);
+        _dummy.position.y = s.th + s.h1 * 0.55;
+        _dummy.scale.set(s.r2, s.h1 * 0.7, s.r2);
+        _dummy.updateMatrix();
+        cones2.setMatrixAt(k, _dummy.matrix);
+      }
+      trunks.instanceMatrix.needsUpdate = true;
+      cones1.instanceMatrix.needsUpdate = true;
+      cones2.instanceMatrix.needsUpdate = true;
+      for (let k = 0; k < NR; k++) {
+        const s = rSlots[k];
+        _dummy.position.set(s.side * (ROAD_HALF + s.margin), s.r * s.ys * 0.4, wrapZ(s.base, scroll, SCN_SPAN));
+        _dummy.scale.set(s.r, s.r * s.ys, s.r);
+        _dummy.rotation.set(0, s.rot, 0);
+        _dummy.updateMatrix();
+        rocks.setMatrixAt(k, _dummy.matrix);
+      }
+      rocks.instanceMatrix.needsUpdate = true;
+    },
+  };
+}
+
+// -- BROADWAY: honky-tonk canyon — lit facades, neon blade signs, and
+// streetlights whose additive cones pool warm light onto the dusk road ------
+function buildBroadwaySet() {
+  const group = new THREE.Group();
+  const facade = makeHonkyTonkFacade();
+  const facadeMat = new THREE.MeshStandardMaterial({
+    map: facade.map, emissiveMap: facade.emissive,
+    emissive: 0xffc56a, emissiveIntensity: 1.15, roughness: 0.9,
+  });
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);
+  const NF = 16;
+  const facades = makeInstanced(boxGeo, facadeMat, NF);
+  const signGeo = new THREE.PlaneGeometry(0.9, 2.4);
+  const signMat = new THREE.MeshBasicMaterial({ map: makeSignTexture(), side: THREE.DoubleSide });
+  const signs = makeInstanced(signGeo, signMat, NF, false);
+  const neon = [0xff2d95, 0x2de6ff, 0xffd23f, 0x9d4edd];
+  const fSlots = [];
+  for (let k = 0; k < NF; k++) {
+    const side = k & 1 ? 1 : -1;
+    fSlots.push({
+      side, base: (k >> 1) * 38.5 + (side > 0 ? 19 : 0),
+      margin: rnd(2.2, 9), w: rnd(3, 5.2), h: rnd(4, 9), d: rnd(3, 4.5),
+    });
+    signs.setColorAt(k, _ca.set(neon[k % 4]));
+  }
+  signs.instanceColor.needsUpdate = true;
+  group.add(facades, signs);
+
+  // streetlights: pole + warm head + additive light cone (the dusk pools)
+  const NL = 14;
+  const poleGeo = new THREE.CylinderGeometry(0.06, 0.09, 4.4, 8); poleGeo.translate(0, 2.2, 0);
+  const poles = makeInstanced(poleGeo, new THREE.MeshStandardMaterial({ color: 0x2c2c32, roughness: 0.6, metalness: 0.5 }), NL);
+  const headGeo = new THREE.BoxGeometry(0.55, 0.12, 0.24);
+  const heads = makeInstanced(headGeo, new THREE.MeshStandardMaterial({ color: 0xffe2a8, emissive: 0xffd98a, emissiveIntensity: 2.0 }), NL, false);
+  const coneGeo = new THREE.ConeGeometry(1.5, 3.4, 14, 1, true); coneGeo.translate(0, -1.7, 0);
+  const coneMat = new THREE.MeshBasicMaterial({
+    color: 0xffd9a0, transparent: true, opacity: 0.16, depthWrite: false,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
+  });
+  const lightCones = makeInstanced(coneGeo, coneMat, NL, false);
+  lightCones.renderOrder = 5;
+  const lSlots = [];
+  for (let k = 0; k < NL; k++) {
+    const side = k & 1 ? 1 : -1;
+    lSlots.push({ side, base: (k >> 1) * 44 + (side > 0 ? 22 : 0) });
+  }
+  group.add(poles, heads, lightCones);
+
+  return {
+    group,
+    update(scroll) {
+      for (let k = 0; k < NF; k++) {
+        const s = fSlots[k];
+        const z = wrapZ(s.base, scroll, SCN_SPAN);
+        const x = s.side * (ROAD_HALF + s.margin + s.d / 2);
+        _dummy.position.set(x, 0, z);
+        _dummy.scale.set(s.d, s.h, s.w);     // depth toward the road, width along it
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.updateMatrix();
+        facades.setMatrixAt(k, _dummy.matrix);
+        // blade sign hangs off the road-facing wall, facing up/down the road
+        _dummy.position.set(x - s.side * (s.d / 2 + 0.5), s.h * 0.55, z);
+        _dummy.scale.set(1, Math.min(1.3, s.h / 7), 1);
+        _dummy.rotation.set(0, Math.PI / 2, 0);
+        _dummy.updateMatrix();
+        signs.setMatrixAt(k, _dummy.matrix);
+      }
+      facades.instanceMatrix.needsUpdate = true;
+      signs.instanceMatrix.needsUpdate = true;
+      for (let k = 0; k < NL; k++) {
+        const s = lSlots[k];
+        const z = wrapZ(s.base, scroll, SCN_SPAN);
+        const px = s.side * (ROAD_HALF + 0.95);
+        _dummy.position.set(px, 0, z);
+        _dummy.scale.set(1, 1, 1);
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.updateMatrix();
+        poles.setMatrixAt(k, _dummy.matrix);
+        _dummy.position.set(px - s.side * 0.45, 4.42, z);
+        _dummy.updateMatrix();
+        heads.setMatrixAt(k, _dummy.matrix);
+        _dummy.position.set(px - s.side * 0.45, 4.36, z);
+        _dummy.updateMatrix();
+        lightCones.setMatrixAt(k, _dummy.matrix);
+      }
+      poles.instanceMatrix.needsUpdate = true;
+      heads.instanceMatrix.needsUpdate = true;
+      lightCones.instanceMatrix.needsUpdate = true;
+    },
+  };
+}
+
+function setSceneryBiome(idx) {
+  if (idx === activeBiomeSet) return;
+  activeBiomeSet = idx;
+  for (let i = 0; i < biomeSets.length; i++) biomeSets[i].group.visible = i === idx;
+}
+
+// ============================================================
+// 3D PARTICLES — pooled instanced quads: dust puffs on landing, sparks on a
+// near-miss (and on a nitro smash-through). Fixed-size ring buffers; matrices
+// rewritten in place every frame — nothing is allocated mid-run.
+// ============================================================
+const DUST_N = 48, SPARK_N = 48;
+let dustMesh = null, sparkMesh = null;
+// layout per particle: px py pz vx vy vz life maxLife
+const dustP = new Float32Array(DUST_N * 8);
+const sparkP = new Float32Array(SPARK_N * 8);
+let dustCursor = 0, sparkCursor = 0;
+
+function initParticles() {
+  const dustMat = new THREE.MeshBasicMaterial({
+    map: makePuffTexture(), transparent: true, opacity: 0.5,
+    depthWrite: false, fog: true,
+  });
+  dustMesh = makeInstanced(new THREE.PlaneGeometry(0.34, 0.34), dustMat, DUST_N, false);
+  dustMesh.renderOrder = 6;
+  const sparkMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.95, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: false,
+  });
+  sparkMesh = makeInstanced(new THREE.PlaneGeometry(0.09, 0.16), sparkMat, SPARK_N, false);
+  sparkMesh.renderOrder = 7;
+  for (let i = 0; i < DUST_N; i++) dustMesh.setColorAt(i, _ca.set(0x9a8a72));
+  for (let i = 0; i < SPARK_N; i++) sparkMesh.setColorAt(i, _ca.set(0x000000));
+  dustMesh.instanceColor.needsUpdate = true;
+  sparkMesh.instanceColor.needsUpdate = true;
+  scene.add(dustMesh, sparkMesh);
+}
+
+function emitDust(x, y, z, n) {
+  for (let i = 0; i < n; i++) {
+    const k = dustCursor; dustCursor = (dustCursor + 1) % DUST_N;
+    const o = k * 8;
+    dustP[o] = x + rnd(-0.7, 0.7);
+    dustP[o + 1] = y + rnd(0, 0.15);
+    dustP[o + 2] = z + rnd(-1.3, 1.3);
+    dustP[o + 3] = rnd(-1.6, 1.6);
+    dustP[o + 4] = rnd(0.6, 2.0);
+    dustP[o + 5] = rnd(-0.6, 2.4);
+    dustP[o + 7] = rnd(0.5, 0.9);
+    dustP[o + 6] = dustP[o + 7];
+  }
+}
+
+function emitSparks(x, y, z, n) {
+  for (let i = 0; i < n; i++) {
+    const k = sparkCursor; sparkCursor = (sparkCursor + 1) % SPARK_N;
+    const o = k * 8;
+    sparkP[o] = x + rnd(-0.3, 0.3);
+    sparkP[o + 1] = Math.max(0.15, y + rnd(-0.3, 0.3));
+    sparkP[o + 2] = z + rnd(-0.3, 0.3);
+    sparkP[o + 3] = rnd(-3.5, 3.5);
+    sparkP[o + 4] = rnd(1.5, 5.5);
+    sparkP[o + 5] = rnd(-2, 5);
+    sparkP[o + 7] = rnd(0.3, 0.55);
+    sparkP[o + 6] = sparkP[o + 7];
+  }
+}
+
+function updateParticles(dt) {
+  // dust: buoyant puffs that grow then thin out (scale handles the fade)
+  for (let i = 0; i < DUST_N; i++) {
+    const o = i * 8;
+    let life = dustP[o + 6];
+    if (life > 0) {
+      life -= dt; if (life < 0) life = 0;
+      dustP[o + 6] = life;
+      const drag = Math.max(0, 1 - 2.2 * dt);
+      dustP[o + 3] *= drag; dustP[o + 5] *= drag;
+      dustP[o + 4] += 0.8 * dt;
+      dustP[o] += dustP[o + 3] * dt;
+      dustP[o + 1] += dustP[o + 4] * dt;
+      dustP[o + 2] += dustP[o + 5] * dt;
+    }
+    if (life > 0) {
+      const age = 1 - life / dustP[o + 7];
+      const tail = Math.min(1, life / (dustP[o + 7] * 0.35));
+      _dummy.position.set(dustP[o], dustP[o + 1], dustP[o + 2]);
+      _dummy.scale.setScalar((0.7 + age * 1.6) * tail);
+      _dummy.quaternion.copy(camera.quaternion);
+    } else {
+      _dummy.position.set(0, -10, 0);
+      _dummy.scale.setScalar(0.0001);
+    }
+    _dummy.updateMatrix();
+    dustMesh.setMatrixAt(i, _dummy.matrix);
+  }
+  dustMesh.instanceMatrix.needsUpdate = true;
+
+  // sparks: hot streaks under gravity; additive colour fades to black
+  for (let i = 0; i < SPARK_N; i++) {
+    const o = i * 8;
+    let life = sparkP[o + 6];
+    if (life > 0) {
+      life -= dt; if (life < 0) life = 0;
+      sparkP[o + 6] = life;
+      sparkP[o + 4] -= 13 * dt;
+      sparkP[o] += sparkP[o + 3] * dt;
+      sparkP[o + 1] += sparkP[o + 4] * dt;
+      sparkP[o + 2] += sparkP[o + 5] * dt;
+      if (sparkP[o + 1] < 0.04) { sparkP[o + 1] = 0.04; sparkP[o + 4] *= -0.4; }
+    }
+    if (life > 0) {
+      const f = life / sparkP[o + 7];
+      _pc.setRGB(1, 0.55 + 0.45 * f, 0.15 * f).multiplyScalar(f);
+      sparkMesh.setColorAt(i, _pc);
+      _dummy.position.set(sparkP[o], sparkP[o + 1], sparkP[o + 2]);
+      _dummy.scale.setScalar(0.5 + f * 0.7);
+      _dummy.quaternion.copy(camera.quaternion);
+    } else {
+      sparkMesh.setColorAt(i, _pc.setRGB(0, 0, 0));
+      _dummy.position.set(0, -10, 0);
+      _dummy.scale.setScalar(0.0001);
+    }
+    _dummy.updateMatrix();
+    sparkMesh.setMatrixAt(i, _dummy.matrix);
+  }
+  sparkMesh.instanceMatrix.needsUpdate = true;
+  sparkMesh.instanceColor.needsUpdate = true;
 }
 
 // ============================================================
@@ -582,9 +1251,9 @@ function ensureInit() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // Filmic ACES + a hair of extra exposure: rich saturated sunsets without
-  // clipping. The sky-dome shader applies the same tone mapping + colourspace
-  // chunks, so the horizon still meets the fogged ground without a seam.
+  // Filmic ACES; the per-biome EXPOSURE grade is applied every frame in
+  // renderFrame(). The sky-dome shader applies the same tone mapping +
+  // colourspace chunks, so the horizon meets the fogged ground without a seam.
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.25;
   renderer.shadowMap.enabled = true;
@@ -593,6 +1262,10 @@ function ensureInit() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color('#9bc3e0');
   scene.fog = new THREE.Fog('#9bc3e0', 55, 420);
+  // Procedural equirect environment — chrome/clearcoat reflections without
+  // any HDR download. Kept subtle so the biome sun/sky still set the mood.
+  scene.environment = makeEnvTexture();
+  scene.environmentIntensity = 0.45;
 
   camera = new THREE.PerspectiveCamera(FOV_BASE, 16 / 9, 0.1, 2200);
   camera.position.set(CAM_POS.x, CAM_POS.y, CAM_POS.z);
@@ -664,10 +1337,18 @@ function ensureInit() {
     scene.add(cl); clouds.push(cl);
   }
 
-  // --- road + shoulders + guardrails ---
+  // --- road (canvas-baked asphalt w/ worn wheel tracks) + shoulders --------
   const roadLen = Z_NEAR - Z_FAR;
   const roadCz = (Z_NEAR + Z_FAR) / 2;
-  M.road = new THREE.MeshStandardMaterial({ color: '#222226', roughness: 0.92 });
+  const asphalt = makeAsphaltTextures();
+  asphalt.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  roadTexWorldPerRepeat = roadLen / asphalt.map.repeat.y;
+  M.road = new THREE.MeshStandardMaterial({
+    color: '#222226', map: asphalt.map,
+    bumpMap: asphalt.bump, bumpScale: 0.6,
+    roughness: 0.9,
+  });
+  M.roadMap = asphalt.map; M.roadBump = asphalt.bump;
   M.grass = new THREE.MeshStandardMaterial({ color: '#3a5a3a', roughness: 1.0 });
   const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_HALF * 2, roadLen), M.road);
   road.rotation.x = -Math.PI / 2; road.position.z = roadCz; road.receiveShadow = true;
@@ -687,15 +1368,27 @@ function ensureInit() {
     e.rotation.x = -Math.PI / 2; e.position.set(s * (ROAD_HALF - 0.35), 0.015, roadCz);
     scene.add(e);
   }
-  // guardrails: continuous rail + scrolling posts on both shoulders
-  M.rail = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.6, roughness: 0.45 });
+
+  // --- guardrails: two static rail beams per side + INSTANCED posts with
+  // emissive reflector chips that scroll with the road ----------------------
+  M.rail = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.75, roughness: 0.35 });
   const railGeo = new THREE.BoxGeometry(0.16, 0.3, roadLen);
+  const railLipGeo = new THREE.BoxGeometry(0.10, 0.12, roadLen);
   for (const s of [-1, 1]) {
     const r = new THREE.Mesh(railGeo, M.rail);
     r.position.set(s * (ROAD_HALF + 0.55), 0.62, roadCz);
     r.castShadow = true;
     scene.add(r);
+    const lip = new THREE.Mesh(railLipGeo, M.rail);
+    lip.position.set(s * (ROAD_HALF + 0.55), 0.38, roadCz);
+    scene.add(lip);
   }
+  const gpGeo = new THREE.BoxGeometry(0.12, 0.62, 0.16);
+  gpGeo.translate(0, 0.31, 0);
+  guardPosts = makeInstanced(gpGeo, new THREE.MeshStandardMaterial({ color: 0x70747c, metalness: 0.6, roughness: 0.5 }), GUARD_N * 2);
+  const reflGeo = new THREE.BoxGeometry(0.03, 0.07, 0.11);
+  guardRefl = makeInstanced(reflGeo, new THREE.MeshStandardMaterial({ color: 0xffe9a0, emissive: 0xffd76a, emissiveIntensity: 1.5 }), GUARD_N * 2, false);
+  scene.add(guardPosts, guardRefl);
 
   // distant skyline silhouettes (fog-hazed; sells "driving toward the city")
   const skyTone = new THREE.MeshStandardMaterial({ color: 0x55617a, roughness: 1 });
@@ -752,8 +1445,11 @@ function ensureInit() {
   M.headlamp = new THREE.MeshStandardMaterial({ color: 0xfff3c0, emissive: 0xfff0b0, emissiveIntensity: 1.2 });
   M.tire = new THREE.MeshStandardMaterial({ color: 0x111116, roughness: 0.9 });
 
-  // --- lane-boundary dashes (two dashed lines; scroll to sell speed) ---
-  M.dash = new THREE.MeshBasicMaterial({ color: '#ffea88' });
+  // --- lane-boundary dashes (reflective paint: emissive + low roughness) ---
+  M.dash = new THREE.MeshStandardMaterial({
+    color: 0xffea88, emissive: 0x8a6f1c, emissiveIntensity: 0.7,
+    roughness: 0.25, metalness: 0.2,
+  });
   const dashGeo = new THREE.PlaneGeometry(0.28, 2.4);
   const dashCount = Math.ceil(DASH_SPAN / DASH_GAP);
   for (const bx of [-LANE_W / 2 - 0.05, LANE_W / 2 + 0.05]) {
@@ -761,16 +1457,6 @@ function ensureInit() {
       const d = new THREE.Mesh(dashGeo, M.dash);
       d.rotation.x = -Math.PI / 2; d.position.y = 0.02; d.position.x = bx;
       scene.add(d); dashes.push(d);
-    }
-  }
-  // --- shoulder reflector posts (extra motion cue, under the rails) ---
-  M.postRef = new THREE.MeshStandardMaterial({ color: 0xeeeeee, emissive: 0x222222 });
-  const refGeo = new THREE.BoxGeometry(0.12, 0.8, 0.12);
-  for (let i = 0; i < 18; i++) {
-    for (const s of [-1, 1]) {
-      const p = new THREE.Mesh(refGeo, M.postRef);
-      p.position.set(s * (ROAD_HALF + 0.55), 0.4, 0);
-      scene.add(p); posts.push(p);
     }
   }
 
@@ -784,21 +1470,14 @@ function ensureInit() {
   shadowMesh.position.y = 0.012;
   scene.add(shadowMesh);
 
-  // roadside scenery slots (props recycle by scrolling; content swaps per biome)
-  for (const side of [-1, 1]) {
-    for (let i = 0; i < SCN_COUNT; i++) {
-      const grp = new THREE.Group();
-      grp.userData = { i, side, margin: 3 + Math.random() * 36, landmark: '' };
-      // Two fixed DOWNTOWN landmark slots, spaced apart along the recycle loop
-      // and pinned to a readable distance from the shoulder.
-      if (side === 1 && i === 4)  { grp.userData.landmark = 'spire'; grp.userData.margin = 9; }
-      if (side === -1 && i === 12) { grp.userData.landmark = 'drum';  grp.userData.margin = 7; }
-      scene.add(grp);
-      scnSlots.push(grp);
-    }
-  }
-  rebuildScenery(bridge.currentBiome().name);
+  // --- prebuilt instanced scenery, one set per Nashville leg ---
+  biomeSets.length = 0;
+  biomeSets.push(buildDowntownSet(), buildMusicRowSet(), buildCumberlandSet(), buildBroadwaySet());
+  for (const set of biomeSets) { set.group.visible = false; scene.add(set.group); }
+  setSceneryBiome(bridge.state.biomeIdx);
   lastBiomeIdx = bridge.state.biomeIdx;
+
+  initParticles();
 
   resize();
   initialized = true;
@@ -829,8 +1508,8 @@ function renderFrame() {
   hemi.groundColor.copy(biomeColor('grass')).multiplyScalar(0.6);
   sun.color.copy(biomeColor('sunColor'));
   applySunForBiome();
-  // Per-biome exposure grade (judge item 2): dawn/sunset legs run darker so
-  // the peach-to-amber 2D palette survives ACES instead of washing out.
+  // Per-biome exposure grade: dawn/sunset legs run darker so the
+  // peach-to-amber 2D palette survives ACES instead of washing out.
   renderer.toneMappingExposure = biomeLerp(EXPOSURE);
   // Sun disc rides the key-light direction out onto the dome, tinted per leg.
   sunSprite.position.copy(sun.position).normalize().multiplyScalar(1150);
@@ -843,8 +1522,9 @@ function renderFrame() {
     cl.material.color.copy(skyMat.uniforms.horizonColor.value).lerp(_white, 0.55);
   }
   // 2D palette road/grass hexes are dark; lift them so ACES doesn't crush
-  // the asphalt to black under the chase camera.
-  M.road.color.copy(biomeColor('road')).multiplyScalar(1.5);
+  // the asphalt to black under the chase camera. The asphalt map multiplies
+  // against this colour (mid-grey base), hence the higher factor than 2D.
+  M.road.color.copy(biomeColor('road')).multiplyScalar(2.1);
   M.grass.color.copy(biomeColor('grass')).multiplyScalar(1.25);
 
   // --- livery: read the run's car style live from state ---
@@ -855,8 +1535,10 @@ function renderFrame() {
     stripeMat.color.set(style.stripe);
   }
 
-  // --- scroll the road markings / posts toward the camera ---
+  // --- scroll the asphalt texture + markings / guardrail posts ---
   const scroll = st.distance * SCALE_Z;
+  M.roadMap.offset.y = (scroll / roadTexWorldPerRepeat) % 1;
+  M.roadBump.offset.y = M.roadMap.offset.y;
   const perLine = dashes.length >> 1;
   for (let i = 0; i < dashes.length; i++) {
     const k = i % perLine;
@@ -864,29 +1546,26 @@ function renderFrame() {
     dashes[i].position.z = Z_NEAR - wrap;
   }
   const postGap = DASH_SPAN / 9;
-  for (let i = 0; i < posts.length; i++) {
+  for (let i = 0; i < GUARD_N * 2; i++) {
     const k = i >> 1, side = (i & 1) ? 1 : -1;
     const wrap = (((k * postGap - scroll) % DASH_SPAN) + DASH_SPAN) % DASH_SPAN;
-    posts[i].position.z = Z_NEAR - wrap;
-    posts[i].position.x = side * (ROAD_HALF + 0.55);
+    const z = Z_NEAR - wrap;
+    _dummy.position.set(side * (ROAD_HALF + 0.55), 0, z);
+    _dummy.rotation.set(0, 0, 0);
+    _dummy.scale.set(1, 1, 1);
+    _dummy.updateMatrix();
+    guardPosts.setMatrixAt(i, _dummy.matrix);
+    _dummy.position.set(side * (ROAD_HALF + 0.47), 0.55, z);
+    _dummy.updateMatrix();
+    guardRefl.setMatrixAt(i, _dummy.matrix);
   }
+  guardPosts.instanceMatrix.needsUpdate = true;
+  guardRefl.instanceMatrix.needsUpdate = true;
 
-  // --- roadside scenery: swap props on biome change, then scroll like the posts ---
-  if (st.biomeIdx !== lastBiomeIdx) { rebuildScenery(bridge.currentBiome().name); lastBiomeIdx = st.biomeIdx; }
-  for (const grp of scnSlots) {
-    const u = grp.userData;
-    const phase = u.side > 0 ? SCN_GAP * 0.5 : 0;
-    const wrap = (((u.i * SCN_GAP + phase - scroll) % SCN_SPAN) + SCN_SPAN) % SCN_SPAN;
-    grp.position.z = Z_NEAR - wrap;
-    grp.position.x = u.side * (ROAD_HALF + u.margin);
-    // Trees yaw toward the chase camera (judge item 3): canopies present their
-    // full face instead of an edge-on slab as they scroll past.
-    const prop = grp.children[0];
-    if (prop && prop.userData.tree) {
-      prop.rotation.y = Math.atan2(camera.position.x - grp.position.x,
-                                   camera.position.z - grp.position.z);
-    }
-  }
+  // --- roadside scenery: swap the visible set on biome change, then scroll ---
+  if (st.biomeIdx !== lastBiomeIdx) lastBiomeIdx = st.biomeIdx;
+  setSceneryBiome(st.biomeIdx);
+  biomeSets[Math.min(st.biomeIdx, biomeSets.length - 1)].update(scroll);
 
   // --- the car: lane X, jump Y, lean/pitch, duck squash, wheel spin, bob ---
   const lv = laneValue(p);                          // smoothed 0..2
@@ -910,11 +1589,24 @@ function renderFrame() {
   shadowMesh.material.opacity = 0.32 * shFade;
   shadowMesh.scale.set(1.4 * (0.7 + 0.3 * shFade), 2.4 * (0.7 + 0.3 * shFade), 1);
 
+  // --- particles: dust burst when the jump lands; sparks handled per-obstacle ---
+  if (prevJumping && !p.jumping && lift < 0.05 &&
+      st.screen === bridge.SCREEN.PLAYING) {
+    emitDust(carX, 0.08, 0.4, 10);
+  }
+  prevJumping = !!p.jumping;
+  updateParticles(st.screen === bridge.SCREEN.PAUSED ? 0 : dt);
+
   // --- entities: map each 2D {x,y,w,h,lane} to a 3D mesh at lane X, depth Z ---
   poolReset();
   const t = st.runTime || 0;
 
   for (const o of st.obstacles) {
+    // sparks: fire once per obstacle on a near-miss (or a nitro smash-through)
+    if ((o.nearMissed || (o.hit && st.nitro > 0)) && !sparkedSet.has(o)) {
+      sparkedSet.add(o);
+      emitSparks(laneX(o.lane), Math.max(0.3, worldH(o.h) * 0.5), zForX(o.x), 13);
+    }
     if (o.x > C.W + 120 || o.x < -120) continue;
     const m = poolGet(o.type);
     const z = zForX(o.x);

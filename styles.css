@@ -966,3 +966,8 @@ button:active { transform: scale(0.96); }
 #game3d.rt3d-fade.rt3d-active { opacity: 1; }
 /* status chip only matters while the 3D view is up; fade it with the canvas */
 #game3d.rt3d-fade:not(.rt3d-active) ~ #rt3d-status { opacity: 0; transition: opacity 0.2s ease; }
+
+/* RT3D mesh pass: a light cinematic grade on the live 3D frame only.
+ * Pure compositor work (no per-frame JS): a whisper of saturation + contrast
+ * so the chrome/clearcoat car and neon legs pop without re-tuning exposure. */
+#game3d.rt3d-fade.rt3d-active { filter: saturate(1.06) contrast(1.03); }
