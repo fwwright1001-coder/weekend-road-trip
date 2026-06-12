@@ -450,17 +450,65 @@ function poolHideRest() {
   }
 }
 
+// ---- parity-proof debug API (called ONLY by test harnesses, never per-frame).
+// Finds the live pooled mesh for a sim entity (tagged via userData.ent in the
+// render loop) and projects sample points of it through the live camera so a
+// headless run can assert "the culprit mesh is on-screen" at a damage moment.
+RT.debug = {
+  findEntityMesh(ent) {
+    for (const k in pools) {
+      const p = pools[k];
+      for (let i = 0; i < p.items.length; i++) {
+        const it = p.items[i];
+        if (it.visible && it.userData.ent === ent) return it;
+      }
+    }
+    return null;
+  },
+  // Projects the mesh origin plus a few heights above it; the entity counts as
+  // in-frame if ANY sample lands inside the frustum (ndc cube) in front of the
+  // near plane. Allocates scratch vectors — harness-only, not frame-loop code.
+  projectEntity(ent) {
+    const m = this.findEntityMesh(ent);
+    if (!m || !camera) return { found: false, inFrame: false };
+    m.updateWorldMatrix(true, false);
+    const base = new THREE.Vector3().setFromMatrixPosition(m.matrixWorld);
+    const samples = [0, 0.5, 1.0, 1.8].map((dy) => {
+      const v = base.clone(); v.y += dy;
+      const ndc = v.clone().project(camera);
+      return { ndc: { x: ndc.x, y: ndc.y, z: ndc.z } };
+    });
+    const inFrame = samples.some((s) =>
+      Math.abs(s.ndc.x) <= 1 && Math.abs(s.ndc.y) <= 1 && s.ndc.z > -1 && s.ndc.z < 1);
+    return {
+      found: true, visible: m.visible, inFrame,
+      world: { x: base.x, y: base.y, z: base.z },
+      ndc: samples.map((s) => s.ndc),
+    };
+  },
+};
+
 // ============================================================
 // MESH BUILDERS (one factory per entity type; share G/M resources)
 // ============================================================
 const make = {
   pothole() {
+    // Readability parity with the 2D pothole pass ("dark outline so it stays
+    // readable"): dark contrast outline -> lighter crumbled rim -> near-black
+    // hole -> bright far-rim crescent. The rim + crescent carry a touch of
+    // emissive (same reflective-paint language as the lane dashes) so the
+    // hazard still reads inside the long building-shadow bands, where a flat
+    // dark disc on dark asphalt was effectively invisible.
     const g = new THREE.Group();
+    const outline = new THREE.Mesh(G.potholeOutline, M.potholeOutline);
+    outline.rotation.x = -Math.PI / 2; outline.position.y = -0.008;
+    const rim = new THREE.Mesh(G.potholeRim, M.potholeRim);
+    rim.rotation.x = -Math.PI / 2; rim.position.y = -0.005;
     const m = new THREE.Mesh(G.pothole, M.pothole);
     m.rotation.x = -Math.PI / 2;
-    const rim = new THREE.Mesh(G.potholeRim, M.potholeRim);
-    rim.rotation.x = -Math.PI / 2; rim.position.y = -0.004;
-    g.add(rim, m);
+    const crescent = new THREE.Mesh(G.potholeCrescent, M.potholeCrescent);
+    crescent.rotation.x = -Math.PI / 2; crescent.position.y = 0.005;
+    g.add(outline, rim, m, crescent);
     return g;
   },
   cone() {
@@ -1402,6 +1450,11 @@ function ensureInit() {
   // --- shared geometries / materials for pooled entities ---
   G.pothole = new THREE.CircleGeometry(0.9, 22);
   G.potholeRim = new THREE.CircleGeometry(1.02, 22);
+  // pothole readability layers (see make.pothole): contrast outline ring just
+  // beyond the rim, and a bright crescent hugging the FAR rim (local +y maps
+  // to world -Z after the group's rotation.x = -PI/2).
+  G.potholeOutline = new THREE.CircleGeometry(1.14, 22);
+  G.potholeCrescent = new THREE.RingGeometry(0.62, 0.86, 18, 1, Math.PI * 0.18, Math.PI * 0.64);
   G.cone = new THREE.ConeGeometry(0.45, 1.4, 16);
   G.coneBand = new THREE.CylinderGeometry(0.27, 0.33, 0.22, 16);
   G.coneBase = new THREE.BoxGeometry(0.8, 0.1, 0.8);
@@ -1425,7 +1478,13 @@ function ensureInit() {
   G.semiWheel.rotateZ(Math.PI / 2);
 
   M.pothole = new THREE.MeshStandardMaterial({ color: 0x101013, roughness: 1 });
-  M.potholeRim = new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 1 });
+  // Mirrors the 2D pothole pass: '#050507' outline / '#54545e' crumbled rim /
+  // 'rgba(180,180,195)' bright crescent. Rim + crescent get a touch of emissive
+  // (same reflective-paint language as M.dash) so the hazard still reads inside
+  // the building-shadow bands where flat dark-on-dark was invisible.
+  M.potholeOutline = new THREE.MeshStandardMaterial({ color: 0x050507, roughness: 1 });
+  M.potholeRim = new THREE.MeshStandardMaterial({ color: 0x54545e, emissive: 0x2e2e36, emissiveIntensity: 0.55, roughness: 0.85 });
+  M.potholeCrescent = new THREE.MeshStandardMaterial({ color: 0xb4b4c3, emissive: 0x9b9bb0, emissiveIntensity: 0.85, roughness: 0.3, metalness: 0.15 });
   M.cone = new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.6, emissive: 0x331400, emissiveIntensity: 0.4 });
   M.coneBand = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.4 });
   M.coneDark = new THREE.MeshStandardMaterial({ color: 0xcf5a10, roughness: 0.8 });
@@ -1609,6 +1668,7 @@ function renderFrame() {
     }
     if (o.x > C.W + 120 || o.x < -120) continue;
     const m = poolGet(o.type);
+    m.userData.ent = o;          // parity-proof tag (plain write, no allocation)
     const z = zForX(o.x);
     const x = laneX(o.lane);
     if (o.type === 'pothole') {
