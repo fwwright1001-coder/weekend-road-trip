@@ -154,4 +154,4 @@ for Neon Postgres writes. MIT licensed.
 
 ## Author
 
-Forrest Wright - Lipscomb MSAI '26 - ENGR 5513 Applied AI in Engineering, Summer 2026
+Forrest Wright - Lipscomb MSAI - ENGR 5513 Applied AI in Engineering, Summer 2026
