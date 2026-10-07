@@ -1,5 +1,8 @@
 # Weekend Road Trip - Full Project Prompt
 
+> Kept as a record of the original build brief. The Road Crew email signup it
+> describes was removed from the game in October 2026; see `CHANGELOG.md`.
+
 Build the polished Vercel web version of **Weekend Road Trip**, a browser-first
 2D arcade driving game for Lipscomb MSAI ENGR 5513. Treat this as a finished
 class submission and portfolio artifact, not a sketch, landing page, or toy

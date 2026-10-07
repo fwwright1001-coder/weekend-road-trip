@@ -29,18 +29,15 @@ styles.css      HUD, menus, touch controls, responsive + a11y rules
 game.js         the engine: state machine, physics, spawn, collision,
                 Nashville route rendering (5 parallax layers), side + chase
                 camera renderers, audio, persistence, ghost race
-launch.js       Road Crew signup client (Vercel API vs local fallback)
-api/waitlist.js      Vercel serverless: Road Crew signups -> Neon email_signups
 api/highscores.js    Vercel serverless: cloud scores -> Neon game_high_scores
-database/schema.sql  Neon table definitions (also bootstrapped by the APIs)
+database/schema.sql  Neon table definition (also bootstrapped by the API)
 sim/balance-sim.js   headless Node model of the physics + spawn + economy
 qa/run-selftests.js  runs the in-game self-test harness headlessly (19 checks)
-qa/smoke-dom.js      DOM contract: every JS element reference resolves
-qa/waitlist-contract.js          Road Crew API contract
+qa/smoke-dom.js      DOM contract: every JS element reference resolves, and
+                     the page has no form or email input
 qa/highscores-contract.js        cloud high-score API contract
 qa/highscores-client-contract.js cloud high-score client contract
-qa/launch-contract.js            Road Crew client contract
-.github/workflows/ci.yml  runs all seven gates on every push to main / PR
+.github/workflows/ci.yml  runs all five gates on every push to main / PR
 ```
 
 ---
@@ -177,19 +174,17 @@ simulation you can run in two seconds.
 
 ## 5. Testing & CI
 
-`npm test` chains seven deterministic gates; the build is red if any fails:
+`npm test` chains five deterministic gates; the build is red if any fails:
 
 ```bash
 node sim/balance-sim.js               # 10 balance/physics acceptance criteria
 node qa/run-selftests.js              # in-game self-test harness, headless (19 checks)
-node qa/smoke-dom.js                  # DOM contract: all JS element refs resolve
-node qa/waitlist-contract.js          # Road Crew API contract (20 checks)
+node qa/smoke-dom.js                  # DOM contract: all JS element refs resolve; no form
 node qa/highscores-contract.js        # cloud high-score API contract (19 checks)
 node qa/highscores-client-contract.js # cloud high-score client contract (11 checks)
-node qa/launch-contract.js            # Road Crew client contract (17 checks)
 ```
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all seven on every
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all five on every
 push to `main` and every PR — the same gate enforced locally on every commit. The QC reports in
 [`qc/`](qc/) are the audit trail: each is a real headless play-test with the
 method, evidence, and verdict recorded.

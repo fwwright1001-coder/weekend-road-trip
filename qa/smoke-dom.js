@@ -21,7 +21,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-const jsFiles = ['game.js', 'launch.js'].filter((file) => fs.existsSync(path.join(root, file)));
+const jsFiles = ['game.js'];
 const js = jsFiles.map((file) => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 
 // 1) Every id declared in the markup.
@@ -49,6 +49,12 @@ const missing = [...refs].filter((id) => !htmlIds.has(id));
 check('every static element reference in JS resolves to index.html',
       missing.length === 0,
       missing.length ? 'MISSING ids: ' + missing.join(', ') : refs.size + ' references resolve');
+
+// 4) Privacy contract: the public page collects no visitor data. The Road Crew
+//    email signup was removed in October 2026 and must not come back quietly.
+check('index.html has no <form>', !/<form\b/i.test(html), 'a form element is present');
+check('index.html has no email input', !/type\s*=\s*["']email["']/i.test(html), 'an email input is present');
+check('index.html loads game.js only', !/launch\.js/.test(html), 'launch.js is referenced');
 
 for (const c of checks) {
   console.log((c.pass ? 'PASS  ' : 'FAIL  ') + c.name + (c.detail ? '  — ' + c.detail : ''));

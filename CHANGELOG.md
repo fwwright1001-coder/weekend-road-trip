@@ -2,6 +2,19 @@
 
 All notable changes to the game. Dates are in 2026.
 
+## 2026-10-07 - Road Crew email signup removed; README rewritten
+
+- Removed the Road Crew email signup: the title-screen form, the `/waitlist`
+  landing page, the signup API and its `email_signups` table, the signup client
+  and its contract and stress tests. A public game should not collect visitor
+  emails. Old `/waitlist` links now land on the game.
+- `npm test` and CI now run five gates: the balance simulation, the self-tests,
+  the DOM smoke (which also checks that the page has no form or email input),
+  and the cloud high-score API and client contracts. Ghost Race, local high
+  scores and the optional Neon cloud high scores are unchanged.
+- README rewritten as a plain account of the project: what was decided by
+  hand, what AI coding tools built, and how it was verified.
+
 ## 2026-06-09 - Feel-rework audit: ten verified fixes before merge
 
 A six-reviewer adversarial audit of the feel-rework diff (every finding

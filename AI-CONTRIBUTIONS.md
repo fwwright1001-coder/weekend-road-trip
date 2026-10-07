@@ -30,17 +30,18 @@ own bug. That loop is the "Applied AI in Engineering" thesis in one event.
 | Audio | which events earn SFX; "procedural only, zero assets" constraint | WebAudio graph, oscillator SFX, speed-pitched engine |
 | Accessibility | which options matter (reduce-motion, colorblind, full input parity) | ARIA wiring, palette swap, gamepad/touch handlers |
 | Ghost Race | the async-replay-as-shareable-JSON idea | per-frame telemetry capture + export/import |
-| Vercel + Neon | final-boss requirement framing; privacy and fallback decisions | serverless signup/high-score APIs, database schema, contract tests |
+| Vercel + Neon | final-boss requirement framing; privacy and fallback decisions | serverless high-score API, database schema, contract tests |
 | Docs & CI | what to claim and what to prove; this rubric mapping | doc drafts, table scaffolding, CI workflow |
 
 ## Honest limits
 
 - `game.js` is one large module. I prioritized a green, provable game over file
   decomposition.
-- GitHub Pages cannot run Vercel serverless functions, so the Road Crew form and
-  high scores use local fallback there. The Neon database path is exercised on
+- GitHub Pages cannot run Vercel serverless functions, so high scores use the
+  local fallback there. The Neon database path is exercised on
   Vercel and covered by contract tests locally.
 - The 3D Nashville cruise concept is intentionally deferred until the
   2D final submission is locked.
 
-Forrest Wright - Lipscomb MSAI '26 - ENGR 5513 Applied AI in Engineering
+Forrest Wright - ENGR 5513 Applied AI in Engineering, Lipscomb University, Summer 2026
+(MS in Applied Artificial Intelligence, expected May 2027)
