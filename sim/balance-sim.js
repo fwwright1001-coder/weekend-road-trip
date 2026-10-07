@@ -4,7 +4,7 @@
  * ------------------------------------------------------------
  * This is the reviewable, deterministic stand-in for a "recorded run". It
  * MIRRORS the exact constants and core update math in game.js (the game's
- * physics/spawn/balance) and proves the four acceptance criteria without a
+ * physics/spawn/balance) and proves the ten acceptance criteria without a
  * browser:
  *
  *   1. Jump arc — symmetric, starts/ends flush on the contact line.
