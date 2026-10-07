@@ -11,8 +11,9 @@ Broadway. The core loop is simple to read but hard to master: change lanes, jump
 potholes and cones, duck under low signs, grab snacks and fuel, and reach the
 neon before the tank runs dry.
 
-Technically, the game is built from scratch in vanilla JavaScript and HTML5
-Canvas with no engine and no external sprite assets. It uses a real-time Canvas
+Technically, the game is vanilla JavaScript and HTML5 Canvas with no engine
+and no external sprite assets, built by AI coding tools under my direction and
+checked by a headless simulation. It uses a real-time Canvas
 render loop, HTML/CSS HUD overlays, procedural parallax scenery tied to
 approximate Nashville WGS84 anchors and street/landmark cues, biome palette
 blending, AABB collision, particle systems, screen shake, Web Audio sound
@@ -23,15 +24,7 @@ The standout gameplay feature is **Ghost Race mode**: every run records replay
 telemetry, saves a transparent ghost car locally, and lets players copy/paste
 shareable JSON so a classmate can race their route asynchronously.
 
-For the Vercel/Neon deployment assignment, I added a production-style **Road
-Crew** signup path on top of the game. The title screen now has a launch signup
-form. On Vercel, it writes through `api/waitlist.js` into a Neon Postgres table
-named `email_signups`; on GitHub Pages, it falls back safely to localStorage
-because static Pages cannot run serverless functions. The API validates emails,
-upserts duplicates, creates the schema automatically, returns a live signup
-count, avoids storing raw IP addresses, and has its own CI contract test.
-
-For the final game deployment stage, high scores also have a Neon-backed cloud
+For the Vercel/Neon deployment assignment, high scores have a Neon-backed cloud
 path. The game still saves scores locally so it works on GitHub Pages and offline,
 but on Vercel each submitted run posts to `api/highscores.js`, creates/stores rows
 in `game_high_scores`, and displays the cloud leaderboard when Neon is connected.

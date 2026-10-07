@@ -1,14 +1,14 @@
 name: CI
 
-# The game is dependency-light vanilla JS, guarded by seven headless Node gates
+# The game is dependency-light vanilla JS, guarded by five headless Node gates
 # that must stay green on every push / PR (the same chain as `npm test`):
 #   - sim/balance-sim.js : proves jump-arc symmetry, per-lane solvability +
 #     reachability, a climaxing difficulty curve, and the fuel economy bands.
 #     Exits non-zero if any of its 10 acceptance criteria fail.
 #   - qa/run-selftests.js : the in-game self-test harness, headless — persistence
 #     round-trips, settings, camera, ghost validation, reduce-motion gates.
-#   - qa/smoke-dom.js + four API/client contract suites : Vercel/Neon Road Crew
-#     and cloud high-score paths, including the static-hosting fallbacks.
+#   - qa/smoke-dom.js + two API/client contract suites : the Vercel/Neon cloud
+#     high-score path, including the static-hosting fallback.
 # These are the same gates enforced locally on every commit.
 
 on:
@@ -33,11 +33,7 @@ jobs:
         run: node qa/run-selftests.js
       - name: DOM-contract smoke (HTML/JS wiring)
         run: node qa/smoke-dom.js
-      - name: Road Crew API contract
-        run: node qa/waitlist-contract.js
       - name: Cloud high-score API contract
         run: node qa/highscores-contract.js
       - name: Cloud high-score client contract
         run: node qa/highscores-client-contract.js
-      - name: Road Crew client contract
-        run: node qa/launch-contract.js
