@@ -6,7 +6,7 @@ correctness is *proven*: a headless simulation gates every change, and the
 hardest feature (a 3-lane dodging system) ships with a **mathematical fairness
 invariant** that a machine re-checks on every commit and in CI.
 
-This document is the honest engineering story behind that.
+This document is the engineering story behind that.
 
 ---
 
@@ -67,7 +67,7 @@ Two design choices that carry the rest:
    lane fighting each other.
 
 Two deliberate deviations from a literal reading of the project spec, kept on
-purpose and documented honestly:
+purpose and documented here:
 
 - **Lane hops are edge-triggered — one hop per press.** A held key does NOT
   auto-repeat across lanes; a press made mid-hop is buffered and chains on
@@ -129,7 +129,7 @@ report from a player.
 
 ## 4. How it was actually built: AI-orchestrated, gate-verified
 
-This is an applied-AI portfolio piece, so the honest headline is the *method*:
+This is an applied-AI portfolio piece, so the headline is the *method*:
 the game was extended by orchestrating fleets of AI agents under a human-defined
 process, with deterministic gates the agents could not talk their way past.
 

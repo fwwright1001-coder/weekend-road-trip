@@ -1,5 +1,8 @@
 # Final Boss discussion post (paste-ready draft)
 
+> Kept as a record of the June 2026 class post. The Road Crew signup and the
+> seven-gate CI it describes were retired in October 2026; see `CHANGELOG.md`.
+
 > **Weekend Road Trip — Final Boss complete**
 >
 > 🏁 Play (Vercel production): https://weekend-road-trip-forrestw200.vercel.app
@@ -16,7 +19,7 @@
 >
 > How it deploys, start to finish: https://github.com/fwwright1001-coder/weekend-road-trip/blob/main/DEPLOYMENT.md
 
-## Screenshots — CAPTURED 2026-06-11, ready at `C:\Users\User\CoworkProjects\final-boss-submission\screenshots\`
+## Screenshots — captured 2026-06-11 (kept locally)
 
 Use the `-cropped.png` versions (browser chrome with personal tabs removed):
 

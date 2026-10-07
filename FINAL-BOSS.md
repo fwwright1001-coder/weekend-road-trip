@@ -21,7 +21,7 @@ DATABASE_URL=<Neon pooled connection string>
 IP_HASH_SECRET=<any long random string>
 ```
 
-The APIs also accept Vercel/Neon's common `POSTGRES_URL`,
+The API also accepts Vercel/Neon's common `POSTGRES_URL`,
 `POSTGRES_PRISMA_URL`, and `POSTGRES_URL_NON_POOLING` names.
 
 ## Local Verification

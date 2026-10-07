@@ -1,7 +1,7 @@
 # AI vs. personal contribution
 
-ENGR 5513 asks for an explicit, honest account of what was human and what was AI.
-Here it is, per system, plus the process that kept the AI honest.
+ENGR 5513 asks for an explicit account of what was human and what was AI.
+Here it is, per system, plus the process that checked the AI's work.
 
 ## Operating principle: agents propose, deterministic checks dispose
 
@@ -33,7 +33,7 @@ own bug. That loop is the "Applied AI in Engineering" thesis in one event.
 | Vercel + Neon | final-boss requirement framing; privacy and fallback decisions | serverless high-score API, database schema, contract tests |
 | Docs & CI | what to claim and what to prove; this rubric mapping | doc drafts, table scaffolding, CI workflow |
 
-## Honest limits
+## Limits
 
 - `game.js` is one large module. I prioritized a green, provable game over file
   decomposition.

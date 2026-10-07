@@ -14,6 +14,8 @@ All notable changes to the game. Dates are in 2026.
   scores and the optional Neon cloud high scores are unchanged.
 - README rewritten as a plain account of the project: what was decided by
   hand, what AI coding tools built, and how it was verified.
+- File headers, the title-screen credit and the June class deck's byline now
+  name Lipscomb University and the Summer 2026 term, with no graduation year.
 
 ## 2026-06-09 - Feel-rework audit: ten verified fixes before merge
 
@@ -300,4 +302,4 @@ and the whole system re-audited end to end.
   defects (one blocker found and fixed: an uncommitted test-harness shim).
 
 Built as a four-bot parallel exercise for ENGR 5513 — Applied AI in Engineering,
-Lipscomb MSAI (Summer 2026). — Forrest Wright
+Lipscomb University (Summer 2026 term). — Forrest Wright

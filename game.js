@@ -1,6 +1,6 @@
 /* ============================================================
  * Weekend Road Trip — single-player 2D side-scroller
- * ENGR 5513 Applied AI in Engineering · Lipscomb MSAI · Summer 2026
+ * ENGR 5513 Applied AI in Engineering · Lipscomb University · Summer 2026
  * Forrest Wright
  *
  * Drive Marty's GT through a Nashville night cruise in one tank

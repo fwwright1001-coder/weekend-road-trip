@@ -11,8 +11,9 @@ Broadway. The core loop is simple to read but hard to master: change lanes, jump
 potholes and cones, duck under low signs, grab snacks and fuel, and reach the
 neon before the tank runs dry.
 
-Technically, the game is built from scratch in vanilla JavaScript and HTML5
-Canvas with no engine and no external sprite assets. It uses a real-time Canvas
+Technically, the game is vanilla JavaScript and HTML5 Canvas with no engine
+and no external sprite assets, built by AI coding tools under my direction and
+checked by a headless simulation. It uses a real-time Canvas
 render loop, HTML/CSS HUD overlays, procedural parallax scenery tied to
 approximate Nashville WGS84 anchors and street/landmark cues, biome palette
 blending, AABB collision, particle systems, screen shake, Web Audio sound

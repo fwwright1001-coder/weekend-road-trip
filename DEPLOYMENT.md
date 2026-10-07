@@ -6,7 +6,7 @@ source control.
 
 | Surface | URL | What it proves |
 |---|---|---|
-| **Vercel production** | https://weekend-road-trip-forrestw200.vercel.app | main branch, serverless APIs + Neon Postgres live |
+| **Vercel production** | https://weekend-road-trip-forrestw200.vercel.app | main branch, serverless API + Neon Postgres live |
 | **Vercel previews** | one URL per open PR (see the PR checks tab) | feature branches are publicly testable before merge |
 | **GitHub Pages** | https://fwwright1001-coder.github.io/weekend-road-trip/ | the same game degrades gracefully to localStorage when no API exists |
 
