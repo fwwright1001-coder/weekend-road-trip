@@ -52,9 +52,12 @@ check('every static element reference in JS resolves to index.html',
 
 // 4) Privacy contract: the public page collects no visitor data. The Road Crew
 //    email signup was removed in October 2026 and must not come back quietly.
-check('index.html has no <form>', !/<form\b/i.test(html), 'a form element is present');
-check('index.html has no email input', !/type\s*=\s*["']email["']/i.test(html), 'an email input is present');
-check('index.html loads game.js only', !/launch\.js/.test(html), 'launch.js is referenced');
+const hasForm = /<form\b/i.test(html);
+const hasEmailInput = /type\s*=\s*["']email["']/i.test(html);
+const loadsLaunch = /launch\.js/.test(html);
+check('index.html has no <form>', !hasForm, hasForm ? 'a form element is present' : '');
+check('index.html has no email input', !hasEmailInput, hasEmailInput ? 'an email input is present' : '');
+check('index.html loads game.js only', !loadsLaunch, loadsLaunch ? 'launch.js is referenced' : '');
 
 for (const c of checks) {
   console.log((c.pass ? 'PASS  ' : 'FAIL  ') + c.name + (c.detail ? '  — ' + c.detail : ''));
